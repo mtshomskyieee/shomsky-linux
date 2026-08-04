@@ -1,0 +1,12 @@
+Official Alpine Linux Docker image project
+https://github.com/alpinelinux/docker-alpine
+
+Shomsky Linux container images are built FROM the official Alpine Linux
+Docker Hub image (alpine:<version>), which is maintained by the Alpine
+Linux project via docker-alpine.
+
+The docker-alpine repository is licensed under the MIT License.
+Copyright (c) 2019 Natanael Copa
+
+The full license text is in LICENSE in this directory (verbatim copy of
+https://github.com/alpinelinux/docker-alpine/blob/master/LICENSE).

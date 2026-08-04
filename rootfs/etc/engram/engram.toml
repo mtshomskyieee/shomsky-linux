@@ -1,0 +1,27 @@
+# Shomsky Linux — engram-shell defaults
+# Override at runtime with ENGRAM_MODE, ENGRAM_LLM_URL, SHOMSKY_MODEL, ENGRAM_TOOL_STYLE.
+
+mode = "agent"
+allow_root_mode = true
+llm_url = "http://127.0.0.1:1234"
+llm_model = "default"
+skills_dir = "/engram/skills"
+tool_output_limit = 16384
+busybox_ash = "/bin/busybox"
+hostname = "shomsky"
+
+# auto | native | text — tiny models default to text via SHOMSKY_MODEL=tiny
+tool_style = "auto"
+# Keep context small for CPU hosts / small models
+max_context_messages = 24
+# Run ls/echo/cat/… immediately (do not wait for the LLM to invent a tool call)
+direct_shell = true
+
+# Shared with Completer / :top (Compose bind-mounts /engram/user)
+cmdfreq_path = "/engram/user/.command_freq.json"
+
+# In-container stdio MCP only — no URLs, no published ports.
+[[mcp_servers]]
+name = "cmdfreq"
+command = "/usr/local/bin/engram-cmdfreq"
+args = []

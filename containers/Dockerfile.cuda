@@ -1,0 +1,86 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Shomsky Linux — GPU companion image (NOT Alpine / NOT musl)
+# =============================================================================
+#
+# CUDA has no supported musl userspace. This Dockerfile is a glibc-based
+# companion that reuses engram-shell + /engram skills on top of an NVIDIA
+# CUDA runtime. It is intentionally separate from the flagship Alpine image.
+#
+# Status: STUB — not built by default CI. Wire mistral.rs CUDA features and
+# validate on a GPU host before publishing.
+#
+# Expected usage (future):
+#   docker build -f containers/Dockerfile.cuda -t shomskylinux:cuda .
+#   docker run --gpus all -e SHOMSKY_MODEL=mistral shomskylinux:cuda
+#
+# =============================================================================
+
+ARG CUDA_IMAGE=nvidia/cuda:12.4.1-runtime-ubuntu22.04
+ARG RUST_IMAGE=rust:1.96-bookworm
+
+FROM ${RUST_IMAGE} AS builder
+ARG MISTRALRS_REF=v0.9.0
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev cmake git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY crates ./crates
+RUN cargo build --release -p engram-shell -p engram-cmdfreq \
+ && mkdir -p /out \
+ && cp target/release/engram-shell /out/ \
+ && cp target/release/engram-cmdfreq /out/
+
+WORKDIR /build/mistral.rs
+# CUDA feature set — requires matching toolkit in a devel base for a real build.
+# This stub compiles CPU-only so the Dockerfile stays parseable without GPUs.
+RUN git clone --depth 1 --branch "${MISTRALRS_REF}" \
+      https://github.com/EricLBuehler/mistral.rs.git . \
+ && cargo build --release -p mistralrs-cli --no-default-features \
+ && cp target/release/mistralrs /out/mistralrs
+
+FROM ${CUDA_IMAGE} AS runtime
+LABEL org.opencontainers.image.title="Shomsky Linux (CUDA companion)" \
+      org.opencontainers.image.description="glibc+CUDA companion — not Alpine-based" \
+      org.opencontainers.image.licenses="MIT" \
+      shomsky.variant="cuda-companion"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY rootfs/etc/engram /etc/engram
+COPY engram/skills /engram/skills
+COPY NOTICE /usr/share/doc/shomsky/NOTICE
+COPY LICENSE /usr/share/doc/shomsky/LICENSE
+COPY third_party/docker-alpine /usr/share/doc/shomsky/third_party/docker-alpine
+COPY --from=builder /out/engram-shell /usr/local/bin/engram-shell
+COPY --from=builder /out/engram-cmdfreq /usr/local/bin/engram-cmdfreq
+COPY --from=builder /out/mistralrs /usr/local/bin/mistralrs
+COPY containers/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/engram-shell /usr/local/bin/engram-cmdfreq \
+              /usr/local/bin/mistralrs /usr/local/bin/entrypoint.sh \
+ && mkdir -p /engram/models \
+ && printf '%s\n' \
+      'NAME="Shomsky Linux (CUDA companion)"' \
+      'ID=shomsky' \
+      'ID_LIKE="ubuntu debian"' \
+      'VARIANT="cuda"' \
+      'PRETTY_NAME="Shomsky Linux CUDA companion (glibc — not Alpine)"' \
+      > /etc/os-release
+
+# NOTE: entrypoint still passes --cpu today. For a real GPU image, override with:
+#   MISTRALRS_EXTRA_ARGS="" and strip --cpu in a CUDA-specific entrypoint fork.
+ENV SHOMSKY_MODEL=mistral \
+    ENGRAM_MODE=agent \
+    PATH="/usr/local/bin:${PATH}"
+
+VOLUME ["/engram/models"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD []

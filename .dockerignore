@@ -1,0 +1,15 @@
+.git
+.github
+target
+**/*.gguf
+engram/models/**
+!engram/models/.gitkeep
+docs
+*.md
+!README.md
+!engram/skills/**/*.md
+.cursor
+**/.DS_Store
+agent-transcripts
+*.log
+dist

@@ -1,0 +1,9 @@
+Welcome to Shomsky Linux
+
+  Modes:  :mode agent | hallucination | root
+  Skills: /engram/skills   (:skills)
+  Models: /engram/models   (SHOMSKY_MODEL)
+
+Docs: /usr/share/doc/shomsky/  (or the docs/ tree in the source repo)
+The container is the sandbox boundary. Prefer non-root + --read-only rootfs
+with a writable /engram volume in production.

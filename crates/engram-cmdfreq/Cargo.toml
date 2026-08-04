@@ -1,0 +1,20 @@
+[package]
+name = "engram-cmdfreq"
+version = "0.1.0"
+edition = "2021"
+description = "In-container command-frequency MCP server for Shomsky Linux"
+license = "MIT"
+rust-version = "1.74"
+
+[[bin]]
+name = "engram-cmdfreq"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "engram_cmdfreq"
+path = "src/lib.rs"

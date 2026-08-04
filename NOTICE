@@ -1,0 +1,63 @@
+Shomsky Linux
+Copyright (c) 2026 Shomsky Linux contributors
+
+This product includes software developed by third parties.
+
+========================================================================
+Alpine Linux (base distribution) and official Alpine Docker image
+========================================================================
+
+Shomsky Linux is based on Alpine Linux (https://alpinelinux.org/) and is
+distributed as a Docker container built FROM the official Alpine Linux
+Docker image (https://hub.docker.com/_/alpine), maintained in:
+
+  https://github.com/alpinelinux/docker-alpine
+
+docker-alpine is licensed under the MIT License:
+
+  Copyright (c) 2019 Natanael Copa
+
+The copyright notice and permission notice required by that MIT license
+are retained in third_party/docker-alpine/ (verbatim LICENSE copy).
+
+Alpine Linux itself is not a single-licensed project; the container image
+aggregates packages under many licenses, including but not limited to:
+
+  - musl libc — MIT
+  - BusyBox — GPL-2.0
+  - apk-tools — GPL-2.0
+  - alpine-baselayout — GPL-2.0
+
+Unmodified Alpine packages are redistributed as part of the container image.
+Source for Alpine packages is available from:
+  https://git.alpinelinux.org/
+  https://pkgs.alpinelinux.org/
+
+"Alpine" and the Alpine Linux name and logo are trademarks of their
+respective owners. Shomsky Linux is an independent project and is not
+affiliated with, endorsed by, or sponsored by the Alpine Linux project.
+
+========================================================================
+mistral.rs
+========================================================================
+
+Copyright (c) Eric Buehler and contributors
+License: MIT
+https://github.com/EricLBuehler/mistral.rs
+
+========================================================================
+Candle (Hugging Face)
+========================================================================
+
+Copyright (c) Hugging Face and contributors
+License: Apache-2.0
+https://github.com/huggingface/candle
+
+========================================================================
+Model weights
+========================================================================
+
+Model weights (GGUF files) are NOT redistributed with this software.
+They are downloaded by the end user at first container run from Hugging Face
+Hub under each model's own license (typically Apache-2.0 for Mistral,
+Qwen2.5, and DeepSeek distill variants listed in models.toml).

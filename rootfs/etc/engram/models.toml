@@ -1,0 +1,45 @@
+# Model registry for Shomsky Linux.
+# Selected with SHOMSKY_MODEL=<alias> (default: mistral).
+# Weights are downloaded on first run into /engram/models — never baked into the image.
+
+[models.mistral]
+description = "Mistral 7B Instruct v0.2 GGUF Q4_K_M (default)"
+repo = "TheBloke/Mistral-7B-Instruct-v0.2-GGUF"
+filename = "mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+# Leave sha256 empty to skip verification (filled when pinning a known revision).
+sha256 = ""
+# Optional HF id for tokenizer when the GGUF has none embedded
+tok_model_id = ""
+license = "Apache-2.0"
+# Approximate download size in bytes (for progress messaging)
+size_hint = 4369000000
+
+[models.qwen]
+description = "Qwen2.5 7B Instruct GGUF Q4_K_M"
+repo = "bartowski/Qwen2.5-7B-Instruct-GGUF"
+filename = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+sha256 = ""
+tok_model_id = ""
+license = "Apache-2.0"
+size_hint = 4683000000
+
+[models.deepseek]
+description = "DeepSeek-R1-Distill-Qwen-7B GGUF Q4_K_M"
+repo = "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF"
+filename = "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
+sha256 = ""
+tok_model_id = ""
+license = "MIT"
+size_hint = 4683000000
+
+[models.tiny]
+description = "Qwen2.5 0.5B Instruct GGUF Q4_K_M — CI / smoke tests"
+repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+filename = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+sha256 = ""
+tok_model_id = ""
+license = "Apache-2.0"
+size_hint = 400000000
+
+[defaults]
+alias = "mistral"

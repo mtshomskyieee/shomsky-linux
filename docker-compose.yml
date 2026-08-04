@@ -1,0 +1,91 @@
+# Shomsky Linux
+#
+# Interactive shell:
+#   SHOMSKY_MODEL=tiny ENGRAM_TOOL_STYLE=text docker compose run --rm shomsky
+#
+# Tests:
+#   docker compose run --rm tests          # shell suite, no LLM
+#   docker compose run --rm tests-llm      # agent + hallucination LLM checks
+#
+# Avoid bare `docker compose up` for the shell — Compose's menu steals keys.
+# If you use up: COMPOSE_MENU=false docker compose up --menu=false
+
+services:
+  shomsky:
+    image: ${SHOMSKY_IMAGE:-shomskylinux:dev}
+    build: &build
+      context: .
+      dockerfile: containers/Dockerfile
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION:-3.24}
+        MISTRALRS_REF: ${MISTRALRS_REF:-v0.9.0}
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-2}
+    stdin_open: true
+    tty: true
+    environment:
+      SHOMSKY_MODEL: ${SHOMSKY_MODEL:-mistral}
+      ENGRAM_MODE: ${ENGRAM_MODE:-agent}
+      ENGRAM_TOOL_STYLE: ${ENGRAM_TOOL_STYLE:-auto}
+      ENGRAM_MAX_CONTEXT: ${ENGRAM_MAX_CONTEXT:-24}
+      ENGRAM_CONFIG: /etc/engram/engram.toml
+      ENGRAM_SKILLS_DIR: /engram/skills
+      ENGRAM_HALLUC_HISTORY_DIR: /engram/.hallucination_shell_history
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    working_dir: /engram/user
+    volumes:
+      # GGUF weights (named volume — survives --rm)
+      - shomsky-models:/engram/models
+      # Agent working tree (bind mount — host-visible creates/edits)
+      - ${SHOMSKY_USER_DIR:-./engram/user}:/engram/user
+      # Hallucination session JSON (bind mount — visible on the host)
+      - ${SHOMSKY_HALLUC_HISTORY:-./.hallucination_shell_history}:/engram/.hallucination_shell_history
+    mem_limit: ${SHOMSKY_MEM_LIMIT:-8g}
+    shm_size: ${SHOMSKY_SHM_SIZE:-1gb}
+    restart: "no"
+
+  # Exercise ./tests/run.sh inside the image (no nested Docker, no LLM).
+  tests:
+    image: ${SHOMSKY_IMAGE:-shomskylinux:dev}
+    build: *build
+    # Bypass entrypoint model download / mistralrs — go straight to the suite.
+    entrypoint: ["/usr/local/bin/shomsky-tests"]
+    environment:
+      SHOMSKY_IN_CONTAINER: "1"
+      TEST_DRIVER: local
+      ENGRAM_DIRECT_SHELL: "1"
+      ENGRAM_TOOL_STYLE: text
+    # Mount live tree so test edits apply without rebuilding (optional override).
+    # Default image already contains /opt/shomsky/tests from the build.
+    volumes:
+      - ./tests:/opt/shomsky/tests:ro
+    working_dir: /home/shomsky
+    restart: "no"
+
+  # Full entrypoint (tiny model + mistralrs) then LLM agent/hallucination suite.
+  # CPU-only: cold start + first inference can take several minutes.
+  tests-llm:
+    image: ${SHOMSKY_IMAGE:-shomskylinux:dev}
+    build: *build
+    environment:
+      SHOMSKY_MODEL: ${SHOMSKY_MODEL:-tiny}
+      ENGRAM_TOOL_STYLE: text
+      ENGRAM_DIRECT_SHELL: "1"
+      RUN_LLM_TESTS: "1"
+      SHOMSKY_IN_CONTAINER: "1"
+      TEST_DRIVER: local
+      LLM_READY_TRIES: ${LLM_READY_TRIES:-600}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - shomsky-models:/engram/models
+      - ./tests:/opt/shomsky/tests:ro
+    # entrypoint starts mistralrs, then runs the test harness.
+    command: ["/usr/local/bin/shomsky-tests"]
+    mem_limit: ${SHOMSKY_MEM_LIMIT:-8g}
+    shm_size: ${SHOMSKY_SHM_SIZE:-1gb}
+    restart: "no"
+
+volumes:
+  shomsky-models:
+    name: shomsky-models

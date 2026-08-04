@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE: shomskylinux
+  TAG: ci
+  CARGO_BUILD_JOBS: "2"
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        run: |
+          ./scripts/build.sh
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          TAG: ${{ env.TAG }}
+          CARGO_BUILD_JOBS: ${{ env.CARGO_BUILD_JOBS }}
+
+      - name: Shell command tests
+        run: |
+          docker compose run --rm tests
+        env:
+          SHOMSKY_IMAGE: ${{ env.IMAGE }}:${{ env.TAG }}
+
+      - name: Optional tiny-model LLM smoke
+        if: ${{ vars.RUN_LLM_SMOKE == '1' }}
+        run: |
+          IMAGE="${IMAGE}:${TAG}" RUN_LLM_SMOKE=1 ./scripts/smoke.sh

@@ -1,0 +1,55 @@
+# Fast rebuild of engram-shell only; copies a prebuilt mistralrs from build context.
+# Usage: place mistralrs at containers/prebuilt/mistralrs then:
+#   docker build -f containers/Dockerfile.shell -t shomskylinux:dev .
+ARG ALPINE_VERSION=3.24
+
+FROM alpine:${ALPINE_VERSION} AS builder
+ARG CARGO_BUILD_JOBS=2
+RUN apk add --no-cache build-base cargo rust openssl-dev pkgconf ca-certificates
+ENV CARGO_HOME=/usr/local/cargo \
+    CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
+    RUSTFLAGS="-C target-feature=-crt-static"
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY crates ./crates
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release -p engram-shell -p engram-cmdfreq \
+ && mkdir -p /out \
+ && cp target/release/engram-shell /out/engram-shell \
+ && cp target/release/engram-cmdfreq /out/engram-cmdfreq \
+ && strip /out/engram-shell /out/engram-cmdfreq
+
+FROM alpine:${ALPINE_VERSION} AS runtime
+RUN apk add --no-cache busybox bash ca-certificates curl libgcc libstdc++ openssl \
+ && update-ca-certificates
+COPY rootfs/ /
+COPY engram/skills /engram/skills
+COPY tests /opt/shomsky/tests
+COPY NOTICE /usr/share/doc/shomsky/NOTICE
+COPY LICENSE /usr/share/doc/shomsky/LICENSE
+COPY third_party/docker-alpine /usr/share/doc/shomsky/third_party/docker-alpine
+COPY --from=builder /out/engram-shell /usr/local/bin/engram-shell
+COPY --from=builder /out/engram-cmdfreq /usr/local/bin/engram-cmdfreq
+COPY containers/prebuilt/mistralrs /usr/local/bin/mistralrs
+COPY containers/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY containers/shomsky-tests.sh /usr/local/bin/shomsky-tests
+RUN chmod 755 /usr/local/bin/engram-shell /usr/local/bin/engram-cmdfreq \
+              /usr/local/bin/mistralrs \
+              /usr/local/bin/entrypoint.sh /usr/local/bin/shomsky-tests \
+ && mkdir -p /engram/models /engram/skills /engram/user /opt/shomsky \
+ && echo '/usr/local/bin/engram-shell' >> /etc/shells \
+ && sed -i 's|^root:x:0:0:root:/root:.*|root:x:0:0:root:/root:/usr/local/bin/engram-shell|' /etc/passwd \
+ && adduser -D -h /home/shomsky -s /usr/local/bin/engram-shell shomsky \
+ && chown -R shomsky:shomsky /engram
+ENV SHOMSKY_MODEL=mistral \
+    ENGRAM_MODE=agent \
+    ENGRAM_CONFIG=/etc/engram/engram.toml \
+    ENGRAM_SKILLS_DIR=/engram/skills \
+    PATH="/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+VOLUME ["/engram/models"]
+WORKDIR /home/shomsky
+EXPOSE 1234
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD []

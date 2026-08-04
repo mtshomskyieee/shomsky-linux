@@ -1,0 +1,38 @@
+[workspace]
+members = [".", "crates/engram-cmdfreq"]
+resolver = "2"
+
+[package]
+name = "engram-shell"
+version = "0.1.0"
+edition = "2021"
+description = "LLM-backed linux shell for Shomsky Linux"
+license = "MIT"
+authors = ["Shomsky Linux contributors"]
+rust-version = "1.74"
+
+[[bin]]
+name = "engram-shell"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+engram-cmdfreq = { path = "crates/engram-cmdfreq" }
+futures-util = "0.3"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rustyline = "15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs", "sync"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"
