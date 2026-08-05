@@ -1146,4 +1146,10 @@ Spinner (TTY only; silent under pipes / --once / --script):
   ENGRAM_SPINNER=auto|always|off   Status line while waiting on LLM/tools
   ENGRAM_LLM_READY_TRIES=N         Startup model wait budget in seconds (default 600)
   NO_COLOR=1                       Disable splash / prompt colors
+
+Intro animation (TTY only; matrix rain before the splash):
+  ENGRAM_MATRIX=auto|always|off    Play the digital-rain intro
+  ENGRAM_MATRIX_SECS=N             Intro duration, 0-10 (default 2; 0 = skip)
+  ENGRAM_MATRIX_GLYPHS=ascii       Use ASCII instead of halfwidth katakana
+  Any keypress skips the intro.
 ";
