@@ -52,10 +52,12 @@ OpenAI-compatible HTTP API. The **container is the sandbox**.
 
 | Process | Role |
 |---------|------|
-| `entrypoint.sh` | PID 1 wrapper: fetch, start server, exec shell |
+| `entrypoint.sh` | PID 1 wrapper: fetch, start server, start shomagentd, exec shell |
 | `mistralrs` | OpenAI-compatible HTTP server on `127.0.0.1:1234` |
+| `shomagentd` | Background crew supervisor (ring buffers, novelty findings) |
 | `engram-shell` | Interactive REPL; owns tool execution, modes, and MCP client |
 | `engram-cmdfreq` (etc.) | Optional **stdio child** MCP servers spawned by the shell — no ports |
+| `shomagent` | CLI client to `shomagentd` (watch / roster / talk) |
 
 `engram-shell` talks to mistral.rs over `/v1/chat/completions`. Tool discovery
 is configurable:
@@ -81,9 +83,12 @@ talked around by the LLM. Unknown tool names are ignored.
 | `/engram/models/` | GGUF volume (persistent) |
 | `/etc/engram/engram.toml` | Shell defaults (`mode`, `allow_root_mode`, …) |
 | `/etc/engram/models.toml` | Model alias registry |
+| `/etc/shomsky/shomagent_crew.d/` | System shomagent member drop-ins |
+| `/run/shomagent/` | Control socket + notification lane |
 | `/etc/os-release` | `ID=shomsky`, `ID_LIKE=alpine` |
 | `/usr/local/bin/engram-shell` | Linux shell |
 | `/usr/local/bin/engram-cmdfreq` | First-party command-frequency MCP (stdio child) |
+| `/usr/local/bin/shomagent` / `shomagentd` | Background crew CLI + daemon |
 | `/engram/user/.command_freq.json` | Command frequency store (Completer / `:top` / MCP) |
 | `/usr/local/bin/mistralrs` | Inference server |
 

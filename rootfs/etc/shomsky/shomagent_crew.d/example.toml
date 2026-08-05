@@ -1,0 +1,21 @@
+# Example shomagent member (disabled by default).
+# Copy or edit under /etc/shomsky/shomagent_crew.d/ or ./shomagent_crew.d/
+# in a repo so `git clone` ships its own watchers.
+#
+# name = "dev-watch"
+# command = "npm"
+# args = ["run", "dev"]
+# tell_me = "when a request 500s, with the stack trace root cause"
+# restart = "on-failure"
+# autostart = false
+# budget_tokens = 512
+# ring_lines = 2000
+
+name = "example-disabled"
+command = "true"
+args = []
+tell_me = "example only — set autostart = true after editing command"
+restart = "never"
+autostart = false
+budget_tokens = 512
+ring_lines = 2000

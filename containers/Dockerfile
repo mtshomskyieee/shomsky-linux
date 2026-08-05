@@ -40,16 +40,18 @@ ENV CARGO_HOME=/usr/local/cargo \
 
 WORKDIR /build
 
-# --- engram-shell + engram-cmdfreq ----------------------------------------
+# --- engram-shell + engram-cmdfreq + shomagent -----------------------------
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     mkdir -p /out \
- && cargo build --release -p engram-shell -p engram-cmdfreq \
+ && cargo build --release -p engram-shell -p engram-cmdfreq -p shomagent \
  && cp target/release/engram-shell /out/engram-shell \
- && cp target/release/engram-cmdfreq /out/engram-cmdfreq
+ && cp target/release/engram-cmdfreq /out/engram-cmdfreq \
+ && cp target/release/shomagent /out/shomagent \
+ && cp target/release/shomagentd /out/shomagentd
 
 # --- mistral.rs (CPU, no default extras) -----------------------------------
 # Clone into a fixed path, then build with registry+target cache mounts.
@@ -67,7 +69,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release -p mistralrs-cli --no-default-features \
  && test -x target/release/mistralrs \
  && cp target/release/mistralrs /out/mistralrs \
- && strip /out/engram-shell /out/engram-cmdfreq /out/mistralrs
+ && strip /out/engram-shell /out/engram-cmdfreq /out/shomagent /out/shomagentd /out/mistralrs
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
@@ -99,16 +101,21 @@ COPY third_party/docker-alpine /usr/share/doc/shomsky/third_party/docker-alpine
 # Binaries (MCP servers are stdio children — never published as ports)
 COPY --from=builder /out/engram-shell /usr/local/bin/engram-shell
 COPY --from=builder /out/engram-cmdfreq /usr/local/bin/engram-cmdfreq
+COPY --from=builder /out/shomagent /usr/local/bin/shomagent
+COPY --from=builder /out/shomagentd /usr/local/bin/shomagentd
 COPY --from=builder /out/mistralrs /usr/local/bin/mistralrs
 COPY containers/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY containers/shomsky-tests.sh /usr/local/bin/shomsky-tests
 
 RUN chmod 755 /usr/local/bin/engram-shell \
               /usr/local/bin/engram-cmdfreq \
+              /usr/local/bin/shomagent \
+              /usr/local/bin/shomagentd \
               /usr/local/bin/mistralrs \
               /usr/local/bin/entrypoint.sh \
               /usr/local/bin/shomsky-tests \
  && mkdir -p /engram/models /engram/skills /engram/user /opt/shomsky \
+              /etc/shomsky/shomagent_crew.d /run/shomagent \
  && chmod 755 /engram /engram/models /engram/skills /engram/user \
  && if ! grep -q '/usr/local/bin/engram-shell' /etc/shells 2>/dev/null; then \
       echo '/usr/local/bin/engram-shell' >> /etc/shells; \

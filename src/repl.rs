@@ -66,6 +66,7 @@ impl Repl {
         }
 
         loop {
+            Self::drain_shomagent_notifications();
             let prompt = ui::prompt_string(self.cfg.mode, &self.cwd);
             let line = match rl.readline(&prompt) {
                 Ok(l) => l,
@@ -362,9 +363,88 @@ impl Repl {
                     Err(e) => eprintln!("cannot read {path}: {e}"),
                 }
             },
+            ":shomagent" | ":agents" => {
+                self.handle_shomagent_meta(arg, parts.next()).await;
+            },
             other => eprintln!("unknown meta-command '{other}' (try :help)"),
         }
         Ok(false)
+    }
+
+    /// Drain JSONL notification lane into the TTY (earned interrupts only).
+    fn drain_shomagent_notifications() {
+        let cursor = shomagent::paths::run_dir().join("notify.cursor");
+        match shomagent::notify::drain_new_findings(&cursor) {
+            Ok(findings) => {
+                for f in findings {
+                    println!("{}", f.format_interrupt());
+                }
+            }
+            Err(_) => {
+                // Daemon not running or lane missing — silent.
+            }
+        }
+    }
+
+    async fn handle_shomagent_meta(&mut self, arg: Option<&str>, talk_id: Option<&str>) {
+        match arg {
+            None | Some("roster") => match shomagent::daemon::rpc(&shomagent::protocol::Request::Roster).await {
+                Ok(shomagent::protocol::Response::Ok { roster, .. }) => {
+                    if roster.is_empty() {
+                        println!("(no shomagent members — try: shomagent watch \"…\")");
+                        return;
+                    }
+                    for m in roster {
+                        let glyph = match m.state.as_str() {
+                            "running" => "▶",
+                            "paused" => "⏸",
+                            "read" => "◇",
+                            "readwrite" => "◆",
+                            _ => "■",
+                        };
+                        println!(
+                            "  #{} {:12} {}  {} finding{}",
+                            m.id,
+                            m.name,
+                            glyph,
+                            m.findings,
+                            if m.findings == 1 { "" } else { "s" }
+                        );
+                    }
+                }
+                Ok(shomagent::protocol::Response::Err { message }) => {
+                    eprintln!("shomagent: {message}");
+                }
+                Err(e) => eprintln!("shomagent: {e} (is shomagentd running?)"),
+            },
+            Some("talk") => {
+                let Some(id_s) = talk_id else {
+                    eprintln!("usage: :shomagent talk <n>");
+                    return;
+                };
+                let Ok(id) = id_s.parse::<u32>() else {
+                    eprintln!("usage: :shomagent talk <n>");
+                    return;
+                };
+                println!("use `shomagent talk {id}` for a scoped chat session");
+                match shomagent::daemon::rpc(&shomagent::protocol::Request::Context { id }).await {
+                    Ok(shomagent::protocol::Response::Ok {
+                        context: Some(ctx), ..
+                    }) => {
+                        println!("#{} {} — {} finding(s)", ctx.id, ctx.name, ctx.findings.len());
+                        if let Some(last) = ctx.findings.last() {
+                            println!("{}", last.format_interrupt());
+                        }
+                    }
+                    Ok(shomagent::protocol::Response::Err { message }) => {
+                        eprintln!("shomagent: {message}");
+                    }
+                    Err(e) => eprintln!("shomagent: {e}"),
+                    _ => {}
+                }
+            }
+            Some(other) => eprintln!("unknown :shomagent subcommand '{other}' (roster|talk)"),
+        }
     }
 
     /// Interactive: resume latest session or start fresh.
@@ -1019,6 +1099,7 @@ Meta-commands:
   :model             Show active model / LLM endpoint (detail)
   :top [N]           Show top N most-used commands (default 10)
   :logs [N]          Show last N lines of mistralrs log (default 40)
+  :shomagent         Roster background agents (:agents); :shomagent talk N peeks
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 

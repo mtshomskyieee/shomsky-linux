@@ -52,6 +52,8 @@ docker compose run --rm tests-llm
 | `run.sh` | Entry point — self-test + all `cases/*.sh` |
 | `lib.sh` | `run_once` / `run_seq` / assert helpers (incl. ASCII + script markers) |
 | `cases/shell_commands.sh` | Exhaustive simple shell checks (agent/root, no LLM) |
+| `cases/shomagent_smoke.sh` | Full shomagent verb suite via `helpers/shomagent_full.sh` (stub LLM) |
+| `helpers/shomagent_full.sh` | roster, read, readwrite, write, ask, talk, watch, spawn, pause/resume/stop, persist, novelty |
 | `cases/llm_chat.sh` | Agent chat + loose hallucination checks (`RUN_LLM_TESTS=1`) |
 | `cases/llm_hallucination_golden.sh` | Exact 4-step golden path ×3 (`RUN_LLM_TESTS=1`) |
 

@@ -20,6 +20,8 @@ must follow [ADR-0000](0000-what-is-an-adr.md) and
   - root package / binary **`engram-shell`** (`src/main.rs`)
   - member crate **`engram-cmdfreq`** (`crates/engram-cmdfreq/`) — stdio MCP +
     shared command-frequency store used by Completer / `:top`
+  - member crate **`shomagent`** (`crates/shomagent/`) — `shomagentd` supervisor
+    + `shomagent` CLI (see [ADR-0007](0007-shomagent-background-crew.md))
 - Prefer MIT / Apache-2.0 dependencies consistent with the distro stack.
 
 ### Runtime and libraries

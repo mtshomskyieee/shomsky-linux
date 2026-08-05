@@ -13,6 +13,7 @@ use std::time::SystemTime;
 const META_COMMANDS: &[&str] = &[
     ":help", ":h", ":sys", ":uname", ":exit", ":quit", ":q", ":mode", ":tools",
     ":tool-style", ":skills", ":model", ":clear", ":logs", ":top",
+    ":shomagent", ":agents",
 ];
 
 pub struct EngramHelper {

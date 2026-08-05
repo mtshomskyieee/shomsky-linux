@@ -69,6 +69,97 @@ COMPOSE_MENU=false SHOMSKY_MODEL=tiny docker compose up --menu=false
 
 Switch at the prompt with `:mode agent|hallucination|root`.
 
+## shomagent
+
+Background agents you can hold a conversation with. Long-running watches stay
+off your TTY; they only interrupt when a novelty filter decides the finding is
+new. Documents can be attached read-only or read/write and queried with `ask`.
+Full reference: [docs/shomagent.md](docs/shomagent.md).
+
+`shomagentd` starts with the container. Members are listed by id (`#1`, `#2`, …).
+**You must create a member before `ask` / `talk` / `write`.**
+
+### Command reference
+
+| Command | Purpose |
+|---------|---------|
+| `shomagent` / `shomagent roster` | List members (`▶` running, `⏸` paused, `◇` read, `◆` readwrite) |
+| `shomagent watch "<cmd>" --tell-me "…"` | Run a command; watch its stream for the brief |
+| `shomagent spawn "<cmd>" …` | Same as `watch` |
+| `shomagent read <path>` | Attach a **read-only** document member |
+| `shomagent readwrite <path>` | Attach a **read/write** document member |
+| `shomagent write <id> "<text>"` | Append text to a **readwrite** document |
+| `shomagent write <id> --replace "<text>"` | Replace the whole file |
+| `shomagent ask <id> "<question>"` | One-shot question (answer prints as `#N > …`) |
+| `shomagent talk <id>` | Interactive chat (`:q` to leave) |
+| `shomagent pause \| resume \| stop <id>` | Control a process member; `stop` on a doc detaches (file kept) |
+
+Flags on `watch` / `spawn` / `read` / `readwrite`: `--name`, `--tell-me`.
+`watch` / `spawn` also support `--persist` (writes `./shomagent_crew.d/<name>.toml`).
+
+In `engram-shell`: `:shomagent` / `:agents` for roster peek.
+
+### Example: ask a document
+
+```bash
+# 1) Attach a writable notes file (creates it if missing)
+shomagent readwrite notes.md
+# ⟡ shomagent#1 readwrite (…/notes.md)
+
+# 2) Save facts into the file
+shomagent write 1 "paris is in france"
+shomagent write 1 "capital: paris"
+
+# 3) Ask — the answer is the next line starting with #1 >
+shomagent ask 1 "where is paris"
+# #1 > …answer from the document…
+
+# Read-only variant (cannot write):
+shomagent read details.md
+shomagent ask 2 "summarize the key points"
+# shomagent write 2 "…"  → error (read-only)
+```
+
+### Example: watch a process
+
+```bash
+shomagent watch "npm run dev" \
+  --tell-me "when a request 500s, with the stack trace root cause"
+# ⟡ shomagent#1 attached (pid …)
+
+shomagent                 # roster
+shomagent ask 1 "is it only orders?"
+shomagent talk 1          # interactive; :q to leave
+
+shomagent pause 1
+shomagent resume 1
+shomagent stop 1
+```
+
+Novel findings interrupt the shell between prompts (no log spam):
+
+```text
+⟡ shomagent#1 ─ 3 × 500 on POST /api/orders
+  root cause: …
+```
+
+### Repo drop-ins
+
+Ship watchers under `./shomagent_crew.d/*.toml` (overrides
+`/etc/shomsky/shomagent_crew.d/` for the same `name`):
+
+```toml
+# ./shomagent_crew.d/dev-watch.toml
+name = "dev-watch"
+command = "npm"
+args = ["run", "dev"]
+tell_me = "when a request 500s, with the stack trace root cause"
+restart = "on-failure"
+autostart = false
+```
+
+Or: `shomagent watch "…" --name test-loop --tell-me "…" --persist`
+
 ## Models
 
 Set `SHOMSKY_MODEL` to one of the aliases in `/etc/engram/models.toml`:
@@ -87,11 +178,13 @@ are inlined into the system prompt; others are loaded on demand via the
 ## Test
 
 ```bash
-docker compose run --rm tests          # shell suite (no LLM)
+docker compose run --rm tests          # shell + shomagent suites (no LLM)
 docker compose run --rm tests-llm      # agent + hallucination LLM checks (tiny)
 # or on the host against a built image:
 ./tests/run.sh
 RUN_LLM_TESTS=1 ./tests/run.sh         # when mistralrs is already up
+# crate-level unit tests:
+#   cargo test -p shomagent
 ```
 
 CPU-only: first start (model load + first tokens) can take several minutes.
