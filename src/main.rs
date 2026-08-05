@@ -3,6 +3,7 @@ mod config;
 mod halluc_fs;
 mod halluc_session;
 mod llm;
+mod matrix;
 mod mcp;
 mod modes;
 mod repl;
