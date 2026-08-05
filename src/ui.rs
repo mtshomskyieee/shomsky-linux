@@ -7,6 +7,29 @@ use crate::modes::Mode;
 
 const CHARTER: &str = "agents · rust · native LLM in the shell";
 
+/// SHOMSKY — both S letters use the tall Cool S. Also rasterized by
+/// `matrix.rs` as the mask the digital rain crystallizes into.
+pub const SPLASH_ART: &str = r#"
+     ^                                        ^
+    / \                                      / \
+  /     \                                  /     \
+/         \                              /         \
+|    |    ||                             |    |    ||
+|    |    ||                             |    |    ||
+\    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
+ \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
+  \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /
+  /\    \    |  _  |  | |_| |  | |  | |    /\    \    | . \     | |
+ /  \    \   |_| |_|   \___/   |_|  |_|   /  \    \   |_|\_\    |_|
+/    \    \                              /    \    \
+|    |    ||                             |    |    ||  === LINUX ===
+|    |    || :mode agent = LLM assist    |    |    ||  - LLM + Shell
+\         /  :mode hallucination =       \         /   - 2 cool esses
+ \       /          LLM dreams it's a CLI \       /
+   \   /    :help = shell options           \   /
+     v                                        v
+"#;
+
 /// Whether we should paint splash / colors on this TTY.
 pub fn splash_enabled() -> bool {
     if no_color() {
@@ -102,29 +125,14 @@ pub fn print_splash(cfg: &Config) {
     let r = reset();
     let mode_c = mode_color(cfg.mode);
 
-    // SHOMSKY — both S letters use the tall Cool S below.
-    let art = r#"
-     ^                                        ^
-    / \     shomagent                        / \   shomagent watch "<cwd>" --tell-me "..."
-  /     \   shomagent readwrite fil.md     /     \ shomagent spawn "<cmd>"
-/         \ shomagent ask 1 "question.." /         \
-|    |    ||shomagent talk 1             |    |    ||
-|    |    ||                             |    |    ||
-\    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
- \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
-  \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /
-  /\    \    |  _  |  | |_| |  | |  | |    /\    \    | . \     | |
- /  \    \   |_| |_|   \___/   |_|  |_|   /  \    \   |_|\_\    |_|
-/    \    \                              /    \    \   ===SHOMSKY===
-|    |    ||                             |    |    ||  === LINUX ===
-|    |    || :mode agent = LLM assist    |    |    ||  - LLM + Shell
-\         /  :mode hallucination =       \         /   - 2 cool esses
- \       /          LLM dreams it's a CLI \       /    
-   \   /    :help = shell options           \   /
-     v                                        v
-"#;
+    // The rain reveals the art in place and leaves the cursor exactly where the
+    // static write below would have; only print the art ourselves if it didn't.
+    let drawn = crate::matrix::play(accent);
+
     let mut out = io::stdout().lock();
-    let _ = writeln!(out, "{accent}{art}{r}");
+    if !drawn {
+        let _ = writeln!(out, "{accent}{SPLASH_ART}{r}");
+    }
     let _ = writeln!(
         out,
         "  {bold}Shomsky Linux{r}  {dim}{CHARTER}{r}"

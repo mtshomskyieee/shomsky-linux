@@ -155,6 +155,22 @@ It is silent under pipes, `--once`, and `--script` so tests that capture
 | `ENGRAM_SPINNER` | `auto` (default), `always`, `off` / `0` / `false` |
 | `ENGRAM_LLM_READY_TRIES` | Startup poll budget in seconds (default `600`) |
 
+## Intro animation
+
+Interactive startup plays a Matrix-style green digital rain in the block of
+rows the splash is about to occupy, which crystallizes into the Cool S splash
+itself — the art is then already on screen, so the handoff to the normal startup
+output is seamless rather than a redraw. It runs for ~2 seconds, any keypress
+skips it (landing on the same finished art), and scrollback is left holding
+exactly the splash. It is off wherever the splash is off (pipes,
+`--once`, `--script`, `NO_COLOR=1`, `TERM=dumb`).
+
+| Variable | Values |
+|----------|--------|
+| `ENGRAM_MATRIX` | `auto` (default), `always`, `off` / `0` / `false` |
+| `ENGRAM_MATRIX_SECS` | Duration in seconds, `0`–`10` (default `2`; `0` skips) |
+| `ENGRAM_MATRIX_GLYPHS` | `ascii` to avoid halfwidth katakana |
+
 ## Quieting mistral.rs logs
 
 Server logs default to `/engram/mistralrs.log` (not the TTY). In the shell:

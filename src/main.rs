@@ -4,6 +4,7 @@ mod halluc_fs;
 mod halluc_session;
 mod learn;
 mod llm;
+mod matrix;
 mod mcp;
 mod modes;
 mod repl;
