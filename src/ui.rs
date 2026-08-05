@@ -105,17 +105,17 @@ pub fn print_splash(cfg: &Config) {
     // SHOMSKY — both S letters use the tall Cool S below.
     let art = r#"
      ^                                        ^
-    / \                                      / \
-  /     \                                  /     \
-/         \                              /         \
-|    |    ||                             |    |    ||
+    / \     shomagent                        / \   shomagent watch "<cwd>" --tell-me "..."
+  /     \   shomagent readwrite fil.md     /     \ shomagent spawn "<cmd>"
+/         \ shomagent ask 1 "question.." /         \
+|    |    ||shomagent talk 1             |    |    ||
 |    |    ||                             |    |    ||
 \    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
  \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
   \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /
   /\    \    |  _  |  | |_| |  | |  | |    /\    \    | . \     | |
  /  \    \   |_| |_|   \___/   |_|  |_|   /  \    \   |_|\_\    |_|
-/    \    \                              /    \    \
+/    \    \                              /    \    \   ===SHOMSKY===
 |    |    ||                             |    |    ||  === LINUX ===
 |    |    || :mode agent = LLM assist    |    |    ||  - LLM + Shell
 \         /  :mode hallucination =       \         /   - 2 cool esses

@@ -149,8 +149,18 @@ async fn fetch_artifacts(
 }
 
 fn stub_artifacts(name: &str, pending: &PendingPromote) -> PromoteArtifacts {
+    if pending.intent.contains("FAILBATS") {
+        return PromoteArtifacts {
+            script: format!("#!/bin/sh\necho {name}\n"),
+            man: format!(".TH {} 1\n.SH NAME\n{name}\n", name.to_ascii_uppercase()),
+            bats: "@test \"always fails\" {\n  false\n}\n".into(),
+            description: "intentionally broken".into(),
+            flags: vec![],
+            completion_words: vec!["--help".into()],
+        };
+    }
     let script = format!(
-        "#!/bin/sh\n# learned from: {intent}\nCOUNT=5\nwhile getopts \"n:h\" opt; do\n  case \"$opt\" in\n    n) COUNT=\"$OPTARG\" ;;\n    h) echo \"usage: {name} [-n count]\"; exit 0 ;;\n    *) echo \"usage: {name} [-n count]\" >&2; exit 1 ;;\n  esac\ndone\nshift $((OPTIND - 1))\n# Default body mirrors the planned command when possible.\nif [ $# -gt 0 ]; then\n  echo \"$*\"\nelse\n  {cmd}\nfi\n",
+        "#!/bin/sh\n# learned from: {intent}\nCOUNT=5\nwhile getopts \"n:h\" opt; do\n  case \"$opt\" in\n    n) COUNT=\"$OPTARG\" ;;\n    h) echo \"usage: {name} [-n count]\"; exit 0 ;;\n    *) echo \"usage: {name} [-n count]\" >&2; exit 1 ;;\n  esac\ndone\nshift $((OPTIND - 1))\nif [ $# -gt 0 ]; then\n  echo \"$*\"\nelse\n  {cmd}\nfi\n",
         intent = pending.intent.replace('\'', ""),
         name = name,
         cmd = pending.command,
@@ -229,14 +239,14 @@ mod tests {
 
     #[test]
     fn parses_promote() {
-        let raw = r#"{
+        let raw = r##"{
           "script": "#!/bin/sh\necho ok\n",
           "man": ".TH X 1\n",
           "bats": "@test \"t\" { true; }\n",
           "description": "x",
           "flags": ["--help"],
           "completion_words": ["--help"]
-        }"#;
+        }"##;
         let a = parse_promote_json(raw).unwrap();
         assert!(a.script.contains("#!/bin/sh"));
     }

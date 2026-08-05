@@ -193,13 +193,13 @@ are inlined into the system prompt; others are loaded on demand via the
 ## Test
 
 ```bash
-docker compose run --rm tests          # shell + shomagent suites (no LLM)
+docker compose run --rm tests          # shell + shomagent + learn suites (no LLM)
 docker compose run --rm tests-llm      # agent + hallucination LLM checks (tiny)
 # or on the host against a built image:
 ./tests/run.sh
 RUN_LLM_TESTS=1 ./tests/run.sh         # when mistralrs is already up
 # crate-level unit tests:
-#   cargo test -p shomagent
+#   cargo test -p shomagent -p shomsky
 ```
 
 CPU-only: first start (model load + first tokens) can take several minutes.

@@ -4,7 +4,7 @@ mod plan;
 mod prefix;
 mod promote;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -186,12 +186,3 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
     format!("{}…", &s[..end])
 }
-
-#[allow(dead_code)]
-fn _unused_bail() -> Result<()> {
-    bail!("unused");
-    #[allow(unreachable_code)]
-    Ok(())
-}
-
-pub use plan::Plan;
