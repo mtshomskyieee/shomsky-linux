@@ -58,6 +58,7 @@ OpenAI-compatible HTTP API. The **container is the sandbox**.
 | `engram-shell` | Interactive REPL; owns tool execution, modes, and MCP client |
 | `engram-cmdfreq` (etc.) | Optional **stdio child** MCP servers spawned by the shell — no ports |
 | `shomagent` | CLI client to `shomagentd` (watch / roster / talk) |
+| `shomsky` | Publish learned commands as local apk packages |
 
 `engram-shell` talks to mistral.rs over `/v1/chat/completions`. Tool discovery
 is configurable:
@@ -89,6 +90,9 @@ talked around by the LLM. Unknown tool names are ignored.
 | `/usr/local/bin/engram-shell` | Linux shell |
 | `/usr/local/bin/engram-cmdfreq` | First-party command-frequency MCP (stdio child) |
 | `/usr/local/bin/shomagent` / `shomagentd` | Background crew CLI + daemon |
+| `/usr/local/bin/shomsky` | Learn publish CLI (`shomsky publish`) |
+| `/engram/user/bin/` | Agent-grown commands from learn promote |
+| `/engram/user/share/man/` | Man pages for learned commands |
 | `/engram/user/.command_freq.json` | Command frequency store (Completer / `:top` / MCP) |
 | `/usr/local/bin/mistralrs` | Inference server |
 

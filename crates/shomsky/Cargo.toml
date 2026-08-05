@@ -1,0 +1,21 @@
+[package]
+name = "shomsky"
+version = "0.1.0"
+edition = "2021"
+description = "Learn registry and apk publish for Shomsky Linux"
+license = "MIT"
+rust-version = "1.74"
+
+[[bin]]
+name = "shomsky"
+path = "src/bin/shomsky.rs"
+
+[lib]
+name = "shomsky"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

@@ -22,6 +22,8 @@ must follow [ADR-0000](0000-what-is-an-adr.md) and
     shared command-frequency store used by Completer / `:top`
   - member crate **`shomagent`** (`crates/shomagent/`) — `shomagentd` supervisor
     + `shomagent` CLI (see [ADR-0007](0007-shomagent-background-crew.md))
+  - member crate **`shomsky`** (`crates/shomsky/`) — learn registry / apk publish
+    + `shomsky` CLI (see [ADR-0008](0008-learn-userland-verb.md))
 - Prefer MIT / Apache-2.0 dependencies consistent with the distro stack.
 
 ### Runtime and libraries
@@ -48,6 +50,7 @@ Keep responsibilities split under `src/`:
 | Tools | `tools/` (builtins, shell detect, text tool parse) |
 | MCP client | `mcp/` |
 | Skills / UI | `skills.rs`, `ui.rs`, `spinner.rs`, `completer.rs` |
+| Learn | `learn/` (intent prefix, plan, promote; uses `shomsky` lib) |
 | Hallucination | `halluc_fs.rs`, `halluc_session.rs` |
 
 Mode policy and tool execution stay in the shell (client-side), never delegated

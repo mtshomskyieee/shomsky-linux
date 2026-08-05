@@ -62,7 +62,13 @@ HALLUC_HIST_DIR="${ENGRAM_HALLUC_HISTORY_DIR:-/engram/.hallucination_shell_histo
 USER_DIR="${ENGRAM_USER_DIR:-/engram/user}"
 export ENGRAM_HALLUC_HISTORY_DIR="$HALLUC_HIST_DIR"
 export ENGRAM_USER_DIR="$USER_DIR"
-mkdir -p "$MODELS_DIR" "$SKILLS_DIR" "$HALLUC_HIST_DIR" "$USER_DIR"
+mkdir -p "$MODELS_DIR" "$SKILLS_DIR" "$HALLUC_HIST_DIR" "$USER_DIR" \
+  "$USER_DIR/bin" "$USER_DIR/bin/tests" "$USER_DIR/bin/completions" \
+  "$USER_DIR/bin/.learn" "$USER_DIR/bin/packages" \
+  "$USER_DIR/share/man/man1"
+# Learned commands on PATH; man pages under user MANPATH.
+export PATH="$USER_DIR/bin:${PATH:-/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+export MANPATH="$USER_DIR/share/man${MANPATH:+:$MANPATH}"
 # Named/bind mounts often appear as root:root; keep writable for the shell user.
 if [ -d /engram ]; then
   chown -R shomsky:shomsky /engram/models "$HALLUC_HIST_DIR" "$USER_DIR" 2>/dev/null || true

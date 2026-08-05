@@ -169,6 +169,21 @@ Set `SHOMSKY_MODEL` to one of the aliases in `/etc/engram/models.toml`:
 - `deepseek` — DeepSeek distill GGUF
 - `tiny` — Qwen2.5 0.5B Instruct GGUF (CI / smoke tests)
 
+## Learn
+
+Prefix a line with `,` or `??` to treat it as **intent**. The shell shows a
+real shell plan, you confirm, it runs, then you can **save** it as a command
+under `~/bin` (with man page + BATS). Promote only installs if the test
+passes. Package for others with `shomsky publish <name>` (apk →
+`/usr/local/bin`). Full reference: [docs/learn.md](docs/learn.md).
+
+```text
+$ , show the five largest files here as a table
+  ⟡ plan:
+      find . -type f -printf '%s\t%p\n' | sort -rn | head -5 | column -t
+  [r]un / [e]dit / [q]uit?
+```
+
 ## Skills
 
 Markdown skills live under `/engram/skills`. Skills with `always_load: true`

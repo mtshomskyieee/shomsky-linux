@@ -2,6 +2,7 @@ mod completer;
 mod config;
 mod halluc_fs;
 mod halluc_session;
+mod learn;
 mod llm;
 mod mcp;
 mod modes;
