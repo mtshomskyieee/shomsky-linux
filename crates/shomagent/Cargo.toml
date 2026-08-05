@@ -1,0 +1,29 @@
+[package]
+name = "shomagent"
+version = "0.1.0"
+edition = "2021"
+description = "Background watcher agents for Shomsky Linux"
+license = "MIT"
+rust-version = "1.74"
+
+[[bin]]
+name = "shomagentd"
+path = "src/bin/shomagentd.rs"
+
+[[bin]]
+name = "shomagent"
+path = "src/bin/shomagent.rs"
+
+[lib]
+name = "shomagent"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs", "sync", "net", "signal"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }

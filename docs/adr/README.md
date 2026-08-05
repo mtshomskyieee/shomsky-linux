@@ -15,6 +15,7 @@ AI-assisted contribution rules.
 | [0004](0004-mcp-integration-steering.md) | MCP integration steering | Accepted |
 | [0005](0005-ci-integration-steering.md) | CI integration steering | Accepted |
 | [0006](0006-mit-as-is-and-ai-contributions.md) | MIT, use-at-your-own-risk, and AI-assisted contributions | Accepted |
+| [0007](0007-shomagent-background-crew.md) | shomagent background crew | Accepted |
 
 How-to docs (modes, MCP usage, models, licensing inventory) stay under
 [`docs/`](../).

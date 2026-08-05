@@ -59,4 +59,7 @@ ftp
 sftp
 gdb
 lldb
+
+# shomagent interactive talk
+shomagent
 ```

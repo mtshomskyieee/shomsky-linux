@@ -125,6 +125,11 @@ else
 fi
 
 cleanup() {
+  if [ -n "${SHOMAGENT_PID:-}" ] && kill -0 "$SHOMAGENT_PID" 2>/dev/null; then
+    log "stopping shomagentd (pid $SHOMAGENT_PID)"
+    kill "$SHOMAGENT_PID" 2>/dev/null || true
+    wait "$SHOMAGENT_PID" 2>/dev/null || true
+  fi
   if [ -n "${LLM_PID:-}" ] && kill -0 "$LLM_PID" 2>/dev/null; then
     log "stopping mistralrs (pid $LLM_PID)"
     kill "$LLM_PID" 2>/dev/null || true
@@ -205,6 +210,21 @@ if [ "$SKIP_LLM" != "1" ]; then
     done
     log "LLM ready at $url (first chat reply on CPU may still take a while)"
   fi
+fi
+
+# Background crew supervisor (ring buffers + novelty-filtered findings).
+SKIP_SHOMAGENT="${SKIP_SHOMAGENT:-0}"
+if [ "$SKIP_SHOMAGENT" != "1" ] && command -v shomagentd >/dev/null 2>&1; then
+  mkdir -p /run/shomagent /etc/shomsky/shomagent_crew.d
+  export SHOMAGENT_RUN_DIR="${SHOMAGENT_RUN_DIR:-/run/shomagent}"
+  # Prefer stub LLM only when there is no real inference server (CI / SKIP_LLM).
+  # Do not force stub just because SHOMSKY_MODEL=tiny — tiny can still answer asks.
+  if [ -z "${SHOMAGENT_STUB_LLM:-}" ] && [ "${SKIP_LLM:-0}" = "1" ]; then
+    export SHOMAGENT_STUB_LLM=1
+  fi
+  log "starting shomagentd"
+  shomagentd &
+  SHOMAGENT_PID=$!
 fi
 
 # If the user passed a command, run it; otherwise start the linux shell.
