@@ -80,6 +80,25 @@ At the prompt:
 :mode root
 ```
 
+Or open the **feature menu** with `:menu` / `:m` and pick a mode from the Modes
+category (TTY only; slips out cleanly back to the prompt).
+
+## Feature menu
+
+On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
+
+| Category | Examples |
+|----------|----------|
+| Modes | Switch agent / hallucination / root |
+| Learn | Prefill `, ` or `?? `; save when a promote is pending |
+| shomagent | Roster, or prefill `watch` / `ask` / `talk` / `read` |
+| Help | Run `:help` |
+| System | `:sys`, `:model`, `:skills`, `:top`, `:clear`, exit |
+
+Arrow keys / `hjkl` / Tab navigate; Enter selects; Esc backs up a level; Esc Esc
+(or `q`) leaves the menu. Under pipes, `--once`, and `--script` the overlay is
+skipped (`:menu` prints a one-line hint).
+
 Or at start:
 
 ```bash

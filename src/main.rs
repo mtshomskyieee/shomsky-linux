@@ -6,10 +6,12 @@ mod learn;
 mod llm;
 mod matrix;
 mod mcp;
+mod menu;
 mod modes;
 mod repl;
 mod skills;
 mod spinner;
+mod term;
 mod tools;
 mod ui;
 

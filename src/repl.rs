@@ -2,8 +2,12 @@ use anyhow::{Context, Result};
 use engram_cmdfreq::{format_top, FrequencyStore, DEFAULT_TOP_LIMIT, MAX_TOP};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
-use rustyline::Editor;
+use rustyline::{
+    Cmd, ConditionalEventHandler, Editor, Event, EventContext, EventHandler, KeyCode, KeyEvent,
+    RepeatCount,
+};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use crate::completer::EngramHelper;
 use crate::config::{Config, ToolStyle};
@@ -12,6 +16,7 @@ use crate::halluc_session;
 use crate::learn::{self, PendingPromote};
 use crate::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::mcp::McpRegistry;
+use crate::menu::{self, MenuAction, MenuContext};
 use crate::modes::Mode;
 use crate::skills::SkillStore;
 use crate::spinner::{self, with_progress_bar, with_spinner};
@@ -21,6 +26,35 @@ use crate::ui;
 const MAX_TOOL_ROUNDS: usize = 8;
 
 type LineEditor = Editor<EngramHelper, DefaultHistory>;
+
+/// One-shot: inject `prefill` into an empty buffer on the next key event.
+struct PrefillHandler {
+    prefill: Arc<Mutex<Option<String>>>,
+}
+
+impl ConditionalEventHandler for PrefillHandler {
+    fn handle(
+        &self,
+        evt: &Event,
+        _n: RepeatCount,
+        _positive: bool,
+        ctx: &EventContext<'_>,
+    ) -> Option<Cmd> {
+        if !ctx.line().is_empty() {
+            return None;
+        }
+        let mut guard = self.prefill.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(text) = guard.take() else {
+            return None;
+        };
+        if let Some(KeyEvent(KeyCode::Char(c), m)) = evt.get(0) {
+            if m.is_empty() && !c.is_control() {
+                return Some(Cmd::Insert(1, format!("{text}{c}")));
+            }
+        }
+        Some(Cmd::Insert(1, text))
+    }
+}
 
 pub struct Repl {
     cfg: Config,
@@ -36,6 +70,10 @@ pub struct Repl {
     mcp: Option<McpRegistry>,
     /// After a learn run, a bare `s` promotes this command.
     pending_promote: Option<PendingPromote>,
+    /// Starter line to drop into the next readline buffer.
+    prefill: Option<String>,
+    /// Complete line to run on the next loop iteration (no readline).
+    pending_input: Option<String>,
 }
 
 impl Repl {
@@ -53,6 +91,8 @@ impl Repl {
             cwd,
             mcp: None,
             pending_promote: None,
+            prefill: None,
+            pending_input: None,
         })
     }
 
@@ -69,24 +109,43 @@ impl Repl {
         )));
         let _ = rl.load_history("/engram/.shell_history");
 
+        let prefill_slot = Arc::new(Mutex::new(None::<String>));
+        rl.bind_sequence(
+            Event::Any,
+            EventHandler::Conditional(Box::new(PrefillHandler {
+                prefill: Arc::clone(&prefill_slot),
+            })),
+        );
+
         if self.cfg.mode == Mode::Hallucination {
             self.enter_hallucination_session(&mut rl)?;
         }
 
         loop {
             Self::drain_shomagent_notifications();
-            let prompt = ui::prompt_string(self.cfg.mode, &self.cwd);
-            let line = match rl.readline(&prompt) {
-                Ok(l) => l,
-                Err(ReadlineError::Interrupted) => {
-                    println!("^C");
-                    continue;
+
+            // Complete lines from the menu (e.g. bare `s`) skip readline.
+            let line = if let Some(pending) = self.pending_input.take() {
+                pending
+            } else {
+                // Push pending prefill into the Any-handler for this readline.
+                if let Some(text) = self.prefill.take() {
+                    *prefill_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
                 }
-                Err(ReadlineError::Eof) => {
-                    println!();
-                    break;
+
+                let prompt = ui::prompt_string(self.cfg.mode, &self.cwd);
+                match rl.readline(&prompt) {
+                    Ok(l) => l,
+                    Err(ReadlineError::Interrupted) => {
+                        println!("^C");
+                        continue;
+                    }
+                    Err(ReadlineError::Eof) => {
+                        println!();
+                        break;
+                    }
+                    Err(e) => return Err(e.into()),
                 }
-                Err(e) => return Err(e.into()),
             };
 
             let line = line.trim().to_string();
@@ -187,6 +246,47 @@ impl Repl {
         let _ = rl.save_history("/engram/.shell_history");
         self.shutdown_mcp().await;
         Ok(())
+    }
+
+    fn menu_context(&self) -> MenuContext {
+        MenuContext {
+            mode: self.cfg.mode,
+            allow_root_mode: self.cfg.allow_root_mode,
+            pending_learn: self.pending_promote.is_some(),
+        }
+    }
+
+    fn run_menu(&self) -> MenuAction {
+        menu::run(&self.menu_context())
+    }
+
+    /// Apply a menu outcome. Returns true when the shell should exit.
+    async fn apply_menu_action(
+        &mut self,
+        action: MenuAction,
+        rl: &mut LineEditor,
+    ) -> Result<bool> {
+        match action {
+            MenuAction::Dismiss => Ok(false),
+            MenuAction::SetMode(mode) => {
+                Box::pin(self.handle_meta(&format!(":mode {}", mode.as_str()), Some(rl))).await
+            }
+            MenuAction::RunMeta(cmd) => Box::pin(self.handle_meta(&cmd, Some(rl))).await,
+            MenuAction::InsertLine(s) => {
+                // Starters end with space or contain empty quotes → prefill buffer.
+                // Complete tokens (e.g. `s`) run on the next loop turn.
+                if s.ends_with(' ') || s.contains("\"\"") {
+                    self.prefill = Some(s);
+                } else {
+                    self.pending_input = Some(s);
+                }
+                Ok(false)
+            }
+            MenuAction::ExitShell => {
+                let _ = self.save_halluc_session();
+                Ok(true)
+            }
+        }
     }
 
     async fn ensure_mcp(&mut self) {
@@ -359,6 +459,13 @@ impl Repl {
         match cmd {
             ":help" | ":h" => {
                 println!("{}", HELP_TEXT);
+            }
+            ":menu" | ":m" => {
+                if let Some(editor) = rl.as_deref_mut() {
+                    let action = self.run_menu();
+                    return Box::pin(self.apply_menu_action(action, editor)).await;
+                }
+                println!("menu: interactive only — use :menu at the prompt");
             }
             ":sys" | ":uname" => {
                 ui::print_sys(&self.cfg, &self.cwd);
@@ -1194,6 +1301,7 @@ fn truncate_args(s: &str, limit: usize) -> String {
 const HELP_TEXT: &str = "\
 Meta-commands:
   :help              Show this help
+  :menu | :m         Feature navigation hub (Modes / Learn / shomagent / Help / System)
   :sys | :uname      System identity (mode, model, tools, llm) — also: uname
   :mode [name]       Show or set mode (agent|hallucination|root)
   :tools [style]     Show or set tool style (auto|native|text)
@@ -1204,6 +1312,10 @@ Meta-commands:
   :shomagent         Roster background agents (:agents); :shomagent talk N peeks
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
+
+Feature menu (TTY):
+  :menu | :m         Slip into the Modes / Learn / shomagent / Help / System hub
+  ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
 
 Learn (agent mode):
   , <intent>         Plan → confirm → run a real shell command from intent
