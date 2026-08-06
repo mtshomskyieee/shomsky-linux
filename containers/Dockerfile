@@ -2,20 +2,23 @@
 # Shomsky Linux — Alpine-derived LLM host (CPU / musl)
 #
 # Multi-stage:
-#   builder  — alpine:3.24 + rust/cargo, builds mistral.rs + engram-shell
-#   runtime  — slim alpine with binaries, rootfs overlay, /engram skills
+#   toolchain — alpine + rust/cargo (shared base)
+#   mistral   — builds mistral.rs only (cached until MISTRALRS_REF changes)
+#   workspace — builds engram-shell + crates (invalidates on src/ changes)
+#   runtime   — slim alpine with binaries, rootfs overlay, /engram skills
+#
+# Editing src/ must NOT rebuild mistral.rs. Keep those stages independent.
 
 ARG ALPINE_VERSION=3.24
 ARG MISTRALRS_REF=v0.9.0
-
-# ---------------------------------------------------------------------------
-# Builder
-# ---------------------------------------------------------------------------
-FROM alpine:${ALPINE_VERSION} AS builder
-
-ARG MISTRALRS_REF
-# Cap parallelism — mistral.rs is memory-hungry during compile.
 ARG CARGO_BUILD_JOBS=2
+
+# ---------------------------------------------------------------------------
+# Shared Rust toolchain
+# ---------------------------------------------------------------------------
+FROM alpine:${ALPINE_VERSION} AS toolchain
+
+ARG CARGO_BUILD_JOBS
 
 RUN apk add --no-cache \
       build-base \
@@ -38,24 +41,14 @@ ENV CARGO_HOME=/usr/local/cargo \
     CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
     RUSTFLAGS="-C target-feature=-crt-static"
 
-WORKDIR /build
+# ---------------------------------------------------------------------------
+# mistral.rs (CPU, no default extras)
+# Only rebuilds when MISTRALRS_REF / toolchain / this stage changes.
+# ---------------------------------------------------------------------------
+FROM toolchain AS mistral
 
-# --- engram-shell + engram-cmdfreq + shomagent -----------------------------
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY crates ./crates
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
-    mkdir -p /out \
- && cargo build --release -p engram-shell -p engram-cmdfreq -p shomagent -p shomsky \
- && cp target/release/engram-shell /out/engram-shell \
- && cp target/release/engram-cmdfreq /out/engram-cmdfreq \
- && cp target/release/shomagent /out/shomagent \
- && cp target/release/shomagentd /out/shomagentd \
- && cp target/release/shomsky /out/shomsky
+ARG MISTRALRS_REF
 
-# --- mistral.rs (CPU, no default extras) -----------------------------------
-# Clone into a fixed path, then build with registry+target cache mounts.
 WORKDIR /src
 # musl's libc::Ioctl is unsigned; mistral.rs v0.9.0 passes SIOCSIFFLAGS uncast.
 RUN git clone --depth 1 --branch "${MISTRALRS_REF}" \
@@ -67,10 +60,33 @@ RUN git clone --depth 1 --branch "${MISTRALRS_REF}" \
 WORKDIR /src/mistral.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/mistral.rs/target \
-    cargo build --release -p mistralrs-cli --no-default-features \
+    mkdir -p /out \
+ && cargo build --release -p mistralrs-cli --no-default-features \
  && test -x target/release/mistralrs \
  && cp target/release/mistralrs /out/mistralrs \
- && strip /out/engram-shell /out/engram-cmdfreq /out/shomagent /out/shomagentd /out/shomsky /out/mistralrs
+ && strip /out/mistralrs
+
+# ---------------------------------------------------------------------------
+# Workspace crates (engram-shell, shomagent, …)
+# This is the only stage that invalidates on day-to-day src/ edits.
+# ---------------------------------------------------------------------------
+FROM toolchain AS workspace
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY crates ./crates
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    mkdir -p /out \
+ && cargo build --release -p engram-shell -p engram-cmdfreq -p shomagent -p shomsky \
+ && cp target/release/engram-shell /out/engram-shell \
+ && cp target/release/engram-cmdfreq /out/engram-cmdfreq \
+ && cp target/release/shomagent /out/shomagent \
+ && cp target/release/shomagentd /out/shomagentd \
+ && cp target/release/shomsky /out/shomsky \
+ && strip /out/engram-shell /out/engram-cmdfreq /out/shomagent /out/shomagentd /out/shomsky
+
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
@@ -101,12 +117,12 @@ COPY LICENSE /usr/share/doc/shomsky/LICENSE
 COPY third_party/docker-alpine /usr/share/doc/shomsky/third_party/docker-alpine
 
 # Binaries (MCP servers are stdio children — never published as ports)
-COPY --from=builder /out/engram-shell /usr/local/bin/engram-shell
-COPY --from=builder /out/engram-cmdfreq /usr/local/bin/engram-cmdfreq
-COPY --from=builder /out/shomagent /usr/local/bin/shomagent
-COPY --from=builder /out/shomagentd /usr/local/bin/shomagentd
-COPY --from=builder /out/shomsky /usr/local/bin/shomsky
-COPY --from=builder /out/mistralrs /usr/local/bin/mistralrs
+COPY --from=workspace /out/engram-shell /usr/local/bin/engram-shell
+COPY --from=workspace /out/engram-cmdfreq /usr/local/bin/engram-cmdfreq
+COPY --from=workspace /out/shomagent /usr/local/bin/shomagent
+COPY --from=workspace /out/shomagentd /usr/local/bin/shomagentd
+COPY --from=workspace /out/shomsky /usr/local/bin/shomsky
+COPY --from=mistral /out/mistralrs /usr/local/bin/mistralrs
 COPY containers/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY containers/shomsky-tests.sh /usr/local/bin/shomsky-tests
 
