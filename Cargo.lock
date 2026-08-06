@@ -235,6 +235,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "shomagent",
+ "shomsky",
  "thiserror",
  "tokio",
  "toml",
@@ -1121,6 +1122,16 @@ dependencies = [
  "tokio",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "shomsky"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "toml",
 ]
 
 [[package]]

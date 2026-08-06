@@ -1,4 +1,4 @@
-//! rustyline Completer: frequency-ranked commands + meta-commands.
+//! rustyline Completer: frequency-ranked commands + ~/bin + meta-commands.
 
 use engram_cmdfreq::FrequencyStore;
 use rustyline::completion::{Completer, Pair};
@@ -18,21 +18,27 @@ const META_COMMANDS: &[&str] = &[
 
 pub struct EngramHelper {
     store_path: PathBuf,
+    bin_dir: PathBuf,
     cache: RefCell<Cache>,
 }
 
 struct Cache {
     mtime: Option<SystemTime>,
     commands: Vec<(String, u64)>,
+    bin_names: Vec<String>,
+    bin_mtime: Option<SystemTime>,
 }
 
 impl EngramHelper {
-    pub fn new(store_path: PathBuf) -> Self {
+    pub fn new(store_path: PathBuf, bin_dir: PathBuf) -> Self {
         Self {
             store_path,
+            bin_dir,
             cache: RefCell::new(Cache {
                 mtime: None,
                 commands: Vec::new(),
+                bin_names: Vec::new(),
+                bin_mtime: None,
             }),
         }
     }
@@ -41,20 +47,44 @@ impl EngramHelper {
         let mtime = std::fs::metadata(&self.store_path)
             .and_then(|m| m.modified())
             .ok();
+        let bin_mtime = std::fs::metadata(&self.bin_dir)
+            .and_then(|m| m.modified())
+            .ok();
         let mut cache = self.cache.borrow_mut();
-        if cache.mtime == mtime && !cache.commands.is_empty() {
-            return;
+        if cache.mtime != mtime || cache.commands.is_empty() {
+            cache.mtime = mtime;
+            cache.commands = FrequencyStore::load(&self.store_path)
+                .map(|s| {
+                    let mut items: Vec<(String, u64)> = s.commands.into_iter().collect();
+                    items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                    items
+                })
+                .unwrap_or_default();
         }
-        cache.mtime = mtime;
-        cache.commands = FrequencyStore::load(&self.store_path)
-            .map(|s| {
-                let mut items: Vec<(String, u64)> =
-                    s.commands.into_iter().collect();
-                items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-                items
-            })
-            .unwrap_or_default();
+        if cache.bin_mtime != bin_mtime {
+            cache.bin_mtime = bin_mtime;
+            cache.bin_names = list_bin_names(&self.bin_dir);
+        }
     }
+}
+
+fn list_bin_names(dir: &std::path::Path) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for ent in rd.flatten() {
+        let name = ent.file_name();
+        let Some(s) = name.to_str() else { continue };
+        if s.starts_with('.') {
+            continue;
+        }
+        if ent.path().is_file() {
+            names.push(s.to_string());
+        }
+    }
+    names.sort();
+    names
 }
 
 impl Completer for EngramHelper {
@@ -81,17 +111,39 @@ impl Completer for EngramHelper {
             return Ok((0, candidates));
         }
 
+        // Intent prefixes: don't complete as shell.
+        if prefix.starts_with(',') || prefix.starts_with('?') {
+            return Ok((0, candidates));
+        }
+
         self.refresh_if_needed();
         let cache = self.cache.borrow();
-        for (cmd, count) in cache.commands.iter() {
-            if cmd.starts_with(prefix) && cmd.as_str() != prefix {
+
+        for name in cache.bin_names.iter() {
+            if name.starts_with(prefix) && name.as_str() != prefix {
                 candidates.push(Pair {
-                    display: format!("{cmd}  ({count})"),
-                    replacement: cmd.clone(),
+                    display: format!("{name}  (learn)"),
+                    replacement: name.clone(),
                 });
             }
             if candidates.len() >= 20 {
                 break;
+            }
+        }
+
+        for (cmd, count) in cache.commands.iter() {
+            if candidates.len() >= 20 {
+                break;
+            }
+            if cmd.starts_with(prefix) && cmd.as_str() != prefix {
+                // Skip duplicates already listed from ~/bin.
+                if cache.bin_names.iter().any(|n| n == cmd) {
+                    continue;
+                }
+                candidates.push(Pair {
+                    display: format!("{cmd}  ({count})"),
+                    replacement: cmd.clone(),
+                });
             }
         }
         Ok((0, candidates))
@@ -100,6 +152,9 @@ impl Completer for EngramHelper {
 
 impl Hinter for EngramHelper {
     type Hint = String;
+    fn hint(&self, _line: &str, _pos: usize, _ctx: &Context<'_>) -> Option<String> {
+        None
+    }
 }
 
 impl Highlighter for EngramHelper {}

@@ -54,6 +54,8 @@ docker compose run --rm tests-llm
 | `cases/shell_commands.sh` | Exhaustive simple shell checks (agent/root, no LLM) |
 | `cases/shomagent_smoke.sh` | Full shomagent verb suite via `helpers/shomagent_full.sh` (stub LLM) |
 | `helpers/shomagent_full.sh` | roster, read, readwrite, write, ask, talk, watch, spawn, pause/resume/stop, persist, novelty |
+| `cases/learn_smoke.sh` | Learn `,` intent → promote ~/bin → `shomsky publish` apk (stub LLM) |
+| `helpers/learn_full.sh` | plan/run/save, bats-fail gate, apk contents |
 | `cases/llm_chat.sh` | Agent chat + loose hallucination checks (`RUN_LLM_TESTS=1`) |
 | `cases/llm_hallucination_golden.sh` | Exact 4-step golden path ×3 (`RUN_LLM_TESTS=1`) |
 

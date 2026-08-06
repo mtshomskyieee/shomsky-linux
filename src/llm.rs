@@ -254,4 +254,35 @@ impl LlmClient {
             tool_calls: vec![],
         })
     }
+
+    /// Non-streaming text completion with an explicit token budget (learn plan/promote).
+    pub async fn chat_text_max(&self, messages: &[ChatMessage], max_tokens: u32) -> Result<String> {
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let body = json!({
+            "model": self.model,
+            "messages": messages,
+            "stream": false,
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("chat_text_max request")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("chat_text_max failed ({status}): {text}"));
+        }
+        let value: Value = resp.json().await.context("decoding chat_text_max")?;
+        let content = value
+            .pointer("/choices/0/message/content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        Ok(content)
+    }
 }

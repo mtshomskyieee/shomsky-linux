@@ -10,11 +10,11 @@ const CHARTER: &str = "agents · rust · native LLM in the shell";
 /// SHOMSKY — both S letters use the tall Cool S. Also rasterized by
 /// `matrix.rs` as the mask the digital rain crystallizes into.
 pub const SPLASH_ART: &str = r#"
-     ^                                        ^
-    / \                                      / \
-  /     \                                  /     \
-/         \                              /         \
-|    |    ||                             |    |    ||
+     ^  AGENTS                                ^
+    / \     shomagent                        / \   shomagent watch "<cwd>" --tell-me "..."
+  /     \   shomagent readwrite fil.md     /     \ shomagent spawn "<cmd>"
+/         \ shomagent ask 1 "question.." /         \   NEW COMMAND begin with a comma example: 
+|    |    ||shomagent talk 1             |    |    ||  , show the five largest files
 |    |    ||                             |    |    ||
 \    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
  \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
@@ -22,7 +22,7 @@ pub const SPLASH_ART: &str = r#"
   /\    \    |  _  |  | |_| |  | |  | |    /\    \    | . \     | |
  /  \    \   |_| |_|   \___/   |_|  |_|   /  \    \   |_|\_\    |_|
 /    \    \                              /    \    \
-|    |    ||                             |    |    ||  === LINUX ===
+|    |    || MODES                       |    |    ||  === LINUX ===
 |    |    || :mode agent = LLM assist    |    |    ||  - LLM + Shell
 \         /  :mode hallucination =       \         /   - 2 cool esses
  \       /          LLM dreams it's a CLI \       /
@@ -239,3 +239,4 @@ mod tests {
         assert!(!is_sys_command("echo uname"));
     }
 }
+

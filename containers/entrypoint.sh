@@ -62,7 +62,13 @@ HALLUC_HIST_DIR="${ENGRAM_HALLUC_HISTORY_DIR:-/engram/.hallucination_shell_histo
 USER_DIR="${ENGRAM_USER_DIR:-/engram/user}"
 export ENGRAM_HALLUC_HISTORY_DIR="$HALLUC_HIST_DIR"
 export ENGRAM_USER_DIR="$USER_DIR"
-mkdir -p "$MODELS_DIR" "$SKILLS_DIR" "$HALLUC_HIST_DIR" "$USER_DIR"
+mkdir -p "$MODELS_DIR" "$SKILLS_DIR" "$HALLUC_HIST_DIR" "$USER_DIR" \
+  "$USER_DIR/bin" "$USER_DIR/bin/tests" "$USER_DIR/bin/completions" \
+  "$USER_DIR/bin/.learn" "$USER_DIR/bin/packages" \
+  "$USER_DIR/share/man/man1"
+# Learned commands on PATH; man pages under user MANPATH.
+export PATH="$USER_DIR/bin:${PATH:-/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+export MANPATH="$USER_DIR/share/man${MANPATH:+:$MANPATH}"
 # Named/bind mounts often appear as root:root; keep writable for the shell user.
 if [ -d /engram ]; then
   chown -R shomsky:shomsky /engram/models "$HALLUC_HIST_DIR" "$USER_DIR" 2>/dev/null || true
@@ -212,16 +218,19 @@ if [ "$SKIP_LLM" != "1" ]; then
   fi
 fi
 
+# Prefer stub LLM only when there is no real inference server (CI / SKIP_LLM).
+if [ -z "${SHOMAGENT_STUB_LLM:-}" ] && [ "${SKIP_LLM:-0}" = "1" ]; then
+  export SHOMAGENT_STUB_LLM=1
+fi
+if [ -z "${ENGRAM_LEARN_STUB:-}" ] && [ "${SKIP_LLM:-0}" = "1" ]; then
+  export ENGRAM_LEARN_STUB=1
+fi
+
 # Background crew supervisor (ring buffers + novelty-filtered findings).
 SKIP_SHOMAGENT="${SKIP_SHOMAGENT:-0}"
 if [ "$SKIP_SHOMAGENT" != "1" ] && command -v shomagentd >/dev/null 2>&1; then
   mkdir -p /run/shomagent /etc/shomsky/shomagent_crew.d
   export SHOMAGENT_RUN_DIR="${SHOMAGENT_RUN_DIR:-/run/shomagent}"
-  # Prefer stub LLM only when there is no real inference server (CI / SKIP_LLM).
-  # Do not force stub just because SHOMSKY_MODEL=tiny — tiny can still answer asks.
-  if [ -z "${SHOMAGENT_STUB_LLM:-}" ] && [ "${SKIP_LLM:-0}" = "1" ]; then
-    export SHOMAGENT_STUB_LLM=1
-  fi
   log "starting shomagentd"
   shomagentd &
   SHOMAGENT_PID=$!

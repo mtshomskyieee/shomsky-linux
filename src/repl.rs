@@ -9,6 +9,7 @@ use crate::completer::EngramHelper;
 use crate::config::{Config, ToolStyle};
 use crate::halluc_fs::HallucFs;
 use crate::halluc_session;
+use crate::learn::{self, PendingPromote};
 use crate::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::mcp::McpRegistry;
 use crate::modes::Mode;
@@ -33,6 +34,8 @@ pub struct Repl {
     /// Hallucination mode keeps its virtual FS and does not mutate this.
     cwd: PathBuf,
     mcp: Option<McpRegistry>,
+    /// After a learn run, a bare `s` promotes this command.
+    pending_promote: Option<PendingPromote>,
 }
 
 impl Repl {
@@ -49,6 +52,7 @@ impl Repl {
             halluc_session_path: None,
             cwd,
             mcp: None,
+            pending_promote: None,
         })
     }
 
@@ -58,7 +62,11 @@ impl Repl {
         self.connect_mcp().await;
 
         let mut rl = LineEditor::new().context("initializing readline")?;
-        rl.set_helper(Some(EngramHelper::new(self.cfg.cmdfreq_path.clone())));
+        let bin_dir = shomsky::LearnPaths::from_env().bin_dir();
+        rl.set_helper(Some(EngramHelper::new(
+            self.cfg.cmdfreq_path.clone(),
+            bin_dir,
+        )));
         let _ = rl.load_history("/engram/.shell_history");
 
         if self.cfg.mode == Mode::Hallucination {
@@ -103,6 +111,54 @@ impl Repl {
             // Local identity — don't spend an LLM turn on uname.
             if ui::is_sys_command(&line) {
                 ui::print_sys(&self.cfg, &self.cwd);
+                continue;
+            }
+
+            // Bare `s` / `save` after a learn run.
+            if let Some(pending) = self.pending_promote.clone() {
+                if let Some(installed) =
+                    learn::handle_save_line(&line, &self.llm, &pending).await?
+                {
+                    if installed {
+                        self.record_command(&pending.suggested_name).await;
+                    }
+                    self.pending_promote = None;
+                    continue;
+                }
+            }
+
+            // `,` / `??` intent → learn plan/confirm/execute.
+            if let Some(intent) = learn::parse_intent_prefix(&line) {
+                match learn::run_intent(
+                    intent,
+                    &self.cfg,
+                    &self.llm,
+                    &mut self.cwd,
+                    self.cfg.mode,
+                )
+                .await?
+                {
+                    Some(pending) => {
+                        self.record_command(&pending.command).await;
+                        if learn::learn_auto() {
+                            let name = pending.suggested_name.clone();
+                            if learn::offer_save(&self.llm, &pending, false).await? {
+                                self.record_command(&name).await;
+                            }
+                            self.pending_promote = None;
+                        } else {
+                            // Inline save prompt (also accept bare `s` next line).
+                            self.pending_promote = Some(pending.clone());
+                            if learn::offer_save(&self.llm, &pending, false).await? {
+                                self.record_command(&pending.suggested_name).await;
+                                self.pending_promote = None;
+                            }
+                        }
+                    }
+                    None => {
+                        self.pending_promote = None;
+                    }
+                }
                 continue;
             }
 
@@ -177,6 +233,52 @@ impl Repl {
 
     pub async fn run_once(&mut self, prompt: &str) -> Result<()> {
         self.ensure_mcp().await;
+
+        if let Some(pending) = self.pending_promote.clone() {
+            if let Some(installed) =
+                learn::handle_save_line(prompt, &self.llm, &pending).await?
+            {
+                if installed {
+                    self.record_command(&pending.suggested_name).await;
+                }
+                self.pending_promote = None;
+                return Ok(());
+            }
+        }
+
+        if let Some(intent) = learn::parse_intent_prefix(prompt) {
+            match learn::run_intent(
+                intent,
+                &self.cfg,
+                &self.llm,
+                &mut self.cwd,
+                self.cfg.mode,
+            )
+            .await?
+            {
+                Some(pending) => {
+                    self.record_command(&pending.command).await;
+                    if learn::learn_auto() {
+                        let name = pending.suggested_name.clone();
+                        if learn::offer_save(&self.llm, &pending, false).await? {
+                            self.record_command(&name).await;
+                        }
+                        self.pending_promote = None;
+                    } else {
+                        self.pending_promote = Some(pending.clone());
+                        if learn::offer_save(&self.llm, &pending, false).await? {
+                            self.record_command(&pending.suggested_name).await;
+                            self.pending_promote = None;
+                        }
+                    }
+                }
+                None => {
+                    self.pending_promote = None;
+                }
+            }
+            return Ok(());
+        }
+
         match self.cfg.mode {
             Mode::Root => {
                 if tools::is_ignore_llm_command(prompt, self.skills.ignore_llm_commands()) {
@@ -1103,6 +1205,12 @@ Meta-commands:
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 
+Learn (agent mode):
+  , <intent>         Plan → confirm → run a real shell command from intent
+  ?? <intent>        Same as comma prefix
+  s / save           After a learn run, crystallize into ~/bin (+ man + bats)
+  shomsky publish N  Package ~/bin/N as an apk → /usr/local/bin
+
 Top 10 commands:
   :top               or  :top 10
   Or ask in agent mode:  show my top 10 commands
@@ -1135,7 +1243,7 @@ hallucination_shell_<timestamp>.json (resume or fresh on enter).
 Tool styles:
   auto    Native tool_calls if present, else grep text patterns
   native  OpenAI tool schemas only
-  text    Text patterns only (for small models without tool support)
+  text    Text patterns only for small models without tool support
 
 Logs:
   Server logs go to /engram/mistralrs.log by default.
