@@ -175,14 +175,20 @@ impl Repl {
 
             // Bare `s` / `save` after a learn run.
             if let Some(pending) = self.pending_promote.clone() {
-                if let Some(installed) =
-                    learn::handle_save_line(&line, &self.llm, &pending).await?
-                {
-                    if installed {
-                        self.record_command(&pending.suggested_name).await;
+                match learn::handle_save_line(&line, &self.llm, &pending).await {
+                    Ok(Some(installed)) => {
+                        if installed {
+                            self.record_command(&pending.suggested_name).await;
+                        }
+                        self.pending_promote = None;
+                        continue;
                     }
-                    self.pending_promote = None;
-                    continue;
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("learn error: {e:#}");
+                        self.pending_promote = None;
+                        continue;
+                    }
                 }
             }
 
@@ -195,26 +201,36 @@ impl Repl {
                     &mut self.cwd,
                     self.cfg.mode,
                 )
-                .await?
+                .await
                 {
-                    Some(pending) => {
+                    Ok(Some(pending)) => {
                         self.record_command(&pending.command).await;
                         if learn::learn_auto() {
                             let name = pending.suggested_name.clone();
-                            if learn::offer_save(&self.llm, &pending, false).await? {
-                                self.record_command(&name).await;
+                            match learn::offer_save(&self.llm, &pending, false).await {
+                                Ok(true) => self.record_command(&name).await,
+                                Ok(false) => {}
+                                Err(e) => eprintln!("learn error: {e:#}"),
                             }
                             self.pending_promote = None;
                         } else {
                             // Inline save prompt (also accept bare `s` next line).
                             self.pending_promote = Some(pending.clone());
-                            if learn::offer_save(&self.llm, &pending, false).await? {
-                                self.record_command(&pending.suggested_name).await;
-                                self.pending_promote = None;
+                            match learn::offer_save(&self.llm, &pending, false).await {
+                                Ok(true) => {
+                                    self.record_command(&pending.suggested_name).await;
+                                    self.pending_promote = None;
+                                }
+                                Ok(false) => {}
+                                Err(e) => eprintln!("learn error: {e:#}"),
                             }
                         }
                     }
-                    None => {
+                    Ok(None) => {
+                        self.pending_promote = None;
+                    }
+                    Err(e) => {
+                        eprintln!("learn error: {e:#}");
                         self.pending_promote = None;
                     }
                 }
@@ -335,14 +351,20 @@ impl Repl {
         self.ensure_mcp().await;
 
         if let Some(pending) = self.pending_promote.clone() {
-            if let Some(installed) =
-                learn::handle_save_line(prompt, &self.llm, &pending).await?
-            {
-                if installed {
-                    self.record_command(&pending.suggested_name).await;
+            match learn::handle_save_line(prompt, &self.llm, &pending).await {
+                Ok(Some(installed)) => {
+                    if installed {
+                        self.record_command(&pending.suggested_name).await;
+                    }
+                    self.pending_promote = None;
+                    return Ok(());
                 }
-                self.pending_promote = None;
-                return Ok(());
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("learn error: {e:#}");
+                    self.pending_promote = None;
+                    return Ok(());
+                }
             }
         }
 
@@ -354,25 +376,35 @@ impl Repl {
                 &mut self.cwd,
                 self.cfg.mode,
             )
-            .await?
+            .await
             {
-                Some(pending) => {
+                Ok(Some(pending)) => {
                     self.record_command(&pending.command).await;
                     if learn::learn_auto() {
                         let name = pending.suggested_name.clone();
-                        if learn::offer_save(&self.llm, &pending, false).await? {
-                            self.record_command(&name).await;
+                        match learn::offer_save(&self.llm, &pending, false).await {
+                            Ok(true) => self.record_command(&name).await,
+                            Ok(false) => {}
+                            Err(e) => eprintln!("learn error: {e:#}"),
                         }
                         self.pending_promote = None;
                     } else {
                         self.pending_promote = Some(pending.clone());
-                        if learn::offer_save(&self.llm, &pending, false).await? {
-                            self.record_command(&pending.suggested_name).await;
-                            self.pending_promote = None;
+                        match learn::offer_save(&self.llm, &pending, false).await {
+                            Ok(true) => {
+                                self.record_command(&pending.suggested_name).await;
+                                self.pending_promote = None;
+                            }
+                            Ok(false) => {}
+                            Err(e) => eprintln!("learn error: {e:#}"),
                         }
                     }
                 }
-                None => {
+                Ok(None) => {
+                    self.pending_promote = None;
+                }
+                Err(e) => {
+                    eprintln!("learn error: {e:#}");
                     self.pending_promote = None;
                 }
             }
