@@ -71,7 +71,8 @@ export PATH="$USER_DIR/bin:${PATH:-/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
 export MANPATH="$USER_DIR/share/man${MANPATH:+:$MANPATH}"
 # Named/bind mounts often appear as root:root; keep writable for the shell user.
 if [ -d /engram ]; then
-  chown -R shomsky:shomsky /engram/models "$HALLUC_HIST_DIR" "$USER_DIR" 2>/dev/null || true
+  # Do not chown the user dir: it may be a bind mount of the host home.
+  chown -R shomsky:shomsky /engram/models "$HALLUC_HIST_DIR" 2>/dev/null || true
 fi
 
 if [ "$SKIP_MODEL_FETCH" != "1" ]; then

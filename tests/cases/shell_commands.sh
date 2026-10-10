@@ -225,6 +225,13 @@ run_home_tilde_suite() {
     'cd' \
     'pwd')"
   check_matches "$out" '^/root$' "root bare cd → /root"
+
+  # Workspace label must not change the real home path.
+  out="$(SHOMSKY_WORKDIR_KIND=home run_seq agent \
+    'cd /tmp' \
+    'cd ~' \
+    'pwd')"
+  check_matches "$out" '^/engram/user$' "agent cd ~ stays /engram/user when kind=home"
 }
 
 run_ignore_llm_suite() {

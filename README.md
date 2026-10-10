@@ -34,7 +34,11 @@ Package page: https://github.com/mtshomskyieee/shomsky-linux/pkgs/container/shom
 
 ### Your home directory under /engram is /engram/user
 Agent-mode files start in `/engram/user`, bind-mounted to `./engram/user`
-on the host (override with `SHOMSKY_USER_DIR`). Hallucination session JSON is
+on the host (override with `SHOMSKY_USER_DIR`). Each
+`./start-shomsky-linux-shell.sh` asks whether `SHOMSKY_USER_DIR` should be
+your home directory or `./engram/user`; the prompt then shows `[home]` or
+`[engram]`. Hallucination
+mode does not use that directory. Hallucination session JSON is
 bind-mounted to `./.hallucination_shell_history` (override with
 `SHOMSKY_HALLUC_HISTORY`).
 

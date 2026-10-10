@@ -61,7 +61,14 @@ pub async fn promote(
         Ok(()) => {}
         Err(e1) => {
             eprintln!("  ⟡ bats failed; repairing once…\n{e1:#}");
-            artifacts = fetch_artifacts(llm, pending, name, Some(&format!("{e1:#}"))).await?;
+            artifacts = match fetch_artifacts(llm, pending, name, Some(&format!("{e1:#}"))).await {
+                Ok(fixed) => fixed,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&work);
+                    eprintln!("  ✗ repair failed; not installing.\n{e:#}");
+                    return Ok(false);
+                }
+            };
             let work2 =
                 std::env::temp_dir().join(format!("shomsky-promote-{name}-r2-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&work2);
