@@ -14,4 +14,4 @@ pub use install::{
 };
 pub use name::{suggest_slug, validate_name};
 pub use paths::LearnPaths;
-pub use registry::{load_entry, save_entry, LearnEntry};
+pub use registry::{list_entries, load_entry, remove_entry, save_entry, LearnEntry};

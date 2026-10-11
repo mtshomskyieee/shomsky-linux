@@ -5,7 +5,7 @@ mod prefix;
 mod promote;
 
 use anyhow::Result;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 use crate::config::Config;
@@ -104,15 +104,11 @@ fn confirm_plan(command: &str) -> Result<Confirm> {
             "" | "r" | "run" | "y" | "yes" => return Ok(Confirm::Run(command.to_string())),
             "q" | "quit" | "n" | "no" => return Ok(Confirm::Quit),
             "e" | "edit" => {
-                eprint!("  ⟡ command: ");
-                let _ = io::stderr().flush();
-                let mut edited = String::new();
-                io::stdin().read_line(&mut edited)?;
-                let edited = edited.trim();
+                let edited = edit_command_line(command)?.trim().to_string();
                 if edited.is_empty() {
                     continue;
                 }
-                return Ok(Confirm::Run(edited.to_string()));
+                return Ok(Confirm::Run(edited));
             }
             _ => {
                 eprintln!("  type r, e, or q");
@@ -164,6 +160,28 @@ pub async fn handle_save_line(
     }
     let installed = offer_save(llm, pending, false).await?;
     Ok(Some(installed))
+}
+
+/// One editable line, cursor at the end, already filled with `command`.
+/// A non-TTY falls back to a plain read (the command is printed first).
+fn edit_command_line(command: &str) -> Result<String> {
+    let initial = command.replace('\n', " ");
+    if !io::stdin().is_terminal() {
+        eprintln!("  ⟡ {initial}");
+        eprint!("  ⟡ command: ");
+        let _ = io::stderr().flush();
+        let mut edited = String::new();
+        io::stdin().read_line(&mut edited)?;
+        return Ok(edited);
+    }
+    let mut rl = rustyline::DefaultEditor::new()?;
+    match rl.readline_with_initial("  ⟡ ", (&initial, "")) {
+        Ok(line) => Ok(line),
+        Err(rustyline::error::ReadlineError::Interrupted | rustyline::error::ReadlineError::Eof) => {
+            Ok(String::new())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn truncate_output(s: &str, max_lines: usize) -> String {

@@ -35,18 +35,20 @@ ensure_env_file() {
   fi
 }
 
-# First launch asks. Later launches reuse .env unless SHOMSKY_CHOOSE_WORKDIR=1.
-# A non-interactive start with no saved choice uses ./engram/user.
+# First launch asks. Later launches reuse .env unless called as `reask`
+# (or SHOMSKY_CHOOSE_WORKDIR=1). A non-interactive start with no saved
+# choice uses ./engram/user.
 choose_workdir() {
+  local reask="${1:-0}"
   local env_file="$ROOT/.env"
   ensure_env_file "$env_file" "$ROOT/.env.example"
 
   local saved_dir saved_kind
   saved_dir="$(env_get SHOMSKY_USER_DIR "$env_file")"
   saved_kind="$(env_get SHOMSKY_WORKDIR_KIND "$env_file")"
-  if [[ "${SHOMSKY_CHOOSE_WORKDIR:-}" != "1" && -n "$saved_dir" && -n "$saved_kind" ]]; then
+  if [[ "$reask" != "1" && "${SHOMSKY_CHOOSE_WORKDIR:-}" != "1" && -n "$saved_dir" && -n "$saved_kind" ]]; then
     echo "  Using SHOMSKY_USER_DIR=${saved_dir} (${saved_kind})"
-    echo "  Re-ask with SHOMSKY_CHOOSE_WORKDIR=1"
+    echo "  Re-ask with: ./start-shomsky-linux-shell.sh reask"
     echo
     return
   fi
@@ -115,6 +117,16 @@ ensure_image() {
 }
 
 main() {
+local reask=0
+if [[ "${1:-}" == "reask" ]]; then
+  reask=1
+  shift
+fi
+if [[ $# -gt 0 ]]; then
+  echo "usage: ./start-shomsky-linux-shell.sh [reask]" >&2
+  exit 1
+fi
+
 # First run: no .env model yet. Later starts reuse SHOMSKY_MODEL from .env.
 chosen_model=""
 if [[ -f "$ROOT/.env" ]]; then
@@ -134,7 +146,7 @@ fi
 
 ensure_image
 
-choose_workdir
+choose_workdir "$reask"
 
 echo
 echo "  Shomsky Linux"

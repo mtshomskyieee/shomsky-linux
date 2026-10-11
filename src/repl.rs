@@ -1333,7 +1333,7 @@ fn truncate_args(s: &str, limit: usize) -> String {
 const HELP_TEXT: &str = "\
 Meta-commands:
   :help              Show this help
-  :menu | :m         Feature navigation hub (Modes / Learn / shomagent / Help / System)
+  :menu | :m         Feature navigation hub (Modes / Learn / sav-cmd / shomagent / Help / System)
   :sys | :uname      System identity (mode, model, tools, llm) — also: uname
   :mode [name]       Show or set mode (agent|hallucination|root)
   :tools [style]     Show or set tool style (auto|native|text)
@@ -1346,7 +1346,7 @@ Meta-commands:
   :exit | :quit      Leave the shell
 
 Feature menu (TTY):
-  :menu | :m         Slip into the Modes / Learn / shomagent / Help / System hub
+  :menu | :m         Slip into the Modes / Learn / sav-cmd / shomagent / Help / System hub
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
 
 Learn (agent mode):
