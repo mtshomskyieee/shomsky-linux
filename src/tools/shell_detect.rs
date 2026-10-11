@@ -54,6 +54,10 @@ pub fn looks_like_shell_command(line: &str) -> bool {
     // Strip simple path prefixes: /bin/ls, ./script
     let cmd = first.rsplit('/').next().unwrap_or(first);
 
+    if learned_command(cmd) {
+        return true;
+    }
+
     const CMDS: &[&str] = &[
         "ls", "cd", "pwd", "cat", "echo", "mkdir", "rm", "cp", "mv", "touch", "head",
         "tail", "grep", "find", "wc", "uname", "whoami", "id", "env", "export", "history",
@@ -70,6 +74,18 @@ pub fn looks_like_shell_command(line: &str) -> bool {
     CMDS.contains(&cmd)
 }
 
+/// A name installed by learn into `~/bin`, so typing it runs the script.
+fn learned_command(cmd: &str) -> bool {
+    if cmd.is_empty()
+        || !cmd
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return false;
+    }
+    shomsky::LearnPaths::from_env().command_path(cmd).is_file()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +98,29 @@ mod tests {
         assert!(looks_like_shell_command("cat file.txt"));
         assert!(!looks_like_shell_command("what is in /etc?"));
         assert!(!looks_like_shell_command("please list the files"));
+    }
+
+    #[test]
+    fn saved_command_runs_as_shell() {
+        let _guard = crate::modes::engram_env_lock();
+        let home = std::env::temp_dir().join(format!(
+            "shomsky-detect-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let paths = shomsky::LearnPaths::new(&home);
+        paths.ensure_dirs().unwrap();
+        std::fs::write(paths.command_path("list-sort-by-size"), "#!/bin/sh\nls -l | sort -n\n")
+            .unwrap();
+        let prev = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", &home);
+        assert!(looks_like_shell_command("list-sort-by-size"));
+        assert!(looks_like_shell_command("list-sort-by-size --help"));
+        assert!(!looks_like_shell_command("not-saved"));
+        match prev {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

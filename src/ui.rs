@@ -230,6 +230,9 @@ mod tests {
 
     #[test]
     fn prompt_shortens_mode_home_to_tilde() {
+        let _guard = crate::modes::engram_env_lock();
+        let prev_home = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", "/engram/user");
         std::env::set_var("NO_COLOR", "1");
         std::env::remove_var("SHOMSKY_WORKDIR_KIND");
         assert_eq!(
@@ -254,10 +257,17 @@ mod tests {
             prompt_string(Mode::Root, std::path::Path::new("/root/src")),
             "root:~/src> "
         );
+        match prev_home {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
     }
 
     #[test]
     fn prompt_labels_host_home() {
+        let _guard = crate::modes::engram_env_lock();
+        let prev_home = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", "/engram/user");
         std::env::set_var("NO_COLOR", "1");
         std::env::set_var("SHOMSKY_WORKDIR_KIND", "home");
         assert_eq!(
@@ -278,6 +288,10 @@ mod tests {
             "halluc:/virt> "
         );
         std::env::remove_var("SHOMSKY_WORKDIR_KIND");
+        match prev_home {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
     }
 
     #[test]

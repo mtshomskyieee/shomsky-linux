@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use shomsky::{
     install_artifacts, refuse_overwrite, run_bats, validate_name, write_workdir, LearnPaths,
@@ -7,6 +7,7 @@ use shomsky::{
 
 use crate::llm::{ChatMessage, LlmClient};
 use crate::learn::learn_stub;
+use crate::spinner::with_spinner;
 
 /// State kept after a successful learn run so `s` can promote.
 #[derive(Debug, Clone)]
@@ -19,8 +20,13 @@ pub struct PendingPromote {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PromoteJson {
+    /// Models sometimes name the script `command` or `body`.
+    #[serde(default, alias = "command", alias = "body")]
     script: String,
+    #[serde(default)]
     man: String,
+    /// Models sometimes name the suite `tests` or `test`.
+    #[serde(default, alias = "tests", alias = "test")]
     bats: String,
     #[serde(default)]
     description: String,
@@ -36,7 +42,8 @@ Output ONLY a JSON object with keys:
   \"script\": full file body starting with #!/bin/sh; use getopts for inferred flags;
              include a usage() and --help
   \"man\": troff man page for section 1
-  \"bats\": BATS test file that exercises --help and one happy path
+  \"bats\": BATS test file. It must contain at least one line starting with @test.
+            Example: @test \"help\" { run NAME --help; [ \"$status\" -eq 0 ]; }
   \"description\": one-line package description
   \"flags\": array of flag strings like \"--days\", \"--count\"
   \"completion_words\": array of completion words (flags + --help)
@@ -53,7 +60,7 @@ pub async fn promote(
     let paths = LearnPaths::from_env();
     refuse_overwrite(&paths, name, force)?;
 
-    let mut artifacts = fetch_artifacts(llm, pending, name, None).await?;
+    let mut artifacts = with_spinner("saving", fetch_artifacts(llm, pending, name, None)).await?;
     let work = std::env::temp_dir().join(format!("shomsky-promote-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
 
@@ -61,7 +68,12 @@ pub async fn promote(
         Ok(()) => {}
         Err(e1) => {
             eprintln!("  ⟡ bats failed; repairing once…\n{e1:#}");
-            artifacts = match fetch_artifacts(llm, pending, name, Some(&format!("{e1:#}"))).await {
+            artifacts = match with_spinner(
+                "saving",
+                fetch_artifacts(llm, pending, name, Some(&format!("{e1:#}"))),
+            )
+            .await
+            {
                 Ok(fixed) => fixed,
                 Err(e) => {
                     let _ = std::fs::remove_dir_all(&work);
@@ -131,7 +143,8 @@ async fn fetch_artifacts(
     let user = if let Some(err) = repair {
         format!(
             "Command name: {name}\nIntent: {}\nOriginal command: {}\nSample output:\n{}\n\n\
-             Previous artifacts failed BATS:\n{err}\n\nReturn fixed JSON only.",
+             Previous artifacts failed BATS:\n{err}\n\n\
+             The bats value must include @test. Return fixed JSON only.",
             pending.intent, pending.command, pending.output_summary
         )
     } else {
@@ -149,7 +162,7 @@ async fn fetch_artifacts(
         .chat_text_max(&messages, 4096)
         .await
         .context("learn promote LLM")?;
-    parse_promote_json(&raw).or_else(|e| {
+    parse_promote_json(&raw, name, &pending.command).or_else(|e| {
         // one inline parse retry is handled by caller for bats; here just fail
         Err(e).context("promote JSON parse")
     })
@@ -194,20 +207,41 @@ fn stub_artifacts(name: &str, pending: &PendingPromote) -> PromoteArtifacts {
     }
 }
 
-pub fn parse_promote_json(raw: &str) -> Result<PromoteArtifacts> {
-    let json_str = extract_json_object(raw).ok_or_else(|| anyhow!("no JSON object in promote reply"))?;
-    let p: PromoteJson = serde_json::from_str(json_str).context("deserialize promote")?;
-    if p.script.trim().is_empty() || p.bats.trim().is_empty() {
-        bail!("promote JSON missing script or bats");
+pub fn parse_promote_json(raw: &str, name: &str, command: &str) -> Result<PromoteArtifacts> {
+    let Some(json_str) = extract_json_object(raw) else {
+        eprintln!("  ⟡ promote reply had no JSON; saving the command that ran");
+        return Ok(fallback_artifacts(name, command));
+    };
+    match deserialize_promote(json_str) {
+        Ok(p) => Ok(artifacts_from(p, name, command)),
+        Err(e) => {
+            // A quote or newline inside the script makes JSON invalid
+            // (`expected , or }`). The command already ran; save that.
+            eprintln!("  ⟡ promote JSON was not usable ({e:#}); saving the command that ran");
+            Ok(fallback_artifacts(name, command))
+        }
     }
-    Ok(PromoteArtifacts {
-        script: p.script,
+}
+
+fn artifacts_from(p: PromoteJson, name: &str, command: &str) -> PromoteArtifacts {
+    let script = if p.script.trim().is_empty() {
+        fallback_script(name, command)
+    } else {
+        p.script
+    };
+    let bats = if p.bats.trim().is_empty() {
+        fallback_bats(name)
+    } else {
+        p.bats
+    };
+    PromoteArtifacts {
+        script,
         man: if p.man.trim().is_empty() {
-            ".TH CMD 1\n.SH NAME\ncmd\n".into()
+            format!(".TH {} 1\n.SH NAME\n{name}\n", name.to_ascii_uppercase())
         } else {
             p.man
         },
-        bats: p.bats,
+        bats,
         description: if p.description.is_empty() {
             "learned command".into()
         } else {
@@ -215,7 +249,43 @@ pub fn parse_promote_json(raw: &str) -> Result<PromoteArtifacts> {
         },
         flags: p.flags,
         completion_words: p.completion_words,
-    })
+    }
+}
+
+fn fallback_artifacts(name: &str, command: &str) -> PromoteArtifacts {
+    PromoteArtifacts {
+        script: fallback_script(name, command),
+        man: format!(".TH {} 1\n.SH NAME\n{name}\n", name.to_ascii_uppercase()),
+        bats: fallback_bats(name),
+        description: "learned command".into(),
+        flags: vec!["-h".into(), "--help".into()],
+        completion_words: vec!["-h".into(), "--help".into()],
+    }
+}
+
+/// Script used when the model returns JSON without a script body.
+/// `-h` and `--help` exit 0 so the fallback bats file can pass.
+fn fallback_script(name: &str, command: &str) -> String {
+    format!(
+        "#!/bin/sh\ncase \"$1\" in\n  -h|--help)\n    echo \"usage: {name}\"\n    exit 0\n    ;;\nesac\n{command}\n"
+    )
+}
+
+fn fallback_bats(name: &str) -> String {
+    format!(
+        "@test \"{name} help exits 0\" {{\n  run {name} --help\n  [ \"$status\" -eq 0 ]\n}}\n"
+    )
+}
+
+fn deserialize_promote(json_str: &str) -> Result<PromoteJson> {
+    match serde_json::from_str::<PromoteJson>(json_str) {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            // Models emit shell escapes such as `\;` inside script/bats strings.
+            let repaired = super::plan::repair_invalid_json_escapes(json_str);
+            serde_json::from_str(&repaired).map_err(|_| e).context("deserialize promote")
+        }
+    }
 }
 
 fn extract_json_object(s: &str) -> Option<&str> {
@@ -254,7 +324,74 @@ mod tests {
           "flags": ["--help"],
           "completion_words": ["--help"]
         }"##;
-        let a = parse_promote_json(raw).unwrap();
+        let a = parse_promote_json(raw, "ok", "echo ok").unwrap();
         assert!(a.script.contains("#!/bin/sh"));
+    }
+
+    #[test]
+    fn parses_shell_backslash_semicolon() {
+        let raw = "{\n  \"script\": \"#!/bin/sh\\nfind -type d -exec du -b {} \\\\;\\n\",\n  \"man\": \".TH X 1\\n\",\n  \"bats\": \"@test \\\"t\\\" { true; }\\n\",\n  \"description\": \"sizes\"\n}";
+        // The fixture above is already valid JSON (`\\;`). Build an invalid one.
+        let invalid = raw.replace("\\\\;", "\\;");
+        let a = parse_promote_json(&invalid, "list-the-size", "find -type d -exec du -b {} \\;").unwrap();
+        assert!(a.script.contains("\\;"), "{:?}", a.script);
+    }
+
+    #[test]
+    fn first_save_accepts_an_empty_object() {
+        let a = parse_promote_json("{}", "list-github-files", "find . -type f").unwrap();
+        assert!(a.script.contains("find . -type f"), "{:?}", a.script);
+        assert!(a.script.contains("--help"));
+        assert!(a.bats.contains("@test"));
+        assert!(a.bats.contains("run list-github-files --help"));
+    }
+
+    #[test]
+    fn fills_script_and_bats_when_the_model_omits_them() {
+        let raw = r#"{
+          "script": "",
+          "bats": "",
+          "description": "list github files",
+          "flags": ["--help"]
+        }"#;
+        let command = "find . -type f -path './github/*'";
+        let a = parse_promote_json(raw, "list-github-files", command).unwrap();
+        assert!(a.script.contains(command), "{:?}", a.script);
+        assert!(a.script.contains("--help"), "{:?}", a.script);
+        assert!(a.bats.contains("@test"), "{:?}", a.bats);
+        assert!(a.bats.contains("run list-github-files --help"), "{:?}", a.bats);
+        assert!(a.man.contains("LIST-GITHUB-FILES"));
+    }
+
+    #[test]
+    fn broken_json_saves_the_command_that_ran() {
+        // Unescaped quote inside the script. serde reports
+        // `expected `,` or `}` — the error from the list-files-sorted save.
+        let raw = r##"{
+          "script": "#!/bin/sh\necho "hi"\nls -l | sort -n",
+          "bats": "@test \"t\" { true; }\n"
+        }"##;
+        let err = serde_json::from_str::<serde_json::Value>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("expected `,` or `}`"),
+            "fixture no longer matches the save failure: {err}"
+        );
+        let a = parse_promote_json(raw, "list-files-sorted", "ls -l | sort -n").unwrap();
+        assert!(a.script.contains("ls -l | sort -n"), "{:?}", a.script);
+        assert!(a.script.contains("--help"), "{:?}", a.script);
+        assert!(a.bats.contains("@test"), "{:?}", a.bats);
+        assert!(a.bats.contains("run list-files-sorted --help"));
+    }
+
+    #[test]
+    fn accepts_command_and_tests_keys() {
+        let raw = r##"{
+          "command": "#!/bin/sh\nls\n",
+          "tests": "@test \"ls\" {\n  true\n}\n",
+          "description": "list"
+        }"##;
+        let a = parse_promote_json(raw, "list-github-files", "ls").unwrap();
+        assert!(a.script.contains("ls"));
+        assert!(a.bats.contains("@test"));
     }
 }

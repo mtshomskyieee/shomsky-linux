@@ -34,7 +34,7 @@ pub fn write_workdir(
     // Make script discoverable as `name` on PATH for bats.
     // Drop anything before the first @test. Small models emit a preamble such as
     // "BATS test file ...", which bats sources and tries to execute.
-    let bats_body = sanitize_bats(&artifacts.bats)?.replace(
+    let bats_body = sanitize_bats(name, &artifacts.bats)?.replace(
         &format!("$BATS_TEST_DIRNAME/{name}"),
         &script_path.display().to_string(),
     );
@@ -53,12 +53,21 @@ pub fn write_workdir(
 }
 
 /// Keep the bats suite and discard a leading prose preamble.
-/// A file with no `@test` is an error so promotion can ask the model to repair it.
-pub fn sanitize_bats(bats: &str) -> Result<String> {
-    match bats.find("@test") {
-        Some(i) => Ok(bats[i..].to_string()),
-        None => bail!("bats file has no @test"),
+/// When the model emitted no `@test`, use one help-exit test so promotion
+/// still checks the script instead of stopping on the missing marker.
+pub fn sanitize_bats(name: &str, bats: &str) -> Result<String> {
+    if let Some(i) = bats.find("@test") {
+        return Ok(bats[i..].to_string());
     }
+    Ok(format!(
+        "@test \"{name} help exits 0\" {{\n  \
+         run {name} --help\n  \
+         if [ \"$status\" -ne 0 ]; then\n    \
+         run {name} -h\n  \
+         fi\n  \
+         [ \"$status\" -eq 0 ]\n\
+         }}\n"
+    ))
 }
 
 fn ensure_shebang(script: &str) -> String {
@@ -95,7 +104,7 @@ pub fn install_artifacts(
 
     std::fs::write(&man_path, &artifacts.man)
         .with_context(|| format!("install man {}", man_path.display()))?;
-    std::fs::write(&bats_path, sanitize_bats(&artifacts.bats)?)
+    std::fs::write(&bats_path, sanitize_bats(name, &artifacts.bats)?)
         .with_context(|| format!("install bats {}", bats_path.display()))?;
 
     let words = if artifacts.completion_words.is_empty() {
@@ -187,6 +196,7 @@ mod tests {
     #[test]
     fn drops_bats_preamble() {
         let body = sanitize_bats(
+            "list-files-largest",
             "BATS test file that exercises --help\n\n@test \"help\" {\n  true\n}\n",
         )
         .unwrap();
@@ -195,8 +205,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bats_without_a_test() {
-        let err = sanitize_bats("not a test file\n").unwrap_err();
-        assert!(err.to_string().contains("@test"));
+    fn supplies_help_test_when_missing() {
+        let body = sanitize_bats("github-size", "not a test file\n").unwrap();
+        assert!(body.starts_with("@test"));
+        assert!(body.contains("run github-size --help"));
+        assert!(body.contains("run github-size -h"));
     }
 }

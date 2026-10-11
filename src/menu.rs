@@ -882,7 +882,33 @@ mod tests {
     }
 
     #[test]
+    fn sav_cmd_first_use_is_empty() {
+        let _guard = crate::modes::engram_env_lock();
+        let home = std::env::temp_dir().join(format!(
+            "shomsky-menu-empty-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let prev = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", &home);
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::SavCmd.index();
+        s.item_idx = 0;
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        let action = s.activate();
+        match prev {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(labels, vec!["(none)".to_string()]);
+        assert_eq!(action, None);
+    }
+
+    #[test]
     fn sav_cmd_runs_saved_command() {
+        let _guard = crate::modes::engram_env_lock();
         let home = std::env::temp_dir().join(format!(
             "shomsky-menu-{}",
             std::process::id()
@@ -924,6 +950,7 @@ mod tests {
 
     #[test]
     fn sav_cmd_delete_removes_command() {
+        let _guard = crate::modes::engram_env_lock();
         let home = std::env::temp_dir().join(format!(
             "shomsky-menu-del-{}",
             std::process::id()

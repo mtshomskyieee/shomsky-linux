@@ -176,7 +176,7 @@ fn repair_embedded_quotes(json: &str) -> Option<String> {
 
 /// Inside JSON strings, turn unknown `\` escapes into `\\` so shell-ish
 /// commands (`\;`, `\ `, `\(`, …) still deserialize.
-fn repair_invalid_json_escapes(s: &str) -> String {
+pub(crate) fn repair_invalid_json_escapes(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + 8);
     let mut i = 0;
