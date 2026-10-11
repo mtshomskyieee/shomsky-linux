@@ -70,9 +70,12 @@ mkdir -p "$MODELS_DIR" "$SKILLS_DIR" "$HALLUC_HIST_DIR" "$USER_DIR" \
 export PATH="$USER_DIR/bin:${PATH:-/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 export MANPATH="$USER_DIR/share/man${MANPATH:+:$MANPATH}"
 # Named/bind mounts often appear as root:root; keep writable for the shell user.
+# A host-home bind (SHOMSKY_WORKDIR_KIND=home) keeps the host owner's files.
 if [ -d /engram ]; then
-  # Do not chown the user dir: it may be a bind mount of the host home.
   chown -R shomsky:shomsky /engram/models "$HALLUC_HIST_DIR" 2>/dev/null || true
+  if [ "${SHOMSKY_WORKDIR_KIND:-engram}" != "home" ]; then
+    chown -R shomsky:shomsky "$USER_DIR" 2>/dev/null || true
+  fi
 fi
 
 if [ "$SKIP_MODEL_FETCH" != "1" ]; then

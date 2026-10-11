@@ -34,7 +34,7 @@ pub fn write_workdir(
     // Make script discoverable as `name` on PATH for bats.
     // Drop anything before the first @test. Small models emit a preamble such as
     // "BATS test file ...", which bats sources and tries to execute.
-    let bats_body = sanitize_bats(name, &artifacts.bats).replace(
+    let bats_body = sanitize_bats(&artifacts.bats)?.replace(
         &format!("$BATS_TEST_DIRNAME/{name}"),
         &script_path.display().to_string(),
     );
@@ -53,14 +53,12 @@ pub fn write_workdir(
 }
 
 /// Keep the bats suite and discard a leading prose preamble.
-/// When the model did not emit an `@test`, use a single happy-path test.
-pub fn sanitize_bats(name: &str, bats: &str) -> String {
-    if let Some(i) = bats.find("@test") {
-        return bats[i..].to_string();
+/// A file with no `@test` is an error so promotion can ask the model to repair it.
+pub fn sanitize_bats(bats: &str) -> Result<String> {
+    match bats.find("@test") {
+        Some(i) => Ok(bats[i..].to_string()),
+        None => bail!("bats file has no @test"),
     }
-    format!(
-        "@test \"{name} runs\" {{\n  run {name}\n  [ \"$status\" -eq 0 ]\n}}\n"
-    )
 }
 
 fn ensure_shebang(script: &str) -> String {
@@ -97,7 +95,7 @@ pub fn install_artifacts(
 
     std::fs::write(&man_path, &artifacts.man)
         .with_context(|| format!("install man {}", man_path.display()))?;
-    std::fs::write(&bats_path, sanitize_bats(name, &artifacts.bats))
+    std::fs::write(&bats_path, sanitize_bats(&artifacts.bats)?)
         .with_context(|| format!("install bats {}", bats_path.display()))?;
 
     let words = if artifacts.completion_words.is_empty() {
@@ -189,16 +187,16 @@ mod tests {
     #[test]
     fn drops_bats_preamble() {
         let body = sanitize_bats(
-            "list-files-largest",
             "BATS test file that exercises --help\n\n@test \"help\" {\n  true\n}\n",
-        );
+        )
+        .unwrap();
         assert!(body.starts_with("@test"));
         assert!(!body.contains("BATS test"));
     }
 
     #[test]
-    fn synthesizes_bats_when_missing() {
-        let body = sanitize_bats("list-files-largest", "not a test file\n");
-        assert!(body.contains("run list-files-largest"));
+    fn rejects_bats_without_a_test() {
+        let err = sanitize_bats("not a test file\n").unwrap_err();
+        assert!(err.to_string().contains("@test"));
     }
 }

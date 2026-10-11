@@ -2,23 +2,9 @@
 # Pick agent or hallucination mode, then launch the matching compose wrapper.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-
-# Upsert KEY=VAL in an env file. Safe to source for tests.
-set_env_key() {
-  local key="$1" val="$2" file="$3" tmp
-  tmp="$(mktemp)"
-  if grep -q "^${key}=" "$file"; then
-    awk -v k="$key" -v v="$val" '
-      $0 ~ "^" k "=" { print k "=" v; next }
-      { print }
-    ' "$file" > "$tmp"
-    mv "$tmp" "$file"
-  else
-    rm -f "$tmp"
-    printf '%s=%s\n' "$key" "$val" >> "$file"
-  fi
-}
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/envfile.sh
+source "$ROOT/scripts/envfile.sh"
 
 # choice 1 = host home, choice 2 = container workspace ./engram/user.
 apply_workdir_choice() {
@@ -49,10 +35,28 @@ ensure_env_file() {
   fi
 }
 
-# Every launch: home directory or the container engram workspace.
+# First launch asks. Later launches reuse .env unless SHOMSKY_CHOOSE_WORKDIR=1.
+# A non-interactive start with no saved choice uses ./engram/user.
 choose_workdir() {
   local env_file="$ROOT/.env"
   ensure_env_file "$env_file" "$ROOT/.env.example"
+
+  local saved_dir saved_kind
+  saved_dir="$(env_get SHOMSKY_USER_DIR "$env_file")"
+  saved_kind="$(env_get SHOMSKY_WORKDIR_KIND "$env_file")"
+  if [[ "${SHOMSKY_CHOOSE_WORKDIR:-}" != "1" && -n "$saved_dir" && -n "$saved_kind" ]]; then
+    echo "  Using SHOMSKY_USER_DIR=${saved_dir} (${saved_kind})"
+    echo "  Re-ask with SHOMSKY_CHOOSE_WORKDIR=1"
+    echo
+    return
+  fi
+
+  if [[ ! -t 0 ]]; then
+    apply_workdir_choice 2 "$HOME" "$env_file"
+    echo "  Non-interactive; using ./engram/user"
+    echo
+    return
+  fi
 
   echo
   echo "  Working directory"
@@ -72,16 +76,49 @@ choose_workdir() {
     echo "  Please enter 1 (home) or 2 (docker)."
   done
   echo
-  echo "  Saved $(awk -F= '/^SHOMSKY_USER_DIR=/{print; exit}' "$env_file")"
-  echo "  Saved $(awk -F= '/^SHOMSKY_WORKDIR_KIND=/{print; exit}' "$env_file")"
+  echo "  Saved SHOMSKY_USER_DIR=$(env_get SHOMSKY_USER_DIR "$env_file")"
+  echo "  Saved SHOMSKY_WORKDIR_KIND=$(env_get SHOMSKY_WORKDIR_KIND "$env_file")"
   echo
+}
+
+# Use a local image. Pull only a registry reference (name contains /).
+# Compile the image only when SHOMSKY_BUILD=1.
+ensure_image() {
+  local ref="${SHOMSKY_IMAGE:-shomskylinux:dev}"
+  if docker image inspect "$ref" >/dev/null 2>&1; then
+    echo "Using local image ${ref}"
+    return
+  fi
+  case "$ref" in
+    */*)
+      echo "Pulling ${ref}"
+      docker pull "$ref"
+      return
+      ;;
+  esac
+  if [[ "${SHOMSKY_BUILD:-}" == "1" ]]; then
+    local image_name image_tag
+    image_name="${ref%%:*}"
+    image_tag="${ref#*:}"
+    if [[ "$image_tag" == "$ref" ]]; then
+      image_tag=latest
+    fi
+    echo "Building ${ref}"
+    IMAGE="$image_name" TAG="$image_tag" bash "$ROOT/build.sh"
+    return
+  fi
+  echo "Image ${ref} is not local." >&2
+  echo "Pull a published image, for example:" >&2
+  echo "  SHOMSKY_IMAGE=ghcr.io/mtshomskyieee/shomsky-linux:latest $0" >&2
+  echo "Or build this tree with: SHOMSKY_BUILD=1 $0" >&2
+  exit 1
 }
 
 main() {
 # First run: no .env model yet. Later starts reuse SHOMSKY_MODEL from .env.
 chosen_model=""
 if [[ -f "$ROOT/.env" ]]; then
-  chosen_model="$(awk -F= '/^SHOMSKY_MODEL=/{print $2; exit}' "$ROOT/.env")"
+  chosen_model="$(env_get SHOMSKY_MODEL "$ROOT/.env")"
 fi
 if [[ -z "$chosen_model" ]]; then
   bash "$ROOT/choose_llm.sh"
@@ -95,22 +132,7 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v colima >/dev/null 2>&1; then
   fi
 fi
 
-# Use a local image when one exists. Otherwise pull, and build with ./build.sh
-# if the registry does not have this image.
-IMAGE_REF="${SHOMSKY_IMAGE:-shomskylinux:dev}"
-if docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
-  echo "Using local image ${IMAGE_REF}"
-elif docker pull "$IMAGE_REF"; then
-  echo "Pulled ${IMAGE_REF}"
-else
-  echo "Could not pull ${IMAGE_REF}; building it locally..."
-  image_name="${IMAGE_REF%%:*}"
-  image_tag="${IMAGE_REF#*:}"
-  if [[ "$image_tag" == "$IMAGE_REF" ]]; then
-    image_tag=latest
-  fi
-  IMAGE="$image_name" TAG="$image_tag" bash "$ROOT/build.sh"
-fi
+ensure_image
 
 choose_workdir
 

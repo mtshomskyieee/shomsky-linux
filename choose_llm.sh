@@ -4,6 +4,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/envfile.sh
+source "$ROOT/scripts/envfile.sh"
 MODELS_TOML="$ROOT/rootfs/etc/engram/models.toml"
 ENV_FILE="$ROOT/.env"
 ENV_EXAMPLE="$ROOT/.env.example"
@@ -15,7 +17,7 @@ ENV_EXAMPLE="$ROOT/.env.example"
 
 current=""
 if [[ -f "$ENV_FILE" ]]; then
-  current="$(awk -F= '/^SHOMSKY_MODEL=/{print $2; exit}' "$ENV_FILE")"
+  current="$(env_get SHOMSKY_MODEL "$ENV_FILE")"
 fi
 
 # alias<TAB>description<TAB>size_hint, in file order.
@@ -113,21 +115,6 @@ if [[ ! -f "$ENV_FILE" ]]; then
     : > "$ENV_FILE"
   fi
 fi
-
-set_env_key() {
-  local key="$1" val="$2" file="$3" tmp
-  tmp="$(mktemp)"
-  if grep -q "^${key}=" "$file"; then
-    awk -v k="$key" -v v="$val" '
-      $0 ~ "^" k "=" { print k "=" v; next }
-      { print }
-    ' "$file" > "$tmp"
-    mv "$tmp" "$file"
-  else
-    rm -f "$tmp"
-    printf '%s=%s\n' "$key" "$val" >> "$file"
-  fi
-}
 
 set_env_key SHOMSKY_MODEL "$selected" "$ENV_FILE"
 set_env_key ENGRAM_TOOL_STYLE "$tool_style" "$ENV_FILE"

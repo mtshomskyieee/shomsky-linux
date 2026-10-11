@@ -104,15 +104,16 @@ fn shorten_path(path: &std::path::Path, home: &std::path::Path) -> String {
 /// rustyline 15 measures ANSI escape width itself — do **not** wrap with
 /// readline `\x01`/`\x02` ignore markers (those were shifting the cursor
 /// several columns to the right of `>`).
-/// ` [home]` or ` [engram]` for real workspaces. Hallucination has no label.
+/// ` [home]` or ` [engram]` on the agent prompt only.
+/// Root and hallucination do not use the bind-mounted user workspace.
 /// Missing or any value other than `home` is the engram workspace.
 fn workspace_label(mode: Mode) -> &'static str {
     match mode {
-        Mode::Hallucination => "",
-        Mode::Agent | Mode::Root => match std::env::var("SHOMSKY_WORKDIR_KIND") {
+        Mode::Agent => match std::env::var("SHOMSKY_WORKDIR_KIND") {
             Ok(kind) if kind == "home" => " [home]",
             _ => " [engram]",
         },
+        Mode::Hallucination | Mode::Root => "",
     }
 }
 
@@ -237,7 +238,7 @@ mod tests {
         );
         assert_eq!(
             prompt_string(Mode::Root, std::path::Path::new("/root")),
-            "root:~ [engram]> "
+            "root:~> "
         );
         assert_eq!(
             prompt_string(Mode::Agent, std::path::Path::new("/engram/user/work")),
@@ -251,7 +252,7 @@ mod tests {
         std::env::set_var("SHOMSKY_WORKDIR_KIND", "other");
         assert_eq!(
             prompt_string(Mode::Root, std::path::Path::new("/root/src")),
-            "root:~/src [engram]> "
+            "root:~/src> "
         );
     }
 
@@ -269,7 +270,7 @@ mod tests {
         );
         assert_eq!(
             prompt_string(Mode::Root, std::path::Path::new("/root")),
-            "root:~ [home]> "
+            "root:~> "
         );
         // Hallucination ignores the workspace kind.
         assert_eq!(

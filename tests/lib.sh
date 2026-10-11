@@ -68,31 +68,18 @@ run_seq() {
     _engram_env
     ENGRAM_MODE="$mode" /usr/local/bin/engram-shell --script "$script" 2>&1
   else
-    # Bash 3.2 (macOS) errors on an empty array under `set -u`.
-    if [ -n "${SHOMSKY_WORKDIR_KIND:-}" ]; then
-      docker run --rm \
-        -e SKIP_LLM=1 \
-        -e SKIP_MODEL_FETCH=1 \
-        -e SHOMSKY_MODEL_PATH=/etc/os-release \
-        -e "ENGRAM_MODE=${mode}" \
-        -e ENGRAM_DIRECT_SHELL=1 \
-        -e ENGRAM_TOOL_STYLE=text \
-        -e "SHOMSKY_WORKDIR_KIND=${SHOMSKY_WORKDIR_KIND}" \
-        -v "$script:/tmp/engram-test-script:ro" \
-        "$IMAGE" \
-        /usr/local/bin/engram-shell --script /tmp/engram-test-script 2>&1
-    else
-      docker run --rm \
-        -e SKIP_LLM=1 \
-        -e SKIP_MODEL_FETCH=1 \
-        -e SHOMSKY_MODEL_PATH=/etc/os-release \
-        -e "ENGRAM_MODE=${mode}" \
-        -e ENGRAM_DIRECT_SHELL=1 \
-        -e ENGRAM_TOOL_STYLE=text \
-        -v "$script:/tmp/engram-test-script:ro" \
-        "$IMAGE" \
-        /usr/local/bin/engram-shell --script /tmp/engram-test-script 2>&1
-    fi
+    # shellcheck disable=SC2086
+    docker run --rm \
+      -e SKIP_LLM=1 \
+      -e SKIP_MODEL_FETCH=1 \
+      -e SHOMSKY_MODEL_PATH=/etc/os-release \
+      -e "ENGRAM_MODE=${mode}" \
+      -e ENGRAM_DIRECT_SHELL=1 \
+      -e ENGRAM_TOOL_STYLE=text \
+      ${SHOMSKY_WORKDIR_KIND:+-e SHOMSKY_WORKDIR_KIND=$SHOMSKY_WORKDIR_KIND} \
+      -v "$script:/tmp/engram-test-script:ro" \
+      "$IMAGE" \
+      /usr/local/bin/engram-shell --script /tmp/engram-test-script 2>&1
   fi
   local st=$?
   rm -f "$script"
