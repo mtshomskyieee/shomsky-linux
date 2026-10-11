@@ -21,18 +21,18 @@ pub const SPLASH_ART: &str = r#"
   \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /
   /\    \    |  _  |  | |_| |  | |  | |    /\    \    | . \     | |
  /  \    \   |_| |_|   \___/   |_|  |_|   /  \    \   |_|\_\    |_|
-/    \    \                              /    \    \
-|    |    || MODES                       |    |    ||  === LINUX ===
-|    |    || :mode agent = LLM assist    |    |    ||  - LLM + Shell
-\         /  :mode hallucination =       \         /   - 2 cool esses
- \       /          LLM dreams it's a CLI \       /
-   \   /    :help  ·  :menu                 \   /
+/    \    \                              /    \    \   === LINUX ===
+|    |    || MODES                       |    |    ||  - LLM + Shell
+|    |    || :mode agent = LLM assist    |    |    ||  - 2 cool esses
+\         /  :mode hallucination =       \         /   :menu 
+ \       /          LLM dreams it's a CLI \       /    :help
+   \   /                                    \   /
      v                                        v
 "#;
 
 /// Whether we should paint splash / colors on this TTY.
 pub fn splash_enabled() -> bool {
-    if no_color() {
+    if no_color() { 
         return false;
     }
     io::stdout().is_terminal()
@@ -104,13 +104,27 @@ fn shorten_path(path: &std::path::Path, home: &std::path::Path) -> String {
 /// rustyline 15 measures ANSI escape width itself — do **not** wrap with
 /// readline `\x01`/`\x02` ignore markers (those were shifting the cursor
 /// several columns to the right of `>`).
+/// ` [home]` or ` [engram]` on the agent prompt only.
+/// Root and hallucination do not use the bind-mounted user workspace.
+/// Missing or any value other than `home` is the engram workspace.
+fn workspace_label(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Agent => match std::env::var("SHOMSKY_WORKDIR_KIND") {
+            Ok(kind) if kind == "home" => " [home]",
+            _ => " [engram]",
+        },
+        Mode::Hallucination | Mode::Root => "",
+    }
+}
+
 pub fn prompt_string(mode: Mode, cwd: &std::path::Path) -> String {
     let tag = mode.prompt_tag();
     let path = prompt_path(mode, cwd);
+    let label = workspace_label(mode);
     if color_enabled() {
-        format!("{}{tag}{}:{path}> ", mode_color(mode), reset())
+        format!("{}{tag}{}:{path}{label}> ", mode_color(mode), reset())
     } else {
-        format!("{tag}:{path}> ")
+        format!("{tag}:{path}{label}> ")
     }
 }
 
@@ -216,10 +230,14 @@ mod tests {
 
     #[test]
     fn prompt_shortens_mode_home_to_tilde() {
+        let _guard = crate::modes::engram_env_lock();
+        let prev_home = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", "/engram/user");
         std::env::set_var("NO_COLOR", "1");
+        std::env::remove_var("SHOMSKY_WORKDIR_KIND");
         assert_eq!(
             prompt_string(Mode::Agent, std::path::Path::new("/engram/user")),
-            "agent:~> "
+            "agent:~ [engram]> "
         );
         assert_eq!(
             prompt_string(Mode::Root, std::path::Path::new("/root")),
@@ -227,8 +245,53 @@ mod tests {
         );
         assert_eq!(
             prompt_string(Mode::Agent, std::path::Path::new("/engram/user/work")),
-            "agent:~/work> "
+            "agent:~/work [engram]> "
         );
+        std::env::set_var("SHOMSKY_WORKDIR_KIND", "engram");
+        assert_eq!(
+            prompt_string(Mode::Agent, std::path::Path::new("/engram/user")),
+            "agent:~ [engram]> "
+        );
+        std::env::set_var("SHOMSKY_WORKDIR_KIND", "other");
+        assert_eq!(
+            prompt_string(Mode::Root, std::path::Path::new("/root/src")),
+            "root:~/src> "
+        );
+        match prev_home {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
+    }
+
+    #[test]
+    fn prompt_labels_host_home() {
+        let _guard = crate::modes::engram_env_lock();
+        let prev_home = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", "/engram/user");
+        std::env::set_var("NO_COLOR", "1");
+        std::env::set_var("SHOMSKY_WORKDIR_KIND", "home");
+        assert_eq!(
+            prompt_string(Mode::Agent, std::path::Path::new("/engram/user")),
+            "agent:~ [home]> "
+        );
+        assert_eq!(
+            prompt_string(Mode::Agent, std::path::Path::new("/engram/user/src")),
+            "agent:~/src [home]> "
+        );
+        assert_eq!(
+            prompt_string(Mode::Root, std::path::Path::new("/root")),
+            "root:~> "
+        );
+        // Hallucination ignores the workspace kind.
+        assert_eq!(
+            prompt_string(Mode::Hallucination, std::path::Path::new("/tmp")),
+            "halluc:/virt> "
+        );
+        std::env::remove_var("SHOMSKY_WORKDIR_KIND");
+        match prev_home {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
     }
 
     #[test]

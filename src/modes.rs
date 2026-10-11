@@ -52,6 +52,13 @@ impl Mode {
     }
 }
 
+/// Serializes tests that read or write `ENGRAM_USER_DIR`.
+#[cfg(test)]
+pub(crate) fn engram_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
@@ -79,7 +86,14 @@ mod tests {
 
     #[test]
     fn home_dirs_by_mode() {
+        let _guard = super::engram_env_lock();
+        let prev = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::remove_var("ENGRAM_USER_DIR");
         assert_eq!(Mode::Agent.home_dir(), PathBuf::from("/engram/user"));
+        match prev {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
         assert_eq!(Mode::Root.home_dir(), PathBuf::from("/root"));
         assert_eq!(Mode::Hallucination.home_dir(), PathBuf::from("/virt"));
     }

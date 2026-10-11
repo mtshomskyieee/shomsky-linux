@@ -9,7 +9,9 @@ pub mod registry;
 
 pub use apk::publish_apk;
 pub use bats::run_bats;
-pub use install::{install_artifacts, refuse_overwrite, write_workdir, PromoteArtifacts};
+pub use install::{
+    install_artifacts, refuse_overwrite, sanitize_bats, write_workdir, PromoteArtifacts,
+};
 pub use name::{suggest_slug, validate_name};
 pub use paths::LearnPaths;
-pub use registry::{load_entry, save_entry, LearnEntry};
+pub use registry::{list_entries, load_entry, remove_entry, save_entry, LearnEntry};

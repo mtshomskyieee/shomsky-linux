@@ -34,7 +34,12 @@ Package page: https://github.com/mtshomskyieee/shomsky-linux/pkgs/container/shom
 
 ### Your home directory under /engram is /engram/user
 Agent-mode files start in `/engram/user`, bind-mounted to `./engram/user`
-on the host (override with `SHOMSKY_USER_DIR`). Hallucination session JSON is
+on the host (override with `SHOMSKY_USER_DIR`). The first
+`./start-shomsky-linux-shell.sh` asks whether `SHOMSKY_USER_DIR` should be
+your home directory or `./engram/user`; later starts reuse `.env`.
+Run `./start-shomsky-linux-shell.sh reask` to choose again. The agent prompt then shows `[home]`
+or `[engram]`. Hallucination
+mode does not use that directory. Hallucination session JSON is
 bind-mounted to `./.hallucination_shell_history` (override with
 `SHOMSKY_HALLUC_HISTORY`).
 
@@ -42,7 +47,8 @@ bind-mounted to `./.hallucination_shell_history` (override with
 
 ```bash
 # optional: cp .env.example .env   # then set SHOMSKY_MODEL=tiny for low RAM
-./start-shomsky-linux-shell.sh     # pick agent or hallucination mode
+./start-shomsky-linux-shell.sh          # pick agent or hallucination mode
+./start-shomsky-linux-shell.sh reask    # also choose the working directory again
 # or: ./agent_sh.sh / ./halluc_sh.sh
 # or: ./scripts/shell.sh
 # or: SHOMSKY_MODEL=tiny ENGRAM_TOOL_STYLE=text docker compose run --rm shomsky

@@ -32,15 +32,17 @@ pub struct MenuContext {
 pub enum Category {
     Modes,
     Learn,
+    SavCmd,
     Shomagent,
     Help,
     System,
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [
+    pub const ALL: [Category; 6] = [
         Category::Modes,
         Category::Learn,
+        Category::SavCmd,
         Category::Shomagent,
         Category::Help,
         Category::System,
@@ -50,6 +52,7 @@ impl Category {
         match self {
             Category::Modes => "Modes",
             Category::Learn => "Learn",
+            Category::SavCmd => "sav-cmd",
             Category::Shomagent => "shomagent",
             Category::Help => "Help",
             Category::System => "System",
@@ -79,6 +82,8 @@ pub struct MenuState {
     focus: Focus,
     /// Exit confirm sub-prompt on System → Exit.
     exit_confirm: bool,
+    /// Saved command waiting for run or delete.
+    saved_pick: Option<String>,
     allow_root_mode: bool,
     mode: Mode,
     pending_learn: bool,
@@ -95,7 +100,9 @@ struct Item {
 enum ItemKind {
     SetMode(Mode),
     RunMeta(&'static str),
-    InsertLine(&'static str),
+    InsertLine(String),
+    /// A saved command. Enter asks to run or delete it.
+    Saved(String),
     ExitShell,
     InfoOnly,
 }
@@ -107,6 +114,7 @@ impl MenuState {
             item_idx: 0,
             focus: Focus::Items,
             exit_confirm: false,
+            saved_pick: None,
             allow_root_mode: ctx.allow_root_mode,
             mode: ctx.mode,
             pending_learn: ctx.pending_learn,
@@ -122,7 +130,7 @@ impl MenuState {
     }
 
     pub fn move_up(&mut self) {
-        if self.exit_confirm {
+        if self.exit_confirm || self.saved_pick.is_some() {
             return;
         }
         match self.focus {
@@ -149,7 +157,7 @@ impl MenuState {
     }
 
     pub fn move_down(&mut self) {
-        if self.exit_confirm {
+        if self.exit_confirm || self.saved_pick.is_some() {
             return;
         }
         match self.focus {
@@ -172,11 +180,15 @@ impl MenuState {
             self.exit_confirm = false;
             return;
         }
+        if self.saved_pick.is_some() {
+            self.saved_pick = None;
+            return;
+        }
         self.focus = Focus::Categories;
     }
 
     pub fn focus_right(&mut self) {
-        if self.exit_confirm {
+        if self.exit_confirm || self.saved_pick.is_some() {
             return;
         }
         self.focus = Focus::Items;
@@ -191,6 +203,10 @@ impl MenuState {
             self.exit_confirm = false;
             return;
         }
+        if self.saved_pick.is_some() {
+            self.saved_pick = None;
+            return;
+        }
         self.focus = match self.focus {
             Focus::Categories => Focus::Items,
             Focus::Items => Focus::Categories,
@@ -201,6 +217,10 @@ impl MenuState {
     pub fn escape(&mut self) -> Option<MenuAction> {
         if self.exit_confirm {
             self.exit_confirm = false;
+            return None;
+        }
+        if self.saved_pick.is_some() {
+            self.saved_pick = None;
             return None;
         }
         if self.focus == Focus::Items {
@@ -215,6 +235,9 @@ impl MenuState {
         if self.exit_confirm {
             return Some(MenuAction::ExitShell);
         }
+        if self.saved_pick.is_some() {
+            return self.confirm_saved(false);
+        }
         if self.focus == Focus::Categories {
             self.focus = Focus::Items;
             return None;
@@ -224,7 +247,11 @@ impl MenuState {
         match &item.kind {
             ItemKind::SetMode(m) => Some(MenuAction::SetMode(*m)),
             ItemKind::RunMeta(cmd) => Some(MenuAction::RunMeta((*cmd).to_string())),
-            ItemKind::InsertLine(s) => Some(MenuAction::InsertLine((*s).to_string())),
+            ItemKind::InsertLine(s) => Some(MenuAction::InsertLine(s.clone())),
+            ItemKind::Saved(name) => {
+                self.saved_pick = Some(name.clone());
+                None
+            }
             ItemKind::ExitShell => {
                 self.exit_confirm = true;
                 None
@@ -236,6 +263,25 @@ impl MenuState {
     /// Double-Esc while open: always quit the menu.
     pub fn force_dismiss(&self) -> MenuAction {
         MenuAction::Dismiss
+    }
+
+    /// `delete` removes the picked command and stays in the menu.
+    /// Otherwise the command name is returned to run.
+    pub fn confirm_saved(&mut self, delete: bool) -> Option<MenuAction> {
+        let Some(name) = self.saved_pick.take() else {
+            return None;
+        };
+        if !delete {
+            return Some(MenuAction::InsertLine(name));
+        }
+        let _ = shomsky::remove_entry(&shomsky::LearnPaths::from_env(), &name);
+        let n = self.items().len();
+        if n == 0 {
+            self.item_idx = 0;
+        } else if self.item_idx >= n {
+            self.item_idx = n - 1;
+        }
+        None
     }
 }
 
@@ -266,19 +312,19 @@ fn items_for(
                 Item {
                     label: ", <intent>".into(),
                     detail: "Plan → confirm → run a real shell command".into(),
-                    kind: ItemKind::InsertLine(", "),
+                    kind: ItemKind::InsertLine(", ".into()),
                 },
                 Item {
                     label: "?? <intent>".into(),
                     detail: "Same as comma prefix".into(),
-                    kind: ItemKind::InsertLine("?? "),
+                    kind: ItemKind::InsertLine("?? ".into()),
                 },
             ];
             if pending_learn {
                 v.push(Item {
                     label: "s / save".into(),
                     detail: "Promote the last learn run into ~/bin".into(),
-                    kind: ItemKind::InsertLine("s"),
+                    kind: ItemKind::InsertLine("s".into()),
                 });
             } else {
                 v.push(Item {
@@ -289,6 +335,7 @@ fn items_for(
             }
             v
         }
+        Category::SavCmd => saved_command_items(),
         Category::Shomagent => vec![
             Item {
                 label: "roster".into(),
@@ -298,29 +345,27 @@ fn items_for(
             Item {
                 label: "watch …".into(),
                 detail: "Supervise a process stream".into(),
-                kind: ItemKind::InsertLine(
-                    "shomagent watch \"\" --tell-me \"\"",
-                ),
+                kind: ItemKind::InsertLine("shomagent watch \"\" --tell-me \"\"".into()),
             },
             Item {
                 label: "ask …".into(),
                 detail: "One-shot question to a member".into(),
-                kind: ItemKind::InsertLine("shomagent ask "),
+                kind: ItemKind::InsertLine("shomagent ask ".into()),
             },
             Item {
                 label: "talk …".into(),
                 detail: "Interactive chat with a member".into(),
-                kind: ItemKind::InsertLine("shomagent talk "),
+                kind: ItemKind::InsertLine("shomagent talk ".into()),
             },
             Item {
                 label: "read …".into(),
                 detail: "Attach a read-only document".into(),
-                kind: ItemKind::InsertLine("shomagent read "),
+                kind: ItemKind::InsertLine("shomagent read ".into()),
             },
             Item {
                 label: "readwrite …".into(),
                 detail: "Attach a read/write document".into(),
-                kind: ItemKind::InsertLine("shomagent readwrite "),
+                kind: ItemKind::InsertLine("shomagent readwrite ".into()),
             },
         ],
         Category::Help => vec![
@@ -331,7 +376,7 @@ fn items_for(
             },
             Item {
                 label: "this menu".into(),
-                detail: ":menu / :m — hub for modes, learn, agents, system".into(),
+                detail: ":menu / :m — modes, learn, sav-cmd, agents, system".into(),
                 kind: ItemKind::InfoOnly,
             },
         ],
@@ -378,6 +423,32 @@ fn items_for(
             },
         ],
     }
+}
+
+fn saved_command_items() -> Vec<Item> {
+    let entries = shomsky::list_entries(&shomsky::LearnPaths::from_env());
+    if entries.is_empty() {
+        return vec![Item {
+            label: "(none)".into(),
+            detail: "No saved commands yet. Learn one, then save it.".into(),
+            kind: ItemKind::InfoOnly,
+        }];
+    }
+    entries
+        .into_iter()
+        .map(|e| {
+            let detail = if e.description.is_empty() {
+                e.command
+            } else {
+                e.description
+            };
+            Item {
+                label: e.name.clone(),
+                detail,
+                kind: ItemKind::Saved(e.name),
+            }
+        })
+        .collect()
 }
 
 fn mode_item(target: Mode, current: Mode) -> Item {
@@ -475,6 +546,16 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 state.exit_confirm = false;
                 esc_armed = false;
             }
+            Key::Char('r') | Key::Char('R') if state.saved_pick.is_some() => {
+                esc_armed = false;
+                if let Some(a) = state.confirm_saved(false) {
+                    return a;
+                }
+            }
+            Key::Char('d') | Key::Char('D') if state.saved_pick.is_some() => {
+                esc_armed = false;
+                let _ = state.confirm_saved(true);
+            }
             Key::Char('1') => {
                 esc_armed = false;
                 state.category_idx = 0;
@@ -502,6 +583,12 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
             Key::Char('5') => {
                 esc_armed = false;
                 state.category_idx = 4;
+                state.item_idx = 0;
+                state.focus = Focus::Items;
+            }
+            Key::Char('6') => {
+                esc_armed = false;
+                state.category_idx = 5;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
@@ -570,11 +657,12 @@ fn draw(state: &MenuState) {
         buf.push_str(&cat_text);
         let _ = write!(buf, "{cyan}│{r}");
 
-        // Item column
-        let item_text = if row < items.len() {
-            let selected = row == state.item_idx;
+        // Item column. Scroll so a long sav-cmd list keeps the selection visible.
+        let item_offset = state.item_idx.saturating_sub(body_rows.saturating_sub(1));
+        let item_text = if let Some(item) = items.get(row + item_offset) {
+            let selected = row + item_offset == state.item_idx;
             let focused = state.focus == Focus::Items && selected;
-            let label = format!(" {}", items[row].label);
+            let label = format!(" {}", item.label);
             let padded = pad_visible(&label, item_w);
             if focused {
                 format!("{inv}{padded}{r}")
@@ -594,6 +682,8 @@ fn draw(state: &MenuState) {
     let detail_y = top + 1 + body_rows;
     let detail = if state.exit_confirm {
         "Exit the shell? [y]es / [n]o / Esc".to_string()
+    } else if let Some(name) = &state.saved_pick {
+        format!("`{name}`  [r]un / [d]elete / Esc")
     } else {
         items
             .get(state.item_idx)
@@ -789,6 +879,117 @@ mod tests {
         s.category_idx = Category::Learn.index();
         s.item_idx = 2;
         assert_eq!(s.activate(), Some(MenuAction::InsertLine("s".into())));
+    }
+
+    #[test]
+    fn sav_cmd_first_use_is_empty() {
+        let _guard = crate::modes::engram_env_lock();
+        let home = std::env::temp_dir().join(format!(
+            "shomsky-menu-empty-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let prev = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", &home);
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::SavCmd.index();
+        s.item_idx = 0;
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        let action = s.activate();
+        match prev {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(labels, vec!["(none)".to_string()]);
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn sav_cmd_runs_saved_command() {
+        let _guard = crate::modes::engram_env_lock();
+        let home = std::env::temp_dir().join(format!(
+            "shomsky-menu-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let paths = shomsky::LearnPaths::new(&home);
+        paths.ensure_dirs().unwrap();
+        std::fs::write(paths.command_path("say-hi"), "#!/bin/sh\necho hi\n").unwrap();
+        shomsky::save_entry(
+            &paths,
+            &shomsky::LearnEntry {
+                name: "say-hi".into(),
+                description: "say hi".into(),
+                version: "0.1.0".into(),
+                intent: "say hi".into(),
+                command: "echo hi".into(),
+                flags: vec![],
+                script_path: paths.command_path("say-hi").display().to_string(),
+                man_path: paths.man_path("say-hi").display().to_string(),
+                bats_path: paths.bats_path("say-hi").display().to_string(),
+                completion_path: String::new(),
+            },
+        )
+        .unwrap();
+        let prev = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", &home);
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::SavCmd.index();
+        s.item_idx = 0;
+        assert_eq!(s.activate(), None);
+        let action = s.confirm_saved(false);
+        match prev {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(action, Some(MenuAction::InsertLine("say-hi".into())));
+    }
+
+    #[test]
+    fn sav_cmd_delete_removes_command() {
+        let _guard = crate::modes::engram_env_lock();
+        let home = std::env::temp_dir().join(format!(
+            "shomsky-menu-del-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let paths = shomsky::LearnPaths::new(&home);
+        paths.ensure_dirs().unwrap();
+        std::fs::write(paths.command_path("oops"), "#!/bin/sh\n").unwrap();
+        shomsky::save_entry(
+            &paths,
+            &shomsky::LearnEntry {
+                name: "oops".into(),
+                description: "accidental".into(),
+                version: "0.1.0".into(),
+                intent: "oops".into(),
+                command: "true".into(),
+                flags: vec![],
+                script_path: paths.command_path("oops").display().to_string(),
+                man_path: paths.man_path("oops").display().to_string(),
+                bats_path: paths.bats_path("oops").display().to_string(),
+                completion_path: String::new(),
+            },
+        )
+        .unwrap();
+        let prev = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", &home);
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::SavCmd.index();
+        s.item_idx = 0;
+        assert_eq!(s.activate(), None);
+        assert_eq!(s.confirm_saved(true), None);
+        assert!(!paths.command_path("oops").exists());
+        assert!(!paths.registry_path("oops").exists());
+        assert_eq!(s.items()[0].label, "(none)");
+        match prev {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

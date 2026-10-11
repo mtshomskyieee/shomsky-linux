@@ -32,7 +32,9 @@ pub fn write_workdir(
     perms.set_mode(0o755);
     std::fs::set_permissions(&script_path, perms)?;
     // Make script discoverable as `name` on PATH for bats.
-    let bats_body = artifacts.bats.replace(
+    // Drop anything before the first @test. Small models emit a preamble such as
+    // "BATS test file ...", which bats sources and tries to execute.
+    let bats_body = sanitize_bats(name, &artifacts.bats)?.replace(
         &format!("$BATS_TEST_DIRNAME/{name}"),
         &script_path.display().to_string(),
     );
@@ -48,6 +50,24 @@ pub fn write_workdir(
     std::fs::write(&bats_path, bats_wrapped)
         .with_context(|| format!("write {}", bats_path.display()))?;
     Ok((script_path, bats_path))
+}
+
+/// Keep the bats suite and discard a leading prose preamble.
+/// When the model emitted no `@test`, use one help-exit test so promotion
+/// still checks the script instead of stopping on the missing marker.
+pub fn sanitize_bats(name: &str, bats: &str) -> Result<String> {
+    if let Some(i) = bats.find("@test") {
+        return Ok(bats[i..].to_string());
+    }
+    Ok(format!(
+        "@test \"{name} help exits 0\" {{\n  \
+         run {name} --help\n  \
+         if [ \"$status\" -ne 0 ]; then\n    \
+         run {name} -h\n  \
+         fi\n  \
+         [ \"$status\" -eq 0 ]\n\
+         }}\n"
+    ))
 }
 
 fn ensure_shebang(script: &str) -> String {
@@ -84,7 +104,7 @@ pub fn install_artifacts(
 
     std::fs::write(&man_path, &artifacts.man)
         .with_context(|| format!("install man {}", man_path.display()))?;
-    std::fs::write(&bats_path, &artifacts.bats)
+    std::fs::write(&bats_path, sanitize_bats(name, &artifacts.bats)?)
         .with_context(|| format!("install bats {}", bats_path.display()))?;
 
     let words = if artifacts.completion_words.is_empty() {
@@ -168,6 +188,27 @@ mod tests {
         assert!(paths.command_path("foo").is_file());
         assert!(paths.man_path("foo").is_file());
         assert!(paths.registry_path("foo").is_file());
+        let installed = std::fs::read_to_string(paths.bats_path("foo")).unwrap();
+        assert!(installed.starts_with("@test"));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn drops_bats_preamble() {
+        let body = sanitize_bats(
+            "list-files-largest",
+            "BATS test file that exercises --help\n\n@test \"help\" {\n  true\n}\n",
+        )
+        .unwrap();
+        assert!(body.starts_with("@test"));
+        assert!(!body.contains("BATS test"));
+    }
+
+    #[test]
+    fn supplies_help_test_when_missing() {
+        let body = sanitize_bats("github-size", "not a test file\n").unwrap();
+        assert!(body.starts_with("@test"));
+        assert!(body.contains("run github-size --help"));
+        assert!(body.contains("run github-size -h"));
     }
 }

@@ -46,6 +46,47 @@ pub fn entry_exists(paths: &LearnPaths, name: &str) -> bool {
     Path::new(&paths.registry_path(name)).is_file() && paths.command_path(name).is_file()
 }
 
+/// Saved learn commands, sorted by name. Unreadable registry files are skipped.
+pub fn list_entries(paths: &LearnPaths) -> Vec<LearnEntry> {
+    let Ok(rd) = std::fs::read_dir(paths.registry_dir()) else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    for ent in rd.flatten() {
+        let path = ent.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(entry) = toml::from_str::<LearnEntry>(&text) {
+            if paths.command_path(&entry.name).is_file() {
+                entries.push(entry);
+            }
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries
+}
+
+/// Remove a saved command: script, man page, bats, completion, and registry entry.
+pub fn remove_entry(paths: &LearnPaths, name: &str) -> Result<()> {
+    for path in [
+        paths.command_path(name),
+        paths.man_path(name),
+        paths.bats_path(name),
+        paths.completion_path(name),
+        paths.registry_path(name),
+    ] {
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("removing {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,5 +15,6 @@ engram/user/*
 dist/
 *.log
 .cache/
+.engram-test-script.*
 containers/prebuilt/
 *.bin

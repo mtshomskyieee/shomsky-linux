@@ -7,11 +7,20 @@ starts `mistralrs serve`.
 
 ## Aliases
 
+Pick one on the host with `./choose_llm.sh`. That writes `SHOMSKY_MODEL` (and
+`ENGRAM_TOOL_STYLE`) into `.env`, which Compose passes into the container.
+
 | Alias | Approx size | Notes |
 |-------|-------------|-------|
 | `mistral` (default) | ~4.4 GB | Mistral 7B Instruct v0.2 Q4_K_M |
 | `qwen` | ~4.7 GB | Qwen2.5 7B Instruct Q4_K_M |
+| `qwen1.5` | ~1.1 GB | Qwen2.5 1.5B Instruct Q4_K_M |
+| `qwen3` | ~2.1 GB | Qwen2.5 3B Instruct Q4_K_M |
+| `qwen-coder` | ~4.7 GB | Qwen2.5-Coder 7B Instruct Q4_K_M |
 | `deepseek` | ~4.7 GB | DeepSeek-R1-Distill-Qwen-7B Q4_K_M |
+| `llama` | ~2.0 GB | Llama 3.2 3B Instruct Q4_K_M |
+| `gemma` | ~1.6 GB | Gemma 2 2B Instruct Q4_K_M |
+| `phi` | ~2.4 GB | Phi-3.5-mini-instruct Q4_K_M |
 | `tiny` | ~400 MB | Qwen2.5 0.5B Instruct — CI / smoke |
 
 ```bash

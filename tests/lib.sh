@@ -58,7 +58,8 @@ run_seq() {
   local mode="$1"
   shift
   local script
-  script="$(mktemp)"
+  # Colima shares the home directory, not macOS /var/folders temp paths.
+  script="$(mktemp "${PWD}/.engram-test-script.XXXXXX")"
   local c
   for c in "$@"; do
     printf '%s\n' "$c" >>"$script"
@@ -67,6 +68,7 @@ run_seq() {
     _engram_env
     ENGRAM_MODE="$mode" /usr/local/bin/engram-shell --script "$script" 2>&1
   else
+    # shellcheck disable=SC2086
     docker run --rm \
       -e SKIP_LLM=1 \
       -e SKIP_MODEL_FETCH=1 \
@@ -74,6 +76,7 @@ run_seq() {
       -e "ENGRAM_MODE=${mode}" \
       -e ENGRAM_DIRECT_SHELL=1 \
       -e ENGRAM_TOOL_STYLE=text \
+      ${SHOMSKY_WORKDIR_KIND:+-e SHOMSKY_WORKDIR_KIND=$SHOMSKY_WORKDIR_KIND} \
       -v "$script:/tmp/engram-test-script:ro" \
       "$IMAGE" \
       /usr/local/bin/engram-shell --script /tmp/engram-test-script 2>&1

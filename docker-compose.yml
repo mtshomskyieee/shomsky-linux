@@ -30,6 +30,7 @@ services:
       ENGRAM_CONFIG: /etc/engram/engram.toml
       ENGRAM_SKILLS_DIR: /engram/skills
       ENGRAM_HALLUC_HISTORY_DIR: /engram/.hallucination_shell_history
+      SHOMSKY_WORKDIR_KIND: ${SHOMSKY_WORKDIR_KIND:-engram}
       HF_TOKEN: ${HF_TOKEN:-}
       HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
     working_dir: /engram/user
