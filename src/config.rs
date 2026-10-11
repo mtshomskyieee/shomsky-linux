@@ -90,6 +90,8 @@ pub struct Config {
     pub mcp_servers: Vec<McpServerConfig>,
     /// Path to command-frequency JSON store (shared with Completer / :top).
     pub cmdfreq_path: PathBuf,
+    /// Path to package install/uninstall ledger (`apk add` / `apk del`).
+    pub packages_path: PathBuf,
 }
 
 impl Default for Config {
@@ -111,6 +113,7 @@ impl Default for Config {
             direct_shell: true,
             mcp_servers: Vec::new(),
             cmdfreq_path: PathBuf::from("/engram/user/.command_freq.json"),
+            packages_path: PathBuf::from("/engram/user/.packages.json"),
         }
     }
 }
@@ -159,6 +162,11 @@ impl Config {
         if let Ok(p) = std::env::var("ENGRAM_CMDFREQ_PATH") {
             if !p.is_empty() {
                 cfg.cmdfreq_path = PathBuf::from(p);
+            }
+        }
+        if let Ok(p) = std::env::var("ENGRAM_PACKAGES_PATH") {
+            if !p.is_empty() {
+                cfg.packages_path = PathBuf::from(p);
             }
         }
         Ok(cfg)

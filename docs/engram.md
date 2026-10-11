@@ -7,6 +7,7 @@ not part of the base OS.
 /engram/
   user/                          Agent working tree (Compose bind mount)
     .command_freq.json           Command-frequency store (MCP cmdfreq / :top)
+    .packages.json               apk add / apk del ledger (:packages / :menu)
   skills/                        Markdown skills (tool manuals, procedures)
   models/                        GGUF weights (Docker named volume)
   .hallucination_shell_history/  Hallucination session JSON (Compose bind mount)
@@ -60,6 +61,15 @@ docker run -v "$PWD/my-skills:/engram/skills:ro" …
 [`engram/skills/shell.md`](../engram/skills/shell.md) documents BusyBox
 essentials and the filesystem layout. It is `always_load: true` so every
 session starts with a shared shell vocabulary.
+
+## Packages: `packages.md`
+
+[`engram/skills/packages.md`](../engram/skills/packages.md) walks install and
+uninstall with Alpine `apk` (search when the binary name differs from the
+package). It is `always_load: true`. In agent mode the model resolves the
+package name and runs `apk add` / `apk del` via `shell_exec` when UID is 0.
+Successful mutations are recorded in `/engram/user/.packages.json` and shown
+under `:menu` → Packages or `:packages`.
 
 ## Interactive bypass list
 

@@ -26,8 +26,8 @@ pub const SPLASH_ART: &str = r#"
 |    |    || :mode agent = LLM assist    |    |    ||  - 2 cool esses
 \         /  :mode hallucination =       \         /   :menu 
  \       /          LLM dreams it's a CLI \       /    :help
-   \   /                                    \   /
-     v                                        v
+   \   /     :mode root = shell only        \   /
+     v                    no LLM              v
 "#;
 
 /// Whether we should paint splash / colors on this TTY.
@@ -153,7 +153,7 @@ pub fn print_splash(cfg: &Config) {
     );
     let _ = writeln!(
         out,
-        "  {dim}mode{r} {mode_c}{}{r}  {dim}·  :menu  ·  :help  ·  :sys{r}",
+        "  {dim}mode{r} {mode_c}{}{r}  {dim}·  :menu  ·  :help  ·  :splash  ·  :sys{r}",
         cfg.mode.prompt_tag()
     );
     let _ = writeln!(out);
@@ -170,7 +170,7 @@ pub fn print_ready_line(cfg: &Config, secs: u64, cwd: &std::path::Path) {
     let r = reset();
     let mode_c = mode_color(cfg.mode);
     println!(
-        "  ready ({secs}s)  {mode_c}{}{r}:{path}  {dim}:menu · :help · :sys{r}",
+        "  ready ({secs}s)  {mode_c}{}{r}:{path}  {dim}:menu · :help · :splash · :sys{r}",
         cfg.mode.prompt_tag(),
         path = prompt_path(cfg.mode, cwd)
     );

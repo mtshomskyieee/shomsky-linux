@@ -269,6 +269,7 @@ impl Repl {
             mode: self.cfg.mode,
             allow_root_mode: self.cfg.allow_root_mode,
             pending_learn: self.pending_promote.is_some(),
+            packages_path: self.cfg.packages_path.clone(),
         }
     }
 
@@ -502,11 +503,19 @@ impl Repl {
             ":sys" | ":uname" => {
                 ui::print_sys(&self.cfg, &self.cwd);
             }
+            ":splash" => {
+                ui::print_splash(&self.cfg);
+            }
             ":top" => {
                 let limit = arg
                     .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(DEFAULT_TOP_LIMIT);
                 self.print_top_commands(limit);
+            }
+            ":packages" | ":pkgs" => {
+                let store = crate::packages::PackageStore::load(&self.cfg.packages_path)
+                    .unwrap_or_default();
+                println!("{}", crate::packages::format_list(&store));
             }
             ":exit" | ":quit" | ":q" => {
                 let _ = self.save_halluc_session();
@@ -963,6 +972,9 @@ impl Repl {
         if !out.output.ends_with('\n') {
             println!();
         }
+        if out.success {
+            crate::packages::record_from_command(&self.cfg.packages_path, line);
+        }
         self.record_command(line).await;
         Ok(())
     }
@@ -1333,20 +1345,22 @@ fn truncate_args(s: &str, limit: usize) -> String {
 const HELP_TEXT: &str = "\
 Meta-commands:
   :help              Show this help
-  :menu | :m         Feature navigation hub (Modes / Learn / sav-cmd / shomagent / Help / System)
+  :menu | :m         Feature navigation hub (Modes / Learn / Packages / shomagent / …)
   :sys | :uname      System identity (mode, model, tools, llm) — also: uname
+  :splash            Replay the startup splash (TTY; matrix intro if enabled)
   :mode [name]       Show or set mode (agent|hallucination|root)
   :tools [style]     Show or set tool style (auto|native|text)
   :skills            List skills under /engram/skills
   :model             Show active model / LLM endpoint (detail)
   :top [N]           Show top N most-used commands (default 10)
+  :packages | :pkgs  Show apk install / uninstall ledger
   :logs [N]          Show last N lines of mistralrs log (default 40)
   :shomagent         Roster background agents (:agents); :shomagent talk N peeks
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 
 Feature menu (TTY):
-  :menu | :m         Slip into the Modes / Learn / sav-cmd / shomagent / Help / System hub
+  :menu | :m         Slip into Modes / Learn / Packages / shomagent / Help / System
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
 
 Learn (agent mode):
@@ -1354,6 +1368,11 @@ Learn (agent mode):
   ?? <intent>        Same as comma prefix
   s / save           After a learn run, crystallize into ~/bin (+ man + bats)
   shomsky publish N  Package ~/bin/N as an apk → /usr/local/bin
+
+Packages:
+  :packages          Ledger of successful apk add / apk del (also :menu → Packages)
+  :menu → Packages   Enter on ● pkg → [u]ninstall; on ○ pkg → [r]einstall
+  Stored in /engram/user/.packages.json
 
 Top 10 commands:
   :top               or  :top 10

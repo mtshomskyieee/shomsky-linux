@@ -19,6 +19,8 @@ direct_shell = true
 
 # Shared with Completer / :top (Compose bind-mounts /engram/user)
 cmdfreq_path = "/engram/user/.command_freq.json"
+# apk add / apk del ledger for :menu Packages / :packages
+packages_path = "/engram/user/.packages.json"
 
 # In-container stdio MCP only — no URLs, no published ports.
 [[mcp_servers]]

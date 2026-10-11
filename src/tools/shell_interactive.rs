@@ -22,6 +22,7 @@ pub async fn shell_exec_interactive(
                 "error: '{command}' needs an interactive TTY (not available under --once/--script)"
             ),
             cwd: cwd.to_path_buf(),
+            success: false,
         });
     }
 
@@ -81,6 +82,7 @@ pub async fn shell_exec_interactive(
     Ok(ShellResult {
         output: out,
         cwd: new_cwd,
+        success: status.success(),
     })
 }
 

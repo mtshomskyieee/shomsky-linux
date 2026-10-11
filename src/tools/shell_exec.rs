@@ -8,6 +8,7 @@ use tokio::process::Command;
 pub struct ShellResult {
     pub output: String,
     pub cwd: PathBuf,
+    pub success: bool,
 }
 
 pub async fn shell_exec(
@@ -85,6 +86,7 @@ pub async fn shell_exec(
     Ok(ShellResult {
         output: out,
         cwd: new_cwd,
+        success: output.status.success(),
     })
 }
 

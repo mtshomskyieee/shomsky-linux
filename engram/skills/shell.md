@@ -57,7 +57,7 @@ tail -n N FILE      last N lines
 wc -l FILE          line count
 uname -a            kernel / OS info
 cat /etc/os-release distribution identity
-apk add PKG         install package (needs network + root)
+apk add PKG         install package (needs UID 0 + network; follow the packages skill)
 ```
 
 ## Filesystem layout (Shomsky)
@@ -106,7 +106,12 @@ or a single line:
 ```
 TOOL read_file path=/etc/os-release
 TOOL shell_exec command=uname -a
+TOOL shell_exec command=apk add neovim
 ```
+
+For `shell_exec`, the full command follows `command=` (spaces allowed). Prefer
+no quotes around the command.
+
 
 The shell executes the tool, appends `<tool_result>…</tool_result>` to the
 context, and continues. Keep replies short so the context window stays small.
