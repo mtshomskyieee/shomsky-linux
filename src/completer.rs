@@ -11,9 +11,9 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 const META_COMMANDS: &[&str] = &[
-    ":help", ":h", ":menu", ":m", ":sys", ":uname", ":exit", ":quit", ":q", ":mode",
-    ":tools", ":tool-style", ":skills", ":model", ":clear", ":logs", ":top",
-    ":shomagent", ":agents",
+    ":help", ":h", ":menu", ":m", ":sys", ":uname", ":splash", ":exit", ":quit", ":q",
+    ":mode", ":tools", ":tool-style", ":skills", ":model", ":clear", ":logs", ":top",
+    ":packages", ":pkgs", ":shomagent", ":agents",
 ];
 
 pub struct EngramHelper {

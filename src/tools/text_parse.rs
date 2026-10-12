@@ -156,10 +156,19 @@ fn parse_kv_args(name: &str, rest: &str) -> Value {
         }
     }
     let mut map = serde_json::Map::new();
-    // content= may contain spaces — treat as last key if present.
+    // command= / content= may contain spaces (and optional quotes). Take the
+    // remainder of the line so `command="apk add neovim"` is not truncated at
+    // the first space to `"apk`.
+    if let Some(idx) = rest.find("command=") {
+        let before = rest[..idx].trim();
+        let command = strip_wrapping_quotes(rest[idx + "command=".len()..].trim());
+        parse_simple_kvs(before, &mut map);
+        map.insert("command".into(), Value::String(command));
+        return Value::Object(map);
+    }
     if let Some(idx) = rest.find("content=") {
         let before = rest[..idx].trim();
-        let content = rest[idx + "content=".len()..].to_string();
+        let content = strip_wrapping_quotes(rest[idx + "content=".len()..].trim());
         parse_simple_kvs(before, &mut map);
         map.insert("content".into(), Value::String(content));
         return Value::Object(map);
@@ -167,15 +176,16 @@ fn parse_kv_args(name: &str, rest: &str) -> Value {
     parse_simple_kvs(rest, &mut map);
     if map.is_empty() {
         // Bare argument: map to the primary parameter for the tool.
+        let bare = strip_wrapping_quotes(rest.trim());
         return match name {
-            "shell_exec" => json!({"command": rest}),
-            "read_file" | "write_file" | "list_dir" => json!({"path": rest}),
-            "load_skill" => json!({"name": rest}),
+            "shell_exec" => json!({"command": bare}),
+            "read_file" | "write_file" | "list_dir" => json!({"path": bare}),
+            "load_skill" => json!({"name": bare}),
             n if n.starts_with("mcp__") && n.ends_with("__top_commands") => {
                 json!({"limit": 10})
             }
             n if n.starts_with("mcp__") && n.ends_with("__record_command") => {
-                json!({"command": rest})
+                json!({"command": bare})
             }
             _ => json!({}),
         };
@@ -187,10 +197,32 @@ fn parse_simple_kvs(s: &str, map: &mut serde_json::Map<String, Value>) {
     for part in s.split_whitespace() {
         if let Some((k, v)) = part.split_once('=') {
             if !k.is_empty() {
-                map.insert(k.to_string(), Value::String(v.to_string()));
+                map.insert(
+                    k.to_string(),
+                    Value::String(strip_wrapping_quotes(v)),
+                );
             }
         }
     }
+}
+
+/// Drop one layer of matching `'…'` or `"…"` so models can quote values.
+fn strip_wrapping_quotes(s: &str) -> String {
+    let s = s.trim();
+    let b = s.as_bytes();
+    if b.len() >= 2 {
+        let (first, last) = (b[0], b[b.len() - 1]);
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return s[1..s.len() - 1].to_string();
+        }
+    }
+    s.to_string()
+}
+
+/// Public helper for shell_exec: strip one layer of wrapping quotes on the
+/// whole command string (native tool_calls sometimes include them).
+pub fn strip_shell_command_quotes(command: &str) -> String {
+    strip_wrapping_quotes(command)
 }
 
 fn default_args(name: &str) -> Value {
@@ -227,8 +259,12 @@ Form B (one line):
 TOOL list_dir path=/etc/engram
 TOOL read_file path=/etc/os-release
 TOOL shell_exec command=uname -a
+TOOL shell_exec command=apk add neovim
 TOOL write_file path=/tmp/x content=hello
 TOOL load_skill name=shell
+
+For shell_exec, put the full ash command after command= (spaces OK). Prefer no
+quotes around the command; if you quote, wrap the entire command once.
 
 Allowed built-in tool names: shell_exec, read_file, write_file, list_dir, load_skill.
 MCP tools use names like mcp__cmdfreq__top_commands (when connected).
@@ -277,5 +313,32 @@ mod tests {
         assert!(stripped.contains("Hello"));
         assert!(stripped.contains("World"));
         assert!(!stripped.contains("TOOL"));
+    }
+
+    #[test]
+    fn shell_exec_command_keeps_spaces() {
+        let text = "TOOL shell_exec command=apk add neovim\n";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        let args: Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["command"].as_str(), Some("apk add neovim"));
+    }
+
+    #[test]
+    fn shell_exec_command_strips_wrapping_quotes() {
+        let text = r#"TOOL shell_exec command="apk add neovim""#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        let args: Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["command"].as_str(), Some("apk add neovim"));
+    }
+
+    #[test]
+    fn shell_exec_command_strips_single_quotes() {
+        let text = "TOOL shell_exec command='apk search -q neovim'";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        let args: Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["command"].as_str(), Some("apk search -q neovim"));
     }
 }

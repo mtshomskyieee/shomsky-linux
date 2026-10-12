@@ -140,11 +140,9 @@ pub async fn execute_tool(
 
     let result = match call.function.name.as_str() {
         "shell_exec" => {
-            let command = args
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let command = text_parse::strip_shell_command_quotes(
+                args.get("command").and_then(|v| v.as_str()).unwrap_or(""),
+            );
             match mode {
                 Mode::Agent | Mode::Root => {
                     if is_ignore_llm_command(&command, skills.ignore_llm_commands()) {
@@ -160,6 +158,12 @@ pub async fn execute_tool(
                         let home = mode.home_dir();
                         let r = shell_exec(&cfg.busybox_ash, &command, cwd, &home).await?;
                         adopt_cwd(cwd, r.cwd);
+                        if r.success {
+                            crate::packages::record_from_command(
+                                &cfg.packages_path,
+                                &command,
+                            );
+                        }
                         r.output
                     }
                 }

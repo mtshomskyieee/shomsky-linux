@@ -66,6 +66,9 @@ pub async fn run_intent(
     let home = mode.home_dir();
     let result = with_spinner("running", shell_exec(&cfg.busybox_ash, &command, cwd, &home)).await?;
     tools::adopt_cwd(cwd, result.cwd.clone());
+    if result.success {
+        crate::packages::record_from_command(&cfg.packages_path, &command);
+    }
 
     let lines = result.output.lines().count();
     let preview = truncate_output(&result.output, 40);

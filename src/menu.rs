@@ -4,9 +4,11 @@
 //! meta-command / mode switch or returns a starter line to prefill.
 
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::modes::Mode;
+use crate::packages::PackageStatus;
 use crate::term::{self, RawGuard};
 use crate::ui;
 
@@ -26,6 +28,7 @@ pub struct MenuContext {
     pub mode: Mode,
     pub allow_root_mode: bool,
     pub pending_learn: bool,
+    pub packages_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,16 +36,18 @@ pub enum Category {
     Modes,
     Learn,
     SavCmd,
+    Packages,
     Shomagent,
     Help,
     System,
 }
 
 impl Category {
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 7] = [
         Category::Modes,
         Category::Learn,
         Category::SavCmd,
+        Category::Packages,
         Category::Shomagent,
         Category::Help,
         Category::System,
@@ -53,6 +58,7 @@ impl Category {
             Category::Modes => "Modes",
             Category::Learn => "Learn",
             Category::SavCmd => "sav-cmd",
+            Category::Packages => "Packages",
             Category::Shomagent => "shomagent",
             Category::Help => "Help",
             Category::System => "System",
@@ -84,9 +90,12 @@ pub struct MenuState {
     exit_confirm: bool,
     /// Saved command waiting for run or delete.
     saved_pick: Option<String>,
+    /// Tracked package waiting for uninstall / reinstall confirm.
+    package_pick: Option<(String, PackageStatus)>,
     allow_root_mode: bool,
     mode: Mode,
     pending_learn: bool,
+    packages_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +112,8 @@ enum ItemKind {
     InsertLine(String),
     /// A saved command. Enter asks to run or delete it.
     Saved(String),
+    /// Ledger package. Enter asks to uninstall or reinstall.
+    TrackedPackage { name: String, status: PackageStatus },
     ExitShell,
     InfoOnly,
 }
@@ -115,9 +126,11 @@ impl MenuState {
             focus: Focus::Items,
             exit_confirm: false,
             saved_pick: None,
+            package_pick: None,
             allow_root_mode: ctx.allow_root_mode,
             mode: ctx.mode,
             pending_learn: ctx.pending_learn,
+            packages_path: ctx.packages_path.clone(),
         }
     }
 
@@ -126,11 +139,17 @@ impl MenuState {
     }
 
     fn items(&self) -> Vec<Item> {
-        items_for(self.category(), self.mode, self.allow_root_mode, self.pending_learn)
+        items_for(
+            self.category(),
+            self.mode,
+            self.allow_root_mode,
+            self.pending_learn,
+            &self.packages_path,
+        )
     }
 
     pub fn move_up(&mut self) {
-        if self.exit_confirm || self.saved_pick.is_some() {
+        if self.exit_confirm || self.saved_pick.is_some() || self.package_pick.is_some() {
             return;
         }
         match self.focus {
@@ -157,7 +176,7 @@ impl MenuState {
     }
 
     pub fn move_down(&mut self) {
-        if self.exit_confirm || self.saved_pick.is_some() {
+        if self.exit_confirm || self.saved_pick.is_some() || self.package_pick.is_some() {
             return;
         }
         match self.focus {
@@ -184,11 +203,15 @@ impl MenuState {
             self.saved_pick = None;
             return;
         }
+        if self.package_pick.is_some() {
+            self.package_pick = None;
+            return;
+        }
         self.focus = Focus::Categories;
     }
 
     pub fn focus_right(&mut self) {
-        if self.exit_confirm || self.saved_pick.is_some() {
+        if self.exit_confirm || self.saved_pick.is_some() || self.package_pick.is_some() {
             return;
         }
         self.focus = Focus::Items;
@@ -207,6 +230,10 @@ impl MenuState {
             self.saved_pick = None;
             return;
         }
+        if self.package_pick.is_some() {
+            self.package_pick = None;
+            return;
+        }
         self.focus = match self.focus {
             Focus::Categories => Focus::Items,
             Focus::Items => Focus::Categories,
@@ -221,6 +248,10 @@ impl MenuState {
         }
         if self.saved_pick.is_some() {
             self.saved_pick = None;
+            return None;
+        }
+        if self.package_pick.is_some() {
+            self.package_pick = None;
             return None;
         }
         if self.focus == Focus::Items {
@@ -238,6 +269,9 @@ impl MenuState {
         if self.saved_pick.is_some() {
             return self.confirm_saved(false);
         }
+        if self.package_pick.is_some() {
+            return self.confirm_package();
+        }
         if self.focus == Focus::Categories {
             self.focus = Focus::Items;
             return None;
@@ -250,6 +284,10 @@ impl MenuState {
             ItemKind::InsertLine(s) => Some(MenuAction::InsertLine(s.clone())),
             ItemKind::Saved(name) => {
                 self.saved_pick = Some(name.clone());
+                None
+            }
+            ItemKind::TrackedPackage { name, status } => {
+                self.package_pick = Some((name.clone(), *status));
                 None
             }
             ItemKind::ExitShell => {
@@ -283,6 +321,18 @@ impl MenuState {
         }
         None
     }
+
+    /// Confirm uninstall / reinstall for the picked package → run via REPL.
+    pub fn confirm_package(&mut self) -> Option<MenuAction> {
+        let Some((name, status)) = self.package_pick.take() else {
+            return None;
+        };
+        let cmd = match status {
+            PackageStatus::Installed => format!("apk del {name}"),
+            PackageStatus::Removed => format!("apk add {name}"),
+        };
+        Some(MenuAction::InsertLine(cmd))
+    }
 }
 
 fn items_for(
@@ -290,6 +340,7 @@ fn items_for(
     mode: Mode,
     allow_root: bool,
     pending_learn: bool,
+    packages_path: &PathBuf,
 ) -> Vec<Item> {
     match cat {
         Category::Modes => {
@@ -336,6 +387,7 @@ fn items_for(
             v
         }
         Category::SavCmd => saved_command_items(),
+        Category::Packages => package_items(packages_path),
         Category::Shomagent => vec![
             Item {
                 label: "roster".into(),
@@ -376,7 +428,7 @@ fn items_for(
             },
             Item {
                 label: "this menu".into(),
-                detail: ":menu / :m — modes, learn, sav-cmd, agents, system".into(),
+                detail: ":menu / :m — modes, learn, packages, agents, system".into(),
                 kind: ItemKind::InfoOnly,
             },
         ],
@@ -385,6 +437,11 @@ fn items_for(
                 label: ":sys".into(),
                 detail: "Identity (mode, model, tools, llm)".into(),
                 kind: ItemKind::RunMeta(":sys"),
+            },
+            Item {
+                label: ":splash".into(),
+                detail: "Replay the startup splash art".into(),
+                kind: ItemKind::RunMeta(":splash"),
             },
             Item {
                 label: ":model".into(),
@@ -400,6 +457,11 @@ fn items_for(
                 label: ":top".into(),
                 detail: "Most-used shell commands".into(),
                 kind: ItemKind::RunMeta(":top"),
+            },
+            Item {
+                label: ":packages".into(),
+                detail: "apk install / uninstall ledger".into(),
+                kind: ItemKind::RunMeta(":packages"),
             },
             Item {
                 label: ":tools".into(),
@@ -449,6 +511,53 @@ fn saved_command_items() -> Vec<Item> {
             }
         })
         .collect()
+}
+
+fn package_items(path: &PathBuf) -> Vec<Item> {
+    let store = crate::packages::PackageStore::load(path).unwrap_or_default();
+    let mut items = vec![Item {
+        label: "list all".into(),
+        detail: "Run :packages — full install/uninstall ledger".into(),
+        kind: ItemKind::RunMeta(":packages"),
+    }];
+    let listed = store.list_sorted();
+    if listed.is_empty() {
+        items.push(Item {
+            label: "(none)".into(),
+            detail: "Successful apk add / apk del are recorded here.".into(),
+            kind: ItemKind::InfoOnly,
+        });
+        return items;
+    }
+    for (name, entry) in listed {
+        let essential = crate::packages::is_essential(name);
+        let (label, detail) = match entry.status {
+            PackageStatus::Installed if essential => (
+                format!("● {name}"),
+                format!(
+                    "installed (essential) — Enter to uninstall ({})",
+                    entry.updated_at
+                ),
+            ),
+            PackageStatus::Installed => (
+                format!("● {name}"),
+                format!("installed — Enter to uninstall ({})", entry.updated_at),
+            ),
+            PackageStatus::Removed => (
+                format!("○ {name}"),
+                format!("removed — Enter to reinstall ({})", entry.updated_at),
+            ),
+        };
+        items.push(Item {
+            label,
+            detail,
+            kind: ItemKind::TrackedPackage {
+                name: name.to_string(),
+                status: entry.status,
+            },
+        });
+    }
+    items
 }
 
 fn mode_item(target: Mode, current: Mode) -> Item {
@@ -546,6 +655,28 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 state.exit_confirm = false;
                 esc_armed = false;
             }
+            Key::Char('u') | Key::Char('U')
+                if state
+                    .package_pick
+                    .as_ref()
+                    .is_some_and(|(_, s)| *s == PackageStatus::Installed) =>
+            {
+                esc_armed = false;
+                if let Some(a) = state.confirm_package() {
+                    return a;
+                }
+            }
+            Key::Char('r') | Key::Char('R')
+                if state
+                    .package_pick
+                    .as_ref()
+                    .is_some_and(|(_, s)| *s == PackageStatus::Removed) =>
+            {
+                esc_armed = false;
+                if let Some(a) = state.confirm_package() {
+                    return a;
+                }
+            }
             Key::Char('r') | Key::Char('R') if state.saved_pick.is_some() => {
                 esc_armed = false;
                 if let Some(a) = state.confirm_saved(false) {
@@ -589,6 +720,12 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
             Key::Char('6') => {
                 esc_armed = false;
                 state.category_idx = 5;
+                state.item_idx = 0;
+                state.focus = Focus::Items;
+            }
+            Key::Char('7') => {
+                esc_armed = false;
+                state.category_idx = 6;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
@@ -684,6 +821,18 @@ fn draw(state: &MenuState) {
         "Exit the shell? [y]es / [n]o / Esc".to_string()
     } else if let Some(name) = &state.saved_pick {
         format!("`{name}`  [r]un / [d]elete / Esc")
+    } else if let Some((name, status)) = &state.package_pick {
+        match status {
+            PackageStatus::Installed if crate::packages::is_essential(name) => {
+                format!("ESSENTIAL `{name}`  [u]ninstall anyway / Esc")
+            }
+            PackageStatus::Installed => {
+                format!("`{name}`  [u]ninstall / Enter / Esc")
+            }
+            PackageStatus::Removed => {
+                format!("`{name}`  [r]einstall / Enter / Esc")
+            }
+        }
     } else {
         items
             .get(state.item_idx)
@@ -795,6 +944,7 @@ mod tests {
             mode: Mode::Agent,
             allow_root_mode: true,
             pending_learn: false,
+            packages_path: PathBuf::from("/engram/user/.packages.json"),
         }
     }
 
@@ -879,6 +1029,71 @@ mod tests {
         s.category_idx = Category::Learn.index();
         s.item_idx = 2;
         assert_eq!(s.activate(), Some(MenuAction::InsertLine("s".into())));
+    }
+
+    #[test]
+    fn packages_category_lists_empty() {
+        let dir = std::env::temp_dir().join(format!(
+            "engram-menu-pkgs-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".packages.json");
+        let mut c = ctx();
+        c.packages_path = path;
+        let mut s = MenuState::new(&c);
+        s.category_idx = Category::Packages.index();
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert!(labels.iter().any(|l| l == "list all"));
+        assert!(labels.iter().any(|l| l == "(none)"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn packages_category_confirms_uninstall() {
+        let dir = std::env::temp_dir().join(format!(
+            "engram-menu-pkgs2-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".packages.json");
+        crate::packages::record_from_command(&path, "apk add neovim");
+        let mut c = ctx();
+        c.packages_path = path;
+        let mut s = MenuState::new(&c);
+        s.category_idx = Category::Packages.index();
+        // item 0 = list all; item 1 = neovim
+        s.item_idx = 1;
+        assert_eq!(s.activate(), None);
+        assert!(s.package_pick.is_some());
+        assert_eq!(
+            s.confirm_package(),
+            Some(MenuAction::InsertLine("apk del neovim".into()))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn packages_category_confirms_reinstall() {
+        let dir = std::env::temp_dir().join(format!(
+            "engram-menu-pkgs3-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".packages.json");
+        crate::packages::record_from_command(&path, "apk add htop");
+        crate::packages::record_from_command(&path, "apk del htop");
+        let mut c = ctx();
+        c.packages_path = path;
+        let mut s = MenuState::new(&c);
+        s.category_idx = Category::Packages.index();
+        s.item_idx = 1;
+        assert_eq!(s.activate(), None);
+        assert_eq!(
+            s.confirm_package(),
+            Some(MenuAction::InsertLine("apk add htop".into()))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod matrix;
 mod mcp;
 mod menu;
 mod modes;
+mod packages;
 mod repl;
 mod skills;
 mod spinner;

@@ -91,9 +91,10 @@ On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
 |----------|----------|
 | Modes | Switch agent / hallucination / root |
 | Learn | Prefill `, ` or `?? `; save when a promote is pending |
+| Packages | Ledger of successful `apk add` / `apk del`; Enter → [u]ninstall / [r]einstall |
 | shomagent | Roster, or prefill `watch` / `ask` / `talk` / `read` |
 | Help | Run `:help` |
-| System | `:sys`, `:model`, `:skills`, `:top`, `:clear`, exit |
+| System | `:sys`, `:splash`, `:model`, `:skills`, `:top`, `:packages`, `:clear`, exit |
 
 Arrow keys / `hjkl` / Tab navigate; Enter selects; Esc backs up a level; Esc Esc
 (or `q`) leaves the menu. Under pipes, `--once`, and `--script` the overlay is
