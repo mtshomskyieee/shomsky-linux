@@ -15,7 +15,7 @@ pub const SPLASH_ART: &str = r#"
   /     \   shomagent readwrite fil.md     /     \ shomagent spawn "<cmd>"
 /         \ shomagent ask 1 "question.." /         \   NEW COMMAND begin with a comma example: 
 |    |    ||shomagent talk 1             |    |    ||  , show the five largest files
-|    |    ||                             |    |    ||
+|    |    ||shomagent dream <filename>   |    |    ||
 \    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
  \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
   \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /

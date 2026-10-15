@@ -650,6 +650,7 @@ impl Repl {
                             "paused" => "⏸",
                             "read" => "◇",
                             "readwrite" => "◆",
+                            "dream" => "~",
                             _ => "■",
                         };
                         println!(

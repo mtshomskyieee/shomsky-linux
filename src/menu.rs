@@ -419,6 +419,11 @@ fn items_for(
                 detail: "Attach a read/write document".into(),
                 kind: ItemKind::InsertLine("shomagent readwrite ".into()),
             },
+            Item {
+                label: "dream …".into(),
+                detail: "Generative dream journal (quit to leave)".into(),
+                kind: ItemKind::InsertLine("shomagent dream ".into()),
+            },
         ],
         Category::Help => vec![
             Item {

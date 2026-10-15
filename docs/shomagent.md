@@ -19,6 +19,7 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `write <id> --replace "…"` | Overwrite document |
 | `ask <id> "<q>"` | One-shot Q&A; answer is `#N > …` |
 | `talk <id>` | Interactive chat (`:q` to leave) |
+| `dream [path]` | Generative dream journal (default `dream.md`; `quit` to leave) |
 | `pause` / `resume` / `stop <id>` | Lifecycle |
 
 ## Quick use
@@ -57,6 +58,78 @@ Inside `engram-shell`, findings interrupt between prompts:
 ```
 
 Meta: `:shomagent` or `:agents` lists the roster; `:shomagent talk N` peeks.
+
+## Typical use
+
+A session attaches a member, then you keep working. Create the member before `ask`, `talk`, or `write`. Findings interrupt between prompts; `ask` and `talk` dig into that member.
+
+### Watch a long-running command
+
+```bash
+shomagent watch "npm run dev" --tell-me "when a request 500s, with the stack trace root cause"
+# ⟡ shomagent#1 attached (pid …)
+```
+
+The command runs in the background. stdout and stderr stay in a ring buffer. The summarizer checks new lines against `--tell-me`. The same class of finding is not reported again for an hour.
+
+Return to the shell. A match shows up between prompts:
+
+```text
+⟡ shomagent#1 ─ 3 × 500 on POST /api/orders
+  root cause: …
+```
+
+Ask one question, or open a chat (`:q` leaves it):
+
+```bash
+shomagent ask 1 "is it only orders?"
+# #1 > …
+
+shomagent talk 1
+```
+
+Inside the shell, `:shomagent` or `:agents` lists the roster. `:shomagent talk N` peeks at member N.
+
+Pause, resume, or stop when you are done:
+
+```bash
+shomagent pause 1 && shomagent resume 1 && shomagent stop 1
+```
+
+`shomagent watch … --persist` writes `./shomagent_crew.d/<name>.toml` so the watcher is declared for later. Drop-ins below cover restart policy and overrides.
+
+### Ask a document
+
+```bash
+shomagent readwrite notes.md
+shomagent write 1 "paris is in france"
+shomagent ask 1 "where is paris"
+# #1 > …answer from the document…
+
+shomagent write 1 --replace "new contents"
+
+shomagent read details.md          # read-only
+shomagent ask 2 "summarize this"
+# shomagent write 2 "…" → rejected
+```
+
+`read` is ask and talk only. `readwrite` also accepts `write` (append) and `write --replace`.
+
+### Dream
+
+A persistent foreground session. Seeds a random bash or Python topic, then
+keeps appending ReAct beats to a markdown journal and the terminal. Invented
+commands are shown and saved; they are not executed.
+
+```bash
+shomagent dream              # journal → dream.md
+shomagent dream ideas.md     # journal → ideas.md
+```
+
+On a color TTY each beat crystallizes through the same green character rain as
+the splash (`ENGRAM_MATRIX`, `ENGRAM_MATRIX_SECS`, `ENGRAM_MATRIX_GLYPHS`).
+Type a line to steer the next beat; type `quit` to leave. The roster glyph for
+a live dream member is `~`.
 
 ## Drop-ins (`shomagent_crew.d`)
 

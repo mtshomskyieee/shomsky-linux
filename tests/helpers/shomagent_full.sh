@@ -1,6 +1,6 @@
 #!/bin/sh
 # Full shomagent verb coverage (stub LLM). Invoked by tests/cases/shomagent_smoke.sh
-# (local driver) or docker-mounted as this file.
+# (local driver) or docker-mounted as this file. Includes dream (piped).
 set -eu
 
 PASS=0
@@ -145,6 +145,19 @@ need_not "$roster" "details.md" "details.md gone from roster"
 # --- unknown member ---
 expect_fail "ask unknown member" "$SHOMAGENT" ask 99 "hi"
 expect_fail "write unknown member" "$SHOMAGENT" write 99 "hi"
+
+# --- dream (piped: no rain; stub LLM) ---
+dream_out="$(printf 'quit\n' | "$SHOMAGENT" dream dream-test.md 2>&1 || true)"
+need "$dream_out" "dream|seed|generators" "dream seed session"
+[ -f dream-test.md ] && ok "dream-test.md created" || bad "dream-test.md missing"
+need "$(cat dream-test.md)" "seed|generators|python" "dream file has seed"
+
+dream_out="$(printf '%s\n' 'pipes as patience' 'quit' | "$SHOMAGENT" dream dream-steer.md 2>&1 || true)"
+need "$dream_out" "pipes as patience|steered" "dream steered beat on terminal"
+need "$(cat dream-steer.md)" "pipes as patience" "dream file contains steering"
+
+roster="$("$SHOMAGENT" 2>&1)"
+need_not "$roster" "dream-test.md|dream-steer.md" "dream members ended after quit"
 
 echo
 echo "shomagent full suite: ${PASS} passed, ${FAIL} failed"

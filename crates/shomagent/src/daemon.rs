@@ -58,6 +58,12 @@ struct Member {
     document: Option<PathBuf>,
     /// If true, `write <id>` may modify the document. Read-only when false.
     document_writable: bool,
+    /// Foreground generative dream session over a document.
+    dream: bool,
+    /// Number of dream beats written so far (0 = seed not yet written).
+    dream_beats: u32,
+    /// Topic chosen at seed (language + subject).
+    dream_topic: String,
 }
 
 pub struct Daemon {
@@ -109,6 +115,9 @@ impl Daemon {
             talk_history: Vec::new(),
             document: None,
             document_writable: false,
+            dream: false,
+            dream_beats: 0,
+            dream_topic: String::new(),
         };
         self.members.insert(id, member);
         self.start_process_by_id(id).await?;
@@ -159,7 +168,15 @@ async fn pump_lines<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
 }
 
 fn status_of(m: &Member) -> MemberStatus {
-    let (state, command) = if let Some(ref doc) = m.document {
+    let (state, command) = if m.dream {
+        (
+            "dream".into(),
+            m.document
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| m.def.command.clone()),
+        )
+    } else if let Some(ref doc) = m.document {
         let state = if m.document_writable {
             "readwrite"
         } else {
@@ -447,6 +464,49 @@ impl Daemon {
                     message: e.to_string(),
                 },
             },
+            Request::Dream { path, name } => match self.attach_dream(&path, name.as_deref()) {
+                Ok(member) => Response::Ok {
+                    message: Some(format!(
+                        "⟡ shomagent#{} dream ({})",
+                        member.id, member.command
+                    )),
+                    member: Some(member),
+                    roster: vec![],
+                    context: None,
+                    reply: None,
+                },
+                Err(e) => Response::Err {
+                    message: e.to_string(),
+                },
+            },
+            // DreamStep is handled in handle_client so the LLM await does not
+            // hold the daemon mutex (otherwise quit/DreamEnd blocks for the
+            // whole generation).
+            Request::DreamStep { .. } => Response::Err {
+                message: "internal: DreamStep must be dispatched unlocked".into(),
+            },
+            Request::DreamEnd { id } => {
+                let Some(m) = self.members.get(&id) else {
+                    return Response::Err {
+                        message: format!("unknown member #{id}"),
+                    };
+                };
+                if !m.dream {
+                    return Response::Err {
+                        message: format!("#{id} is not a dream member"),
+                    };
+                }
+                self.members.remove(&id);
+                Response::Ok {
+                    message: Some(format!(
+                        "#{id} dream ended (journal file kept on disk)"
+                    )),
+                    member: None,
+                    roster: vec![],
+                    context: None,
+                    reply: None,
+                }
+            }
         }
     }
 
@@ -536,10 +596,213 @@ impl Daemon {
             talk_history: Vec::new(),
             document: Some(path_buf.clone()),
             document_writable: writable,
+            dream: false,
+            dream_beats: 0,
+            dream_topic: String::new(),
         };
         let status = status_of(&member);
         self.members.insert(id, member);
         Ok(status)
+    }
+
+    fn attach_dream(&mut self, path: &str, name: Option<&str>) -> Result<MemberStatus> {
+        let path_buf = if std::path::Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            self.cwd.join(path)
+        };
+        if let Some(parent) = path_buf.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+        }
+        if !path_buf.exists() {
+            let title = path_buf
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("dream");
+            let stub = format!("# {title}\n\n");
+            std::fs::write(&path_buf, stub)
+                .with_context(|| format!("creating {}", path_buf.display()))?;
+        } else if !path_buf.is_file() {
+            return Err(anyhow!("{} is not a file", path_buf.display()));
+        }
+
+        let name = name
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                path_buf
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("dream")
+                    .to_string()
+            });
+        let id = self.next_id;
+        self.next_id += 1;
+        let def = MemberDef {
+            name: name.clone(),
+            command: "dream".into(),
+            args: vec![path_buf.display().to_string()],
+            tell_me: format!(
+                "generative dream journal at {}",
+                path_buf.display()
+            ),
+            restart: RestartPolicy::Never,
+            autostart: false,
+            budget_tokens: 768,
+            ring_lines: 2000,
+            shell: None,
+        };
+        let member = Member {
+            id,
+            def,
+            state: MemberState::Running,
+            child: None,
+            pid: None,
+            ring: RingBuffer::new(2000),
+            started: Instant::now(),
+            findings_count: 0,
+            findings: Vec::new(),
+            summarize_cursor: 0,
+            novelty: NoveltyFilter::new(Duration::from_secs(3600)),
+            talk_history: Vec::new(),
+            document: Some(path_buf.clone()),
+            document_writable: true,
+            dream: true,
+            dream_beats: 0,
+            dream_topic: String::new(),
+        };
+        let status = status_of(&member);
+        self.members.insert(id, member);
+        Ok(status)
+    }
+
+    /// Build dream LLM messages without calling the model (lock may be held).
+    fn dream_step_begin(
+        &self,
+        id: u32,
+        steering: Option<&str>,
+    ) -> Result<(LlmClient, Vec<ChatMessage>, DreamStepMeta)> {
+        let m = self
+            .members
+            .get(&id)
+            .ok_or_else(|| anyhow!("unknown member #{id}"))?;
+        if !m.dream {
+            return Err(anyhow!("#{id} is not a dream member"));
+        }
+        let path = m
+            .document
+            .clone()
+            .ok_or_else(|| anyhow!("#{id} has no document"))?;
+        let body = read_document(&path).unwrap_or_default();
+        let body_tail = if body.len() > 12_000 {
+            body[body.len() - 12_000..].to_string()
+        } else {
+            body
+        };
+        let beats = m.dream_beats;
+        let topic = m.dream_topic.clone();
+        let is_seed = beats == 0;
+        let nonce = now_unix();
+        let (system, user) = if is_seed {
+            (
+                format!(
+                    "You are shomagent dream (member #{id}). This is a SEED beat.\n\
+                     Pick either bash programming or python programming at random \
+                     (nonce={nonce} — use it only for variety).\n\
+                     Invent one specific, fun topic. Write ONLY markdown:\n\
+                     ## seed\n\
+                     **<bash|python>** — <short topic title>\n\
+                     \n\
+                     <2-4 sentence hook; may include one short fenced code sample>\n\
+                     No preamble outside that markdown. Do not run commands."
+                ),
+                "SEED: invent the topic and write the seed section.".to_string(),
+            )
+        } else {
+            let steer = steering
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| format!("Steering: {s}\n"))
+                .unwrap_or_default();
+            (
+                format!(
+                    "You are shomagent dream (member #{id}). Continue a ReAct dream journal.\n\
+                     Current topic: {topic}\n\
+                     Write ONLY markdown for the next beat:\n\
+                     ## beat {next}\n\
+                     **reason:** <1-3 sentences of reasoning / drift / philosophy>\n\
+                     \n\
+                     <act: a small program, command walkthrough, or philosophical aside; \
+                     not every beat must be code. Fenced bash/python when you invent commands.>\n\
+                     Do not execute anything. Keep it under ~40 lines. Fun and self-directed.\n\
+                     Recent journal tail:\n{body_tail}",
+                    next = beats,
+                ),
+                format!("{steer}Write beat {beats} continuing the dream.", steer = steer),
+            )
+        };
+        let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
+        Ok((
+            self.llm.clone(),
+            messages,
+            DreamStepMeta {
+                id,
+                path,
+                beats,
+                is_seed,
+            },
+        ))
+    }
+
+    /// Append a generated beat. No-op if the dream member was already ended.
+    fn dream_step_finish(&mut self, meta: DreamStepMeta, mut reply: String) -> Result<String> {
+        reply = reply.trim().to_string();
+        if !reply.ends_with('\n') {
+            reply.push('\n');
+        }
+        if !meta.is_seed && reply.starts_with("## beat\n") {
+            reply = format!(
+                "## beat {}\n{}",
+                meta.beats,
+                &reply["## beat\n".len()..]
+            );
+        }
+
+        // Member may have been DreamEnd'd while the LLM ran — still keep the
+        // journal append if the path is known, but skip roster updates.
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&meta.path)
+                .with_context(|| format!("appending dream to {}", meta.path.display()))?;
+            if meta.beats > 0 {
+                f.write_all(b"\n")?;
+            }
+            f.write_all(reply.as_bytes())?;
+        }
+
+        if let Some(m) = self.members.get_mut(&meta.id) {
+            if !m.dream {
+                return Ok(reply);
+            }
+            if meta.is_seed {
+                m.dream_topic = extract_dream_topic(&reply);
+                m.dream_beats = 1;
+            } else {
+                m.dream_beats = meta.beats + 1;
+            }
+            m.talk_history.push(ChatMessage::assistant(reply.clone()));
+            if m.talk_history.len() > 8 {
+                let drain = m.talk_history.len() - 8;
+                m.talk_history.drain(0..drain);
+            }
+        }
+
+        Ok(reply)
     }
 
     fn write_to_document(&mut self, id: u32, content: &str, replace: bool) -> Result<String> {
@@ -826,6 +1089,32 @@ struct FindingJson {
     suggestion: Option<String>,
 }
 
+struct DreamStepMeta {
+    id: u32,
+    path: PathBuf,
+    beats: u32,
+    is_seed: bool,
+}
+
+fn extract_dream_topic(seed: &str) -> String {
+    for line in seed.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("**") {
+            if let Some((head, tail)) = rest.split_once("**") {
+                let topic = format!("{head}{tail}").trim().to_string();
+                if !topic.is_empty() {
+                    return topic;
+                }
+            }
+            let topic = rest.trim_matches('*').trim().to_string();
+            if !topic.is_empty() {
+                return topic;
+            }
+        }
+    }
+    "bash / python exploration".into()
+}
+
 fn parse_finding_json(raw: &str, id: u32, name: &str) -> Option<Finding> {
     let trimmed = raw.trim();
     // Extract JSON object if wrapped in markdown fences
@@ -927,9 +1216,45 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                     continue;
                 }
             };
-            let resp = {
-                let mut d = daemon.lock().await;
-                d.handle(req).await
+            let resp = match req {
+                Request::DreamStep { id, steering } => {
+                    let begun = {
+                        let d = daemon.lock().await;
+                        d.dream_step_begin(id, steering.as_deref())
+                    };
+                    match begun {
+                        Err(e) => Response::Err {
+                            message: e.to_string(),
+                        },
+                        Ok((llm, messages, meta)) => {
+                            // LLM runs unlocked so DreamEnd / quit can proceed.
+                            match llm.chat_with_temperature(&messages, 768, 0.8).await {
+                                Err(e) => Response::Err {
+                                    message: e.to_string(),
+                                },
+                                Ok(raw) => {
+                                    let mut d = daemon.lock().await;
+                                    match d.dream_step_finish(meta, raw) {
+                                        Ok(reply) => Response::Ok {
+                                            message: None,
+                                            member: d.members.get(&id).map(status_of),
+                                            roster: vec![],
+                                            context: None,
+                                            reply: Some(reply),
+                                        },
+                                        Err(e) => Response::Err {
+                                            message: e.to_string(),
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                other => {
+                    let mut d = daemon.lock().await;
+                    d.handle(other).await
+                }
             };
             write_response(&mut stream, &resp).await?;
         }

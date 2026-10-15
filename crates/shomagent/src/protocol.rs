@@ -58,6 +58,22 @@ pub enum Request {
         #[serde(default)]
         replace: bool,
     },
+    /// Attach a generative dream document (foreground `shomagent dream`).
+    Dream {
+        path: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Generate one dream beat and append it to the member's document.
+    DreamStep {
+        id: u32,
+        #[serde(default)]
+        steering: Option<String>,
+    },
+    /// End a dream session (detach member; keep the file).
+    DreamEnd {
+        id: u32,
+    },
     Ping,
 }
 

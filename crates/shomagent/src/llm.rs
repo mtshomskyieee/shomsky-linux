@@ -69,6 +69,15 @@ impl LlmClient {
     }
 
     pub async fn chat(&self, messages: &[ChatMessage], max_tokens: u32) -> Result<String> {
+        self.chat_with_temperature(messages, max_tokens, 0.0).await
+    }
+
+    pub async fn chat_with_temperature(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        temperature: f32,
+    ) -> Result<String> {
         if self.stub {
             return Ok(stub_reply(messages));
         }
@@ -77,7 +86,7 @@ impl LlmClient {
             "model": self.model,
             "messages": messages,
             "stream": false,
-            "temperature": 0.0,
+            "temperature": temperature,
             "max_tokens": max_tokens,
         });
         let resp = self
@@ -114,6 +123,29 @@ fn stub_reply(messages: &[ChatMessage]) -> String {
         .find(|m| m.role == "system")
         .map(|m| m.content.as_str())
         .unwrap_or("");
+
+    // Dream seed / beat stubs (stable for CI).
+    if system.contains("shomagent dream") {
+        if system.contains("SEED beat") || last_user.contains("SEED") {
+            return "## seed\n**python** — generators as polite laziness\n\none short hook about yield and iterators\n".into();
+        }
+        let steering = last_user
+            .lines()
+            .find(|l| l.starts_with("Steering:"))
+            .map(|l| l.trim_start_matches("Steering:").trim())
+            .filter(|s| !s.is_empty());
+        if let Some(s) = steering {
+            return format!(
+                "## beat\n**reason:** following the steer toward {s}\n\n\
+                 a small aside: `{s}` as a programming metaphor\n\n\
+                 ```bash\necho \"steered: {s}\"\n```\n"
+            );
+        }
+        return "## beat\n**reason:** drift into pipe composition\n\n\
+                bash pipelines are patience made linear\n\n\
+                ```bash\nprintf 'a\\nb\\n' | wc -l\n```\n"
+            .into();
+    }
 
     if system.contains("finding JSON") || system.contains("structured finding") {
         // Heuristic: if log mentions 500 / error / CVE, emit a finding JSON.
@@ -218,5 +250,21 @@ mod tests {
         ];
         let reply = stub_reply(&messages);
         assert!(reply.contains("\"none\":false") || reply.contains("HTTP 500"));
+    }
+
+    #[test]
+    fn stub_dream_seed_and_steering() {
+        let seed = stub_reply(&[
+            ChatMessage::system("You are shomagent dream (member #1). This is a SEED beat."),
+            ChatMessage::user("SEED: invent the topic"),
+        ]);
+        assert!(seed.contains("## seed"), "seed: {seed}");
+        assert!(seed.contains("python") || seed.contains("bash"), "seed: {seed}");
+
+        let beat = stub_reply(&[
+            ChatMessage::system("You are shomagent dream (member #1). Continue a ReAct dream journal."),
+            ChatMessage::user("Steering: pipes as patience\nWrite beat 1"),
+        ]);
+        assert!(beat.contains("pipes as patience"), "beat: {beat}");
     }
 }
