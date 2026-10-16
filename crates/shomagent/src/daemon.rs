@@ -64,6 +64,10 @@ struct Member {
     dream_beats: u32,
     /// Topic chosen at seed (language + subject).
     dream_topic: String,
+    /// Internal one-sentence gist of the last beat (never shown as a CARRY line).
+    dream_carry: String,
+    /// Short excerpt of the last beat body for continuity (~500 chars).
+    dream_excerpt: String,
 }
 
 pub struct Daemon {
@@ -118,6 +122,8 @@ impl Daemon {
             dream: false,
             dream_beats: 0,
             dream_topic: String::new(),
+            dream_carry: String::new(),
+            dream_excerpt: String::new(),
         };
         self.members.insert(id, member);
         self.start_process_by_id(id).await?;
@@ -479,6 +485,18 @@ impl Daemon {
                     message: e.to_string(),
                 },
             },
+            Request::DreamPlant { id, text } => match self.dream_plant(id, &text) {
+                Ok(reply) => Response::Ok {
+                    message: None,
+                    member: self.members.get(&id).map(status_of),
+                    roster: vec![],
+                    context: None,
+                    reply: Some(reply),
+                },
+                Err(e) => Response::Err {
+                    message: e.to_string(),
+                },
+            },
             // DreamStep is handled in handle_client so the LLM await does not
             // hold the daemon mutex (otherwise quit/DreamEnd blocks for the
             // whole generation).
@@ -599,6 +617,8 @@ impl Daemon {
             dream: false,
             dream_beats: 0,
             dream_topic: String::new(),
+            dream_carry: String::new(),
+            dream_excerpt: String::new(),
         };
         let status = status_of(&member);
         self.members.insert(id, member);
@@ -672,13 +692,60 @@ impl Daemon {
             dream: true,
             dream_beats: 0,
             dream_topic: String::new(),
+            dream_carry: String::new(),
+            dream_excerpt: String::new(),
         };
         let status = status_of(&member);
         self.members.insert(id, member);
         Ok(status)
     }
 
+    /// Install a user-written seed and advance past the LLM seed beat.
+    fn dream_plant(&mut self, id: u32, text: &str) -> Result<String> {
+        let m = self
+            .members
+            .get(&id)
+            .ok_or_else(|| anyhow!("unknown member #{id}"))?;
+        if !m.dream {
+            return Err(anyhow!("#{id} is not a dream member"));
+        }
+        if m.dream_beats > 0 {
+            return Err(anyhow!("#{id} already has a seed — refuse to replant"));
+        }
+        if text.trim().is_empty() {
+            return Err(anyhow!("empty seed"));
+        }
+        let path = m
+            .document
+            .clone()
+            .ok_or_else(|| anyhow!("#{id} has no document"))?;
+
+        let body = format_user_dream_seed(text);
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .with_context(|| format!("appending dream seed to {}", path.display()))?;
+            f.write_all(body.as_bytes())?;
+        }
+
+        if let Some(m) = self.members.get_mut(&id) {
+            m.dream_topic = extract_dream_topic(&body);
+            m.dream_carry = fallback_dream_carry(&body);
+            m.dream_excerpt = excerpt_dream_body(&body, 520);
+            m.dream_beats = 1;
+            m.talk_history.clear();
+        }
+        Ok(body)
+    }
+
     /// Build dream LLM messages without calling the model (lock may be held).
+    ///
+    /// Continuity is hidden: we pass a short excerpt + an internal gist, never
+    /// ask the model to emit summary lines. Default craft is bash/python; a
+    /// steer may leave that freely.
     fn dream_step_begin(
         &self,
         id: u32,
@@ -695,55 +762,24 @@ impl Daemon {
             .document
             .clone()
             .ok_or_else(|| anyhow!("#{id} has no document"))?;
-        let body = read_document(&path).unwrap_or_default();
-        let body_tail = if body.len() > 12_000 {
-            body[body.len() - 12_000..].to_string()
-        } else {
-            body
-        };
         let beats = m.dream_beats;
         let topic = m.dream_topic.clone();
+        let carry = m.dream_carry.clone();
+        let excerpt = m.dream_excerpt.clone();
         let is_seed = beats == 0;
         let nonce = now_unix();
-        let (system, user) = if is_seed {
-            (
-                format!(
-                    "You are shomagent dream (member #{id}). This is a SEED beat.\n\
-                     Pick either bash programming or python programming at random \
-                     (nonce={nonce} — use it only for variety).\n\
-                     Invent one specific, fun topic. Write ONLY markdown:\n\
-                     ## seed\n\
-                     **<bash|python>** — <short topic title>\n\
-                     \n\
-                     <2-4 sentence hook; may include one short fenced code sample>\n\
-                     No preamble outside that markdown. Do not run commands."
-                ),
-                "SEED: invent the topic and write the seed section.".to_string(),
-            )
+        let steer = steering
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| truncate_chars(s, 240))
+            .unwrap_or_default();
+
+        let messages = if is_seed {
+            dream_seed_messages(id, nonce)
         } else {
-            let steer = steering
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| format!("Steering: {s}\n"))
-                .unwrap_or_default();
-            (
-                format!(
-                    "You are shomagent dream (member #{id}). Continue a ReAct dream journal.\n\
-                     Current topic: {topic}\n\
-                     Write ONLY markdown for the next beat:\n\
-                     ## beat {next}\n\
-                     **reason:** <1-3 sentences of reasoning / drift / philosophy>\n\
-                     \n\
-                     <act: a small program, command walkthrough, or philosophical aside; \
-                     not every beat must be code. Fenced bash/python when you invent commands.>\n\
-                     Do not execute anything. Keep it under ~40 lines. Fun and self-directed.\n\
-                     Recent journal tail:\n{body_tail}",
-                    next = beats,
-                ),
-                format!("{steer}Write beat {beats} continuing the dream.", steer = steer),
-            )
+            dream_continue_messages(id, beats, &topic, &carry, &excerpt, &steer)
         };
-        let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
+
         Ok((
             self.llm.clone(),
             messages,
@@ -759,19 +795,30 @@ impl Daemon {
     /// Append a generated beat. No-op if the dream member was already ended.
     fn dream_step_finish(&mut self, meta: DreamStepMeta, mut reply: String) -> Result<String> {
         reply = reply.trim().to_string();
-        if !reply.ends_with('\n') {
-            reply.push('\n');
+        // Drop any accidental CARRY: the model was never asked to emit.
+        let (body, _ignored_carry) = split_dream_carry(&reply);
+        let mut body = scrub_dream_body(&body);
+        if body.trim().is_empty() {
+            body = "## beat\n**reason:** the thread went quiet for a moment\n\n\
+                    silence is also a kind of prompt\n"
+                .into();
         }
-        if !meta.is_seed && reply.starts_with("## beat\n") {
-            reply = format!(
-                "## beat {}\n{}",
-                meta.beats,
-                &reply["## beat\n".len()..]
-            );
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        if meta.is_seed && !body.contains("## seed") {
+            body = format!("## seed\n{body}");
+        }
+        if !meta.is_seed {
+            let stripped = strip_leading_beat_heading(&body);
+            body = format!("## beat {}\n{}", meta.beats, stripped);
+        }
+        let body = truncate_chars(&body, 1200);
+        let mut body = body;
+        if !body.ends_with('\n') {
+            body.push('\n');
         }
 
-        // Member may have been DreamEnd'd while the LLM ran — still keep the
-        // journal append if the path is known, but skip roster updates.
         {
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
@@ -782,27 +829,26 @@ impl Daemon {
             if meta.beats > 0 {
                 f.write_all(b"\n")?;
             }
-            f.write_all(reply.as_bytes())?;
+            f.write_all(body.as_bytes())?;
         }
 
         if let Some(m) = self.members.get_mut(&meta.id) {
             if !m.dream {
-                return Ok(reply);
+                return Ok(body);
             }
             if meta.is_seed {
-                m.dream_topic = extract_dream_topic(&reply);
+                m.dream_topic = extract_dream_topic(&body);
                 m.dream_beats = 1;
             } else {
                 m.dream_beats = meta.beats + 1;
             }
-            m.talk_history.push(ChatMessage::assistant(reply.clone()));
-            if m.talk_history.len() > 8 {
-                let drain = m.talk_history.len() - 8;
-                m.talk_history.drain(0..drain);
-            }
+            // Compactification stays internal — never a visible CARRY line.
+            m.dream_carry = fallback_dream_carry(&body);
+            m.dream_excerpt = excerpt_dream_body(&body, 520);
+            m.talk_history.clear();
         }
 
-        Ok(reply)
+        Ok(body)
     }
 
     fn write_to_document(&mut self, id: u32, content: &str, replace: bool) -> Result<String> {
@@ -1096,23 +1142,298 @@ struct DreamStepMeta {
     is_seed: bool,
 }
 
+fn dream_seed_messages(id: u32, nonce: u64) -> Vec<ChatMessage> {
+    // Concrete few-shot — small models copy examples, not angle-bracket templates.
+    let examples = [
+        (
+            "bash",
+            "## seed\n\
+             **bash** — process substitution as a secret doorway\n\n\
+             `<(cmd)` feels like opening a door that only exists while you walk through it.\n\
+             ```bash\ndiff <(sort a.txt) <(sort b.txt)\n```\n",
+        ),
+        (
+            "python",
+            "## seed\n\
+             **python** — walrus operator as a quiet aside\n\n\
+             Walrus lets you name a value in the middle of asking a question.\n\
+             ```python\nif (n := len(items)) > 3:\n    print(n)\n```\n",
+        ),
+        (
+            "bash",
+            "## seed\n\
+             **bash** — here-strings that whisper into stdin\n\n\
+             `<<<` feeds a string like a note slipped under a door.\n\
+             ```bash\ngrep -o '[0-9]+' <<< 'room 42'\n```\n",
+        ),
+        (
+            "python",
+            "## seed\n\
+             **python** — pathlib as a map of the filesystem\n\n\
+             Paths become objects you can ask polite questions.\n\
+             ```python\nfrom pathlib import Path\nprint(Path.home().joinpath('bin').exists())\n```\n",
+        ),
+    ];
+    let (lang_hint, example) = examples[(nonce as usize) % examples.len()];
+    let system = format!(
+        "You are shomagent dream #{id}: a late-night creative journal.\n\
+         Default craft is real bash or python language ideas — curious, concrete, a little poetic.\n\
+         Avoid cloud/SaaS product pitches. Keep the whole reply under ~900 characters.\n\
+         Write markdown only. Start with ## seed then **bash** or **python** — title."
+    );
+    vec![
+        ChatMessage::system(system),
+        ChatMessage::user(format!(
+            "Format example (do not copy this topic):\n\n{example}"
+        )),
+        ChatMessage::assistant(example.to_string()),
+        ChatMessage::user(format!(
+            "Invent a NEW seed about a different {lang_hint} idea (nonce={nonce}). \
+             Same shape. Do not copy the example."
+        )),
+    ]
+}
+
+fn dream_continue_messages(
+    id: u32,
+    beats: u32,
+    topic: &str,
+    carry: &str,
+    excerpt: &str,
+    steer: &str,
+) -> Vec<ChatMessage> {
+    let topic = truncate_chars(topic, 140);
+    let carry = if carry.is_empty() {
+        "take one small step further".into()
+    } else {
+        truncate_chars(carry, 320)
+    };
+    let excerpt = if excerpt.is_empty() {
+        carry.clone()
+    } else {
+        truncate_chars(excerpt, 520)
+    };
+
+    let example = "## beat 1\n\
+**reason:** process substitution still feels like a temporary hallway.\n\n\
+What if both sides of the diff were live commands?\n\
+```bash\ncomm -3 <(ls a) <(ls b)\n```\n";
+
+    let steered = !steer.is_empty();
+    let system = if steered {
+        format!(
+            "You are shomagent dream #{id}: continue a creative journal.\n\
+             Opening topic was: {topic}\n\
+             The reader is steering — follow their direction even if it leaves bash/python.\n\
+             Be concrete and playful. Never paste instructions or placeholders.\n\
+             Keep under ~900 characters. Write ## beat {beats} then **reason:** and a short act."
+        )
+    } else {
+        format!(
+            "You are shomagent dream #{id}: continue a bash/python craft journal.\n\
+             Topic: {topic}\n\
+             Be concrete and playful. Prefer a tiny real snippet or a sharp observation.\n\
+             Never paste instructions or placeholders. Keep under ~900 characters.\n\
+             Write ## beat {beats} then **reason:** and a short act."
+        )
+    };
+
+    let mut user = format!(
+        "Recent journal thread:\n\
+         ---\n{excerpt}\n\
+         ---\n\
+         Where it is heading: {carry}\n\n\
+         Tone example (not the topic):\n{example}\n\
+         Write the next beat as a natural continuation."
+    );
+    if steered {
+        user.push_str(&format!("\n\nReader steering (follow this): {steer}"));
+    }
+
+    vec![
+        ChatMessage::system(truncate_chars(&system, 650)),
+        ChatMessage::user(truncate_chars(&user, 1100)),
+    ]
+}
+
+/// Normalize a user-written opening into a `## seed` journal block.
+fn format_user_dream_seed(text: &str) -> String {
+    let t = text.trim();
+    if t.is_empty() {
+        return "## seed\n\n".into();
+    }
+    let body = if t.to_ascii_lowercase().starts_with("## seed") {
+        t.to_string()
+    } else {
+        format!("## seed\n{t}")
+    };
+    if body.ends_with('\n') {
+        body
+    } else {
+        format!("{body}\n")
+    }
+}
+
 fn extract_dream_topic(seed: &str) -> String {
     for line in seed.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("**") {
             if let Some((head, tail)) = rest.split_once("**") {
                 let topic = format!("{head}{tail}").trim().to_string();
-                if !topic.is_empty() {
-                    return topic;
+                if !topic.is_empty()
+                    && !topic.contains('<')
+                    && !topic.to_ascii_lowercase().contains("short title")
+                {
+                    return truncate_chars(&topic, 120);
                 }
             }
             let topic = rest.trim_matches('*').trim().to_string();
-            if !topic.is_empty() {
-                return topic;
+            if !topic.is_empty() && !topic.contains('<') {
+                return truncate_chars(&topic, 120);
             }
         }
     }
+    // Fall back to first prose sentence if the model skipped the bold title.
+    for line in seed.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with("```") {
+            continue;
+        }
+        return truncate_chars(t, 120);
+    }
     "bash / python exploration".into()
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let count = s.chars().count();
+    if count <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Split a model reply into journal body + optional `CARRY:` sentence.
+fn split_dream_carry(reply: &str) -> (String, String) {
+    let mut body_lines = Vec::new();
+    let mut carry = String::new();
+    for line in reply.lines() {
+        let t = line.trim();
+        let lower = t.to_ascii_lowercase();
+        if lower.starts_with("carry:") || lower.starts_with("**carry:**") {
+            let raw = t
+                .split_once(':')
+                .map(|(_, r)| r.trim())
+                .unwrap_or("")
+                .trim_matches('*')
+                .trim();
+            if !raw.is_empty() {
+                carry = raw.to_string();
+            }
+            continue;
+        }
+        body_lines.push(line);
+    }
+    while body_lines.last().is_some_and(|l| l.trim().is_empty()) {
+        body_lines.pop();
+    }
+    (body_lines.join("\n"), carry)
+}
+
+fn scrub_dream_body(body: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_fence = false;
+    for line in body.lines() {
+        let t = line.trim();
+        if t.starts_with("```") {
+            in_fence = !in_fence;
+            out.push(line.to_string());
+            continue;
+        }
+        if in_fence {
+            out.push(line.to_string());
+            continue;
+        }
+        let lower = t.to_ascii_lowercase();
+        // Drop leaked prompt scaffolding small models love to echo.
+        if lower.contains("<brief act")
+            || lower.contains("<2 short")
+            || lower.contains("<1-2")
+            || lower.contains("<short title")
+            || lower.contains("<bash|python>")
+            || lower.contains("<python|bash>")
+            || lower.contains("optional tiny fenced")
+            || lower.starts_with("no preamble")
+            || lower.starts_with("do not run")
+            || lower.starts_with("do not execute")
+            || lower == "## next beat"
+            || lower.starts_with("write only compact")
+            || lower.starts_with("always end with")
+        {
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    out.join("\n")
+}
+
+fn strip_leading_beat_heading(body: &str) -> String {
+    let mut lines = body.lines().peekable();
+    while let Some(line) = lines.peek() {
+        let t = line.trim();
+        if t.is_empty() {
+            lines.next();
+            continue;
+        }
+        let lower = t.to_ascii_lowercase();
+        if lower.starts_with("## beat") {
+            lines.next();
+            continue;
+        }
+        break;
+    }
+    lines.collect::<Vec<_>>().join("\n")
+}
+
+fn fallback_dream_carry(body: &str) -> String {
+    for line in body.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with("```") {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("**reason:**") {
+            let s = rest.trim();
+            if !s.is_empty() {
+                return truncate_chars(s, 320);
+            }
+            continue;
+        }
+        if t.starts_with("**") {
+            continue;
+        }
+        return truncate_chars(t, 320);
+    }
+    "continue the dream from here".into()
+}
+
+/// Keep enough of the last beat for continuity without shipping the whole file.
+fn excerpt_dream_body(body: &str, max: usize) -> String {
+    let trimmed = body.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    // Prefer the end of the beat (where the act usually lands).
+    let chars: Vec<char> = trimmed.chars().collect();
+    let start = chars.len().saturating_sub(max);
+    let mut out: String = chars[start..].iter().collect();
+    if start > 0 {
+        out = format!("…{out}");
+    }
+    out
 }
 
 fn parse_finding_json(raw: &str, id: u32, name: &str) -> Option<Finding> {
@@ -1228,11 +1549,35 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                         },
                         Ok((llm, messages, meta)) => {
                             // LLM runs unlocked so DreamEnd / quit can proceed.
-                            match llm.chat_with_temperature(&messages, 768, 0.8).await {
-                                Err(e) => Response::Err {
-                                    message: e.to_string(),
-                                },
-                                Ok(raw) => {
+                            // One quick retry only — small models are slow; stacking
+                            // 120s timeouts made dream look stuck for minutes.
+                            let mut last_err = None;
+                            let mut raw_ok = None;
+                            for attempt in 1..=2 {
+                                // Short generations; body capped ~900–1200 chars.
+                                match llm
+                                    .chat_with_temperature_timeout(
+                                        &messages,
+                                        320,
+                                        0.8,
+                                        Some(Duration::from_secs(45)),
+                                    )
+                                    .await
+                                {
+                                    Ok(raw) => {
+                                        raw_ok = Some(raw);
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        last_err = Some(e);
+                                        if attempt < 2 {
+                                            tokio::time::sleep(Duration::from_millis(500)).await;
+                                        }
+                                    }
+                                }
+                            }
+                            match raw_ok {
+                                Some(raw) => {
                                     let mut d = daemon.lock().await;
                                     match d.dream_step_finish(meta, raw) {
                                         Ok(reply) => Response::Ok {
@@ -1243,10 +1588,16 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                                             reply: Some(reply),
                                         },
                                         Err(e) => Response::Err {
-                                            message: e.to_string(),
+                                            message: format!("{e:#}"),
                                         },
                                     }
                                 }
+                                None => Response::Err {
+                                    message: format!(
+                                        "{:#}",
+                                        last_err.unwrap_or_else(|| anyhow!("dream LLM failed"))
+                                    ),
+                                },
                             }
                         }
                     }

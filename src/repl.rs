@@ -16,7 +16,7 @@ use crate::halluc_session;
 use crate::learn::{self, PendingPromote};
 use crate::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::mcp::McpRegistry;
-use crate::menu::{self, MenuAction, MenuContext};
+use crate::menu::{self, MenuAction, MenuContext, ShomagentMemberBrief};
 use crate::modes::Mode;
 use crate::skills::SkillStore;
 use crate::spinner::{self, with_progress_bar, with_spinner};
@@ -264,17 +264,34 @@ impl Repl {
         Ok(())
     }
 
-    fn menu_context(&self) -> MenuContext {
+    fn menu_context(&self, shomagent_members: Vec<ShomagentMemberBrief>) -> MenuContext {
         MenuContext {
             mode: self.cfg.mode,
             allow_root_mode: self.cfg.allow_root_mode,
             pending_learn: self.pending_promote.is_some(),
             packages_path: self.cfg.packages_path.clone(),
+            shomagent_members,
         }
     }
 
-    fn run_menu(&self) -> MenuAction {
-        menu::run(&self.menu_context())
+    async fn fetch_shomagent_members(&self) -> Vec<ShomagentMemberBrief> {
+        match shomagent::daemon::rpc(&shomagent::protocol::Request::Roster).await {
+            Ok(shomagent::protocol::Response::Ok { roster, .. }) => roster
+                .into_iter()
+                .map(|m| ShomagentMemberBrief {
+                    id: m.id,
+                    name: m.name,
+                    state: m.state,
+                    path: m.command,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    async fn run_menu(&self) -> MenuAction {
+        let members = self.fetch_shomagent_members().await;
+        menu::run(&self.menu_context(members))
     }
 
     /// Apply a menu outcome. Returns true when the shell should exit.
@@ -495,7 +512,7 @@ impl Repl {
             }
             ":menu" | ":m" => {
                 if let Some(editor) = rl.as_deref_mut() {
-                    let action = self.run_menu();
+                    let action = self.run_menu().await;
                     return Box::pin(self.apply_menu_action(action, editor)).await;
                 }
                 println!("menu: interactive only — use :menu at the prompt");
@@ -1363,6 +1380,7 @@ Meta-commands:
 Feature menu (TTY):
   :menu | :m         Slip into Modes / Learn / Packages / shomagent / Help / System
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
+  menu → shomagent   list · readwrite/dream seed <file> · ask/talk <doc> · stop/end <agent>
 
 Learn (agent mode):
   , <intent>         Plan → confirm → run a real shell command from intent

@@ -256,12 +256,16 @@ fn logo_cells(rows: &[String], cols: usize) -> Vec<(usize, usize, char)> {
 /// Play rain that crystallizes into `text`. Returns `true` when the final text
 /// is on screen; `false` when skipped (caller should print plainly).
 ///
-/// `pump` feeds keystrokes into `lines` each frame (caller owns the stdin
-/// reader). A finished line snaps the animation.
+/// Tall beats are truncated to the terminal height so the animation still runs;
+/// any overflow lines are printed after the rain. Positioning is relative to the
+/// current cursor (no raw-mode DSR), so it works with dream's cooked `steer>`
+/// prompt.
+///
+/// `pump` may feed keystrokes into `lines` each frame; a finished line snaps.
 pub fn play_text(
     text: &str,
     lines: &mut LineBuf,
-    guard: Option<&RawGuard>,
+    _guard: Option<&RawGuard>,
     mut pump: impl FnMut(&mut LineBuf),
 ) -> bool {
     if !enabled() {
@@ -276,11 +280,22 @@ pub fn play_text(
     }
 
     let (term_rows, cols) = term::term_size();
-    let art = wrap_text(text, cols);
-    let grid_rows = art.len();
-    if cols < 20 || grid_rows == 0 || term_rows < grid_rows + 2 {
+    if cols < 20 || term_rows < 4 {
         return false;
     }
+
+    // Leave room for the steer> prompt under the beat.
+    let max_rows = term_rows.saturating_sub(3).max(1);
+    let mut art = wrap_text(text, cols);
+    if art.is_empty() {
+        return false;
+    }
+    let overflow: Vec<String> = if art.len() > max_rows {
+        art.split_off(max_rows)
+    } else {
+        Vec::new()
+    };
+    let grid_rows = art.len();
     let logo = logo_cells(&art, cols);
     if logo.is_empty() {
         return false;
@@ -289,48 +304,39 @@ pub fn play_text(
     {
         let mut out = io::stdout().lock();
         let _ = write!(out, "\x1b[?25l");
-        for _ in 0..=grid_rows {
+        // Reserve a block below the current cursor, climb to its top, DECSC-save.
+        for _ in 0..grid_rows {
             let _ = out.write_all(b"\n");
         }
+        let _ = write!(out, "\x1b[{grid_rows}A\r\x1b7");
         let _ = out.flush();
     }
-    let bottom = if guard.is_some_and(|g| g.active()) {
-        term::cursor_row().unwrap_or(term_rows)
-    } else {
-        term_rows
-    };
-    let top = bottom.saturating_sub(grid_rows + 1).max(1);
 
     let logo_sgr = "\x1b[32m";
-    run_frames(
-        top,
-        grid_rows,
-        cols,
-        secs,
-        logo_sgr,
-        &logo,
-        lines,
-        guard,
-        &mut pump,
-    );
+    run_frames(grid_rows, cols, secs, logo_sgr, &logo, lines, &mut pump);
 
     {
         let mut out = io::stdout().lock();
-        let _ = write!(out, "\x1b[0m\x1b[{};1H", top + grid_rows + 1);
+        let _ = write!(
+            out,
+            "\x1b8\x1b[{}B\r\x1b[0m\x1b[?25h\n",
+            grid_rows.saturating_sub(1)
+        );
         let _ = out.flush();
+        for line in &overflow {
+            let _ = writeln!(out, "{line}");
+        }
     }
     true
 }
 
 fn run_frames(
-    top: usize,
     rows: usize,
     cols: usize,
     secs: f32,
     logo_sgr: &str,
     logo: &[(usize, usize, char)],
     lines: &mut LineBuf,
-    guard: Option<&RawGuard>,
     pump: &mut dyn FnMut(&mut LineBuf),
 ) {
     let mut rng = Rng::new();
@@ -340,21 +346,16 @@ fn run_frames(
         .collect();
 
     let cell_count = rows * cols;
-    let mut prev: Vec<Option<(char, u8)>> = vec![None; cell_count];
     let mut next: Vec<Option<(char, u8)>> = vec![None; cell_count];
     let mut frame_buf = String::with_capacity(cell_count * 8);
 
     let total = Duration::from_secs_f32(secs);
     let start = Instant::now();
-    let mut snapped = false;
 
     loop {
-        if guard.is_some() {
-            pump(lines);
-            if lines.has_completed() {
-                snapped = true;
-                break;
-            }
+        pump(lines);
+        if lines.has_completed() {
+            break;
         }
 
         let t = (start.elapsed().as_secs_f32() / secs).min(1.0);
@@ -413,8 +414,7 @@ fn run_frames(
             }
         }
 
-        emit_diff(&prev, &next, top, cols, logo_sgr, &mut frame_buf);
-        std::mem::swap(&mut prev, &mut next);
+        emit_frame(&next, rows, cols, logo_sgr, &mut frame_buf);
 
         if start.elapsed() >= total {
             break;
@@ -422,12 +422,11 @@ fn run_frames(
         std::thread::sleep(TICK);
     }
 
-    let _ = snapped;
     next.iter_mut().for_each(|c| *c = None);
     for &(r, c, ch) in logo {
         next[r * cols + c] = Some((ch, LVL_LOGO));
     }
-    emit_diff(&prev, &next, top, cols, logo_sgr, &mut frame_buf);
+    emit_frame(&next, rows, cols, logo_sgr, &mut frame_buf);
 }
 
 fn new_column(rows: usize, alphabet: &[char], rng: &mut Rng, initial: bool) -> Column {
@@ -447,49 +446,40 @@ fn new_column(rows: usize, alphabet: &[char], rng: &mut Rng, initial: bool) -> C
     }
 }
 
-fn emit_diff(
-    prev: &[Option<(char, u8)>],
-    next: &[Option<(char, u8)>],
-    top: usize,
+/// Full-frame redraw from the DECSC home saved at the top of the rain block.
+fn emit_frame(
+    grid: &[Option<(char, u8)>],
+    rows: usize,
     cols: usize,
     logo_sgr: &str,
     buf: &mut String,
 ) {
-    use std::fmt::Write as _;
-
     buf.clear();
-    let mut cursor: Option<(usize, usize)> = None;
-    let mut level: Option<u8> = None;
-
-    for (i, (p, n)) in prev.iter().zip(next.iter()).enumerate() {
-        if p == n {
-            continue;
+    buf.push_str("\x1b8"); // DECRC — back to top-left of the reserved block
+    for r in 0..rows {
+        if r > 0 {
+            buf.push('\n');
         }
-        let (r, c) = (i / cols, i % cols);
-        if cursor != Some((r, c)) {
-            let _ = write!(buf, "\x1b[{};{}H", top + r, c + 1);
-        }
-        match n {
-            Some((ch, lvl)) => {
-                if level != Some(*lvl) {
-                    buf.push_str(paint(*lvl, logo_sgr));
-                    level = Some(*lvl);
+        let mut level: Option<u8> = None;
+        for c in 0..cols {
+            match grid[r * cols + c] {
+                Some((ch, lvl)) => {
+                    if level != Some(lvl) {
+                        buf.push_str(paint(lvl, logo_sgr));
+                        level = Some(lvl);
+                    }
+                    buf.push(ch);
                 }
-                buf.push(*ch);
-            }
-            None => {
-                if level.is_some() {
-                    buf.push_str("\x1b[0m");
-                    level = None;
+                None => {
+                    if level.is_some() {
+                        buf.push_str("\x1b[0m");
+                        level = None;
+                    }
+                    buf.push(' ');
                 }
-                buf.push(' ');
             }
         }
-        cursor = Some((r, c + 1));
-    }
-
-    if buf.is_empty() {
-        return;
+        buf.push_str("\x1b[K");
     }
     let mut out = io::stdout().lock();
     let _ = out.write_all(buf.as_bytes());
@@ -519,5 +509,15 @@ mod tests {
         lb.feed_bytes(b"one\ntwo\n");
         assert_eq!(lb.take_latest().as_deref(), Some("two"));
         assert!(lb.take_latest().is_none());
+    }
+
+    #[test]
+    fn wrap_long_text_can_fit_terminal() {
+        let cols = 40;
+        let rows = wrap_text(&"word ".repeat(200), cols);
+        assert!(rows.len() > 5);
+        let max = 10;
+        let kept = rows.len().min(max);
+        assert_eq!(kept, max);
     }
 }

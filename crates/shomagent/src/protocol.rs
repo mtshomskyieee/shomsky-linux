@@ -64,6 +64,11 @@ pub enum Request {
         #[serde(default)]
         name: Option<String>,
     },
+    /// Install a user-written opening seed (skips the LLM seed beat).
+    DreamPlant {
+        id: u32,
+        text: String,
+    },
     /// Generate one dream beat and append it to the member's document.
     DreamStep {
         id: u32,

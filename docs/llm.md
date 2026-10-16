@@ -135,6 +135,7 @@ A line starting with `,` or `??` is intent, handled before direct-shell and LLM 
 | `shomagent read <path>` | `ask` / `talk` over the file. `write` is rejected. |
 | `shomagent readwrite <path>` | `ask` / `talk`, plus `write <id> "<text>"` (append) and `write <id> --replace`. |
 | `shomagent dream [path]` | Foreground generative journal (default `dream.md`). Seeds a bash/Python topic, appends ReAct beats; type a line to steer, `quit` to leave. Per-beat rain uses `ENGRAM_MATRIX*`. |
+| `shomagent dream seed [path]` | Same journal, but waits for a user-written seed (end with `.` or Ctrl-D) before the first LLM beat. |
 | `pause` / `resume` / `stop <id>` | Process lifecycle. `stop` on a document detaches and keeps the file. |
 
 `--persist` writes `./shomagent_crew.d/<name>.toml`. Findings interrupt between prompts via `/run/shomagent/notify`. `:shomagent` or `:agents` lists the roster. `SHOMAGENT_STUB_LLM=1` for CI without a model. The summarizer uses the same local OpenAI-compatible URL.
@@ -160,7 +161,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 | `learn` | on demand via `load_skill` |
 | `ignore_llm_for_these_commands` | on demand; the shell also reads it as the TUI bypass list |
 
-`:menu` / `:m` on a color TTY: Modes, Learn, Packages, shomagent, Help, System. `:help` is the same map as text. Both stay available from the ready line.
+`:menu` / `:m` on a color TTY: Modes, Learn, Packages, shomagent, Help, System. Under shomagent: list agents, type a filename for `readwrite` / `dream seed`, or pick an opened document for `ask` / `talk`. `:help` is the same map as text. Both stay available from the ready line.
 
 ## If you are changing the repository
 

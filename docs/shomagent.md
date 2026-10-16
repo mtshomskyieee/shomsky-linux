@@ -20,6 +20,7 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `ask <id> "<q>"` | One-shot Q&A; answer is `#N > …` |
 | `talk <id>` | Interactive chat (`:q` to leave) |
 | `dream [path]` | Generative dream journal (default `dream.md`; `quit` to leave) |
+| `dream seed [path]` | Same, but pause for a user-written seed before the first beat |
 | `pause` / `resume` / `stop <id>` | Lifecycle |
 
 ## Quick use
@@ -58,6 +59,9 @@ Inside `engram-shell`, findings interrupt between prompts:
 ```
 
 Meta: `:shomagent` or `:agents` lists the roster; `:shomagent talk N` peeks.
+Inside the shell, `:menu` → **shomagent** offers list agents, `readwrite` /
+`dream seed` (type a filename), `ask` / `talk` (pick an opened document), and
+`stop` / end (pick any agent — documents detach and keep the file).
 
 ## Typical use
 
@@ -124,12 +128,25 @@ commands are shown and saved; they are not executed.
 ```bash
 shomagent dream              # journal → dream.md
 shomagent dream ideas.md     # journal → ideas.md
+shomagent dream seed         # wait for your seed, then dream → dream.md
+shomagent dream seed ideas.md
 ```
+
+With `dream seed`, the session pauses first: type or paste the opening seed,
+then a line containing only `.` (or Ctrl-D) to plant it and begin dreaming.
+Type `quit` before planting to leave without writing.
 
 On a color TTY each beat crystallizes through the same green character rain as
 the splash (`ENGRAM_MATRIX`, `ENGRAM_MATRIX_SECS`, `ENGRAM_MATRIX_GLYPHS`).
-Type a line to steer the next beat; type `quit` to leave. The roster glyph for
-a live dream member is `~`.
+Tall beats are clipped to the terminal height for the rain; overflow prints
+underneath. Default craft is bash/python, but steering may leave that freely.
+Each LLM turn stays small-model friendly: a short recent excerpt plus a hidden
+one-line gist of the last beat (not the whole journal, and not shown as a
+`CARRY:` line). While the model works, a spinner on the `thinking…` line
+(`[/] … 12s`, same `ENGRAM_SPINNER` gate as the shell) shows the session is
+alive. A visible `steer>` prompt accepts normal typed input (echoed) at any
+time — including while thinking. Press Enter to send; type `quit` to leave.
+The roster glyph for a live dream member is `~`.
 
 ## Drop-ins (`shomagent_crew.d`)
 

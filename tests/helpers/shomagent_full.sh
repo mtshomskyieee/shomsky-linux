@@ -148,7 +148,7 @@ expect_fail "write unknown member" "$SHOMAGENT" write 99 "hi"
 
 # --- dream (piped: no rain; stub LLM) ---
 dream_out="$(printf 'quit\n' | "$SHOMAGENT" dream dream-test.md 2>&1 || true)"
-need "$dream_out" "dream|seed|generators" "dream seed session"
+need "$dream_out" "dream|seed|generators" "dream LLM-seed session"
 [ -f dream-test.md ] && ok "dream-test.md created" || bad "dream-test.md missing"
 need "$(cat dream-test.md)" "seed|generators|python" "dream file has seed"
 
@@ -156,8 +156,15 @@ dream_out="$(printf '%s\n' 'pipes as patience' 'quit' | "$SHOMAGENT" dream dream
 need "$dream_out" "pipes as patience|steered" "dream steered beat on terminal"
 need "$(cat dream-steer.md)" "pipes as patience" "dream file contains steering"
 
+# User-planted seed: pause for text, end with `.`, then quit before more beats.
+dream_out="$(printf '%s\n' '**bash** — user planted doorway' 'a short note about patience' '.' 'quit' | "$SHOMAGENT" dream seed dream-plant.md 2>&1 || true)"
+need "$dream_out" "user planted doorway|seed" "dream seed plant session"
+[ -f dream-plant.md ] && ok "dream-plant.md created" || bad "dream-plant.md missing"
+need "$(cat dream-plant.md)" "user planted doorway" "dream file has user seed"
+need_not "$(cat dream-plant.md)" "generators as polite laziness" "user seed skipped LLM seed"
+
 roster="$("$SHOMAGENT" 2>&1)"
-need_not "$roster" "dream-test.md|dream-steer.md" "dream members ended after quit"
+need_not "$roster" "dream-test.md|dream-steer.md|dream-plant.md" "dream members ended after quit"
 
 echo
 echo "shomagent full suite: ${PASS} passed, ${FAIL} failed"
