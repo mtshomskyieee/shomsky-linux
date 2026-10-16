@@ -22,6 +22,26 @@ pub enum MenuAction {
     ExitShell,
 }
 
+/// One shomagent roster entry for menu pickers (opened docs, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShomagentMemberBrief {
+    pub id: u32,
+    pub name: String,
+    /// `read` / `readwrite` / `dream` / process states.
+    pub state: String,
+    /// Document path for doc members; command line for process members.
+    pub path: String,
+}
+
+impl ShomagentMemberBrief {
+    pub fn is_document(&self) -> bool {
+        matches!(
+            self.state.as_str(),
+            "read" | "readwrite" | "dream"
+        )
+    }
+}
+
 /// Snapshot of REPL state the menu needs to draw / decide.
 #[derive(Debug, Clone)]
 pub struct MenuContext {
@@ -29,6 +49,8 @@ pub struct MenuContext {
     pub allow_root_mode: bool,
     pub pending_learn: bool,
     pub packages_path: PathBuf,
+    /// Live roster snapshot (may be empty if daemon is down).
+    pub shomagent_members: Vec<ShomagentMemberBrief>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +102,32 @@ enum Focus {
     Items,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilePromptKind {
+    ReadWrite,
+    DreamSeed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemberVerb {
+    Ask,
+    Talk,
+    /// Stop a process or detach a document / dream member.
+    Stop,
+}
+
+/// Nested shomagent flow: type a path, or pick a member.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShomagentSub {
+    PromptFile {
+        kind: FilePromptKind,
+        buf: String,
+    },
+    PickMember {
+        kind: MemberVerb,
+    },
+}
+
 /// Pure navigation state — unit-tested without a TTY.
 #[derive(Debug, Clone)]
 pub struct MenuState {
@@ -92,10 +140,13 @@ pub struct MenuState {
     saved_pick: Option<String>,
     /// Tracked package waiting for uninstall / reinstall confirm.
     package_pick: Option<(String, PackageStatus)>,
+    /// Nested shomagent filename / member picker.
+    shomagent_sub: Option<ShomagentSub>,
     allow_root_mode: bool,
     mode: Mode,
     pending_learn: bool,
     packages_path: PathBuf,
+    shomagent_members: Vec<ShomagentMemberBrief>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +165,12 @@ enum ItemKind {
     Saved(String),
     /// Ledger package. Enter asks to uninstall or reinstall.
     TrackedPackage { name: String, status: PackageStatus },
+    /// Prompt for a filename, then insert `shomagent … <file>`.
+    ShomagentPromptFile(FilePromptKind),
+    /// Enter member-picker submenu for ask/talk.
+    ShomagentPickMember(MemberVerb),
+    /// A concrete opened document chosen for ask/talk.
+    ShomagentMember { id: u32, verb: MemberVerb },
     ExitShell,
     InfoOnly,
 }
@@ -127,10 +184,12 @@ impl MenuState {
             exit_confirm: false,
             saved_pick: None,
             package_pick: None,
+            shomagent_sub: None,
             allow_root_mode: ctx.allow_root_mode,
             mode: ctx.mode,
             pending_learn: ctx.pending_learn,
             packages_path: ctx.packages_path.clone(),
+            shomagent_members: ctx.shomagent_members.clone(),
         }
     }
 
@@ -138,7 +197,20 @@ impl MenuState {
         Category::from_index(self.category_idx)
     }
 
+    fn in_overlay(&self) -> bool {
+        self.exit_confirm
+            || self.saved_pick.is_some()
+            || self.package_pick.is_some()
+            || matches!(
+                self.shomagent_sub,
+                Some(ShomagentSub::PromptFile { .. })
+            )
+    }
+
     fn items(&self) -> Vec<Item> {
+        if let Some(ShomagentSub::PickMember { kind }) = self.shomagent_sub {
+            return member_pick_items(&self.shomagent_members, kind);
+        }
         items_for(
             self.category(),
             self.mode,
@@ -149,10 +221,16 @@ impl MenuState {
     }
 
     pub fn move_up(&mut self) {
-        if self.exit_confirm || self.saved_pick.is_some() || self.package_pick.is_some() {
+        if self.in_overlay() {
             return;
         }
-        match self.focus {
+        // Member picker stays locked to the item list until Esc.
+        let focus = if matches!(self.shomagent_sub, Some(ShomagentSub::PickMember { .. })) {
+            Focus::Items
+        } else {
+            self.focus
+        };
+        match focus {
             Focus::Categories => {
                 if self.category_idx == 0 {
                     self.category_idx = Category::ALL.len() - 1;
@@ -176,10 +254,15 @@ impl MenuState {
     }
 
     pub fn move_down(&mut self) {
-        if self.exit_confirm || self.saved_pick.is_some() || self.package_pick.is_some() {
+        if self.in_overlay() {
             return;
         }
-        match self.focus {
+        let focus = if matches!(self.shomagent_sub, Some(ShomagentSub::PickMember { .. })) {
+            Focus::Items
+        } else {
+            self.focus
+        };
+        match focus {
             Focus::Categories => {
                 self.category_idx = (self.category_idx + 1) % Category::ALL.len();
                 self.item_idx = 0;
@@ -207,11 +290,15 @@ impl MenuState {
             self.package_pick = None;
             return;
         }
+        if self.shomagent_sub.is_some() {
+            self.clear_shomagent_sub();
+            return;
+        }
         self.focus = Focus::Categories;
     }
 
     pub fn focus_right(&mut self) {
-        if self.exit_confirm || self.saved_pick.is_some() || self.package_pick.is_some() {
+        if self.in_overlay() || self.shomagent_sub.is_some() {
             return;
         }
         self.focus = Focus::Items;
@@ -234,10 +321,20 @@ impl MenuState {
             self.package_pick = None;
             return;
         }
+        if self.shomagent_sub.is_some() {
+            self.clear_shomagent_sub();
+            return;
+        }
         self.focus = match self.focus {
             Focus::Categories => Focus::Items,
             Focus::Items => Focus::Categories,
         };
+    }
+
+    fn clear_shomagent_sub(&mut self) {
+        self.shomagent_sub = None;
+        self.item_idx = 0;
+        self.focus = Focus::Items;
     }
 
     /// Esc: cancel exit confirm → categories → dismiss.
@@ -252,6 +349,10 @@ impl MenuState {
         }
         if self.package_pick.is_some() {
             self.package_pick = None;
+            return None;
+        }
+        if self.shomagent_sub.is_some() {
+            self.clear_shomagent_sub();
             return None;
         }
         if self.focus == Focus::Items {
@@ -272,6 +373,9 @@ impl MenuState {
         if self.package_pick.is_some() {
             return self.confirm_package();
         }
+        if matches!(self.shomagent_sub, Some(ShomagentSub::PromptFile { .. })) {
+            return self.confirm_filename();
+        }
         if self.focus == Focus::Categories {
             self.focus = Focus::Items;
             return None;
@@ -290,12 +394,70 @@ impl MenuState {
                 self.package_pick = Some((name.clone(), *status));
                 None
             }
+            ItemKind::ShomagentPromptFile(kind) => {
+                self.shomagent_sub = Some(ShomagentSub::PromptFile {
+                    kind: *kind,
+                    buf: String::new(),
+                });
+                None
+            }
+            ItemKind::ShomagentPickMember(kind) => {
+                self.shomagent_sub = Some(ShomagentSub::PickMember { kind: *kind });
+                self.item_idx = 0;
+                self.focus = Focus::Items;
+                None
+            }
+            ItemKind::ShomagentMember { id, verb } => {
+                let line = match verb {
+                    MemberVerb::Ask => format!("shomagent ask {id} "),
+                    MemberVerb::Talk => format!("shomagent talk {id}"),
+                    MemberVerb::Stop => format!("shomagent stop {id}"),
+                };
+                Some(MenuAction::InsertLine(line))
+            }
             ItemKind::ExitShell => {
                 self.exit_confirm = true;
                 None
             }
             ItemKind::InfoOnly => None,
         }
+    }
+
+    /// Type into the filename prompt (printable ASCII).
+    pub fn filename_push(&mut self, c: char) {
+        if let Some(ShomagentSub::PromptFile { buf, .. }) = &mut self.shomagent_sub {
+            if !c.is_control() && buf.len() < 200 {
+                buf.push(c);
+            }
+        }
+    }
+
+    /// Backspace in the filename prompt.
+    pub fn filename_backspace(&mut self) {
+        if let Some(ShomagentSub::PromptFile { buf, .. }) = &mut self.shomagent_sub {
+            buf.pop();
+        }
+    }
+
+    /// Confirm a typed filename → insert the matching shomagent command.
+    pub fn confirm_filename(&mut self) -> Option<MenuAction> {
+        let Some(ShomagentSub::PromptFile { kind, buf }) = self.shomagent_sub.take() else {
+            return None;
+        };
+        let path = buf.trim();
+        if path.is_empty() {
+            // Keep prompting until the user types something or Esc.
+            self.shomagent_sub = Some(ShomagentSub::PromptFile {
+                kind,
+                buf,
+            });
+            return None;
+        }
+        let line = match kind {
+            FilePromptKind::ReadWrite => format!("shomagent readwrite {path}"),
+            FilePromptKind::DreamSeed => format!("shomagent dream seed {path}"),
+        };
+        Some(MenuAction::InsertLine(line))
     }
 
     /// Double-Esc while open: always quit the menu.
@@ -388,38 +550,7 @@ fn items_for(
         }
         Category::SavCmd => saved_command_items(),
         Category::Packages => package_items(packages_path),
-        Category::Shomagent => vec![
-            Item {
-                label: "roster".into(),
-                detail: "List background agents".into(),
-                kind: ItemKind::RunMeta(":shomagent"),
-            },
-            Item {
-                label: "watch …".into(),
-                detail: "Supervise a process stream".into(),
-                kind: ItemKind::InsertLine("shomagent watch \"\" --tell-me \"\"".into()),
-            },
-            Item {
-                label: "ask …".into(),
-                detail: "One-shot question to a member".into(),
-                kind: ItemKind::InsertLine("shomagent ask ".into()),
-            },
-            Item {
-                label: "talk …".into(),
-                detail: "Interactive chat with a member".into(),
-                kind: ItemKind::InsertLine("shomagent talk ".into()),
-            },
-            Item {
-                label: "read …".into(),
-                detail: "Attach a read-only document".into(),
-                kind: ItemKind::InsertLine("shomagent read ".into()),
-            },
-            Item {
-                label: "readwrite …".into(),
-                detail: "Attach a read/write document".into(),
-                kind: ItemKind::InsertLine("shomagent readwrite ".into()),
-            },
-        ],
+        Category::Shomagent => shomagent_root_items(),
         Category::Help => vec![
             Item {
                 label: "full help".into(),
@@ -485,6 +616,95 @@ fn items_for(
             },
         ],
     }
+}
+
+fn shomagent_root_items() -> Vec<Item> {
+    vec![
+        Item {
+            label: "list agents".into(),
+            detail: "Show the live shomagent roster".into(),
+            kind: ItemKind::RunMeta(":shomagent"),
+        },
+        Item {
+            label: "readwrite <file>".into(),
+            detail: "Attach a read/write document — type a filename".into(),
+            kind: ItemKind::ShomagentPromptFile(FilePromptKind::ReadWrite),
+        },
+        Item {
+            label: "ask <opened file>".into(),
+            detail: "One-shot question to an attached document".into(),
+            kind: ItemKind::ShomagentPickMember(MemberVerb::Ask),
+        },
+        Item {
+            label: "talk <opened file>".into(),
+            detail: "Interactive chat with an attached document".into(),
+            kind: ItemKind::ShomagentPickMember(MemberVerb::Talk),
+        },
+        Item {
+            label: "dream seed <file>".into(),
+            detail: "Plant your own seed, then dream — type a filename".into(),
+            kind: ItemKind::ShomagentPromptFile(FilePromptKind::DreamSeed),
+        },
+        Item {
+            label: "stop / end <agent>".into(),
+            detail: "Stop a watcher or detach a document (file kept)".into(),
+            kind: ItemKind::ShomagentPickMember(MemberVerb::Stop),
+        },
+    ]
+}
+
+fn member_pick_items(members: &[ShomagentMemberBrief], verb: MemberVerb) -> Vec<Item> {
+    let pool: Vec<_> = match verb {
+        MemberVerb::Ask | MemberVerb::Talk => {
+            members.iter().filter(|m| m.is_document()).collect()
+        }
+        MemberVerb::Stop => members.iter().collect(),
+    };
+    if pool.is_empty() {
+        let hint = match verb {
+            MemberVerb::Ask | MemberVerb::Talk => {
+                "No opened documents — use readwrite <file> first"
+            }
+            MemberVerb::Stop => "No agents — nothing to stop",
+        };
+        return vec![Item {
+            label: "(none)".into(),
+            detail: hint.into(),
+            kind: ItemKind::InfoOnly,
+        }];
+    }
+    let verb_word = match verb {
+        MemberVerb::Ask => "ask",
+        MemberVerb::Talk => "talk",
+        MemberVerb::Stop => "stop",
+    };
+    pool.into_iter()
+        .map(|m| {
+            let glyph = match m.state.as_str() {
+                "read" => "◇",
+                "readwrite" => "◆",
+                "dream" => "~",
+                "running" => "▶",
+                "paused" => "⏸",
+                "stopped" | "exited" => "■",
+                _ => "■",
+            };
+            let detail = match verb {
+                MemberVerb::Stop if m.is_document() => {
+                    format!("detach → {} (file kept)", m.path)
+                }
+                _ => format!("{verb_word} → {}", m.path),
+            };
+            Item {
+                label: format!("#{id} {glyph} {name}", id = m.id, name = m.name),
+                detail,
+                kind: ItemKind::ShomagentMember {
+                    id: m.id,
+                    verb,
+                },
+            }
+        })
+        .collect()
 }
 
 fn saved_command_items() -> Vec<Item> {
@@ -609,24 +829,42 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
     let mut esc_armed = false;
     loop {
         draw(state);
+        let typing_filename =
+            matches!(state.shomagent_sub, Some(ShomagentSub::PromptFile { .. }));
         match read_key() {
-            Key::Up | Key::Char('k') | Key::Char('K') => {
+            Key::Up if !typing_filename => {
                 esc_armed = false;
                 state.move_up();
             }
-            Key::Down | Key::Char('j') | Key::Char('J') => {
+            Key::Char('k') | Key::Char('K') if !typing_filename => {
+                esc_armed = false;
+                state.move_up();
+            }
+            Key::Down if !typing_filename => {
                 esc_armed = false;
                 state.move_down();
             }
-            Key::Left | Key::Char('h') | Key::Char('H') => {
+            Key::Char('j') | Key::Char('J') if !typing_filename => {
+                esc_armed = false;
+                state.move_down();
+            }
+            Key::Left if !typing_filename => {
                 esc_armed = false;
                 state.focus_left();
             }
-            Key::Right | Key::Char('l') | Key::Char('L') => {
+            Key::Char('h') | Key::Char('H') if !typing_filename => {
+                esc_armed = false;
+                state.focus_left();
+            }
+            Key::Right if !typing_filename => {
                 esc_armed = false;
                 state.focus_right();
             }
-            Key::Tab => {
+            Key::Char('l') | Key::Char('L') if !typing_filename => {
+                esc_armed = false;
+                state.focus_right();
+            }
+            Key::Tab if !typing_filename => {
                 esc_armed = false;
                 state.toggle_pane();
             }
@@ -635,6 +873,14 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 if let Some(a) = state.activate() {
                     return a;
                 }
+            }
+            Key::Backspace if typing_filename => {
+                esc_armed = false;
+                state.filename_backspace();
+            }
+            Key::Char(c) if typing_filename => {
+                esc_armed = false;
+                state.filename_push(c);
             }
             Key::Esc => {
                 if esc_armed {
@@ -645,7 +891,7 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                     return a;
                 }
             }
-            Key::Char('q') | Key::Char('Q') => {
+            Key::Char('q') | Key::Char('Q') if !typing_filename => {
                 return MenuAction::Dismiss;
             }
             Key::Char('y') | Key::Char('Y') if state.exit_confirm => {
@@ -687,43 +933,43 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 esc_armed = false;
                 let _ = state.confirm_saved(true);
             }
-            Key::Char('1') => {
+            Key::Char('1') if state.shomagent_sub.is_none() => {
                 esc_armed = false;
                 state.category_idx = 0;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
-            Key::Char('2') => {
+            Key::Char('2') if state.shomagent_sub.is_none() => {
                 esc_armed = false;
                 state.category_idx = 1;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
-            Key::Char('3') => {
+            Key::Char('3') if state.shomagent_sub.is_none() => {
                 esc_armed = false;
                 state.category_idx = 2;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
-            Key::Char('4') => {
+            Key::Char('4') if state.shomagent_sub.is_none() => {
                 esc_armed = false;
                 state.category_idx = 3;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
-            Key::Char('5') => {
+            Key::Char('5') if state.shomagent_sub.is_none() => {
                 esc_armed = false;
                 state.category_idx = 4;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
-            Key::Char('6') => {
+            Key::Char('6') if state.shomagent_sub.is_none() => {
                 esc_armed = false;
                 state.category_idx = 5;
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
-            Key::Char('7') => {
+            Key::Char('7') if state.shomagent_sub.is_none() => {
                 esc_armed = false;
                 state.category_idx = 6;
                 state.item_idx = 0;
@@ -833,6 +1079,17 @@ fn draw(state: &MenuState) {
                 format!("`{name}`  [r]einstall / Enter / Esc")
             }
         }
+    } else if let Some(ShomagentSub::PromptFile { kind, buf }) = &state.shomagent_sub {
+        let tag = match kind {
+            FilePromptKind::ReadWrite => "readwrite",
+            FilePromptKind::DreamSeed => "dream seed",
+        };
+        format!("{tag} file: {buf}█  Enter · Esc")
+    } else if let Some(ShomagentSub::PickMember { kind }) = &state.shomagent_sub {
+        match kind {
+            MemberVerb::Stop => "pick an agent to stop / detach · Esc back".to_string(),
+            _ => "pick an opened document · Esc back".to_string(),
+        }
     } else {
         items
             .get(state.item_idx)
@@ -891,6 +1148,7 @@ enum Key {
     Enter,
     Esc,
     Tab,
+    Backspace,
     Char(char),
     Other,
 }
@@ -904,6 +1162,7 @@ fn read_key() -> Key {
     match b[0] {
         b'\r' | b'\n' => Key::Enter,
         b'\t' => Key::Tab,
+        0x08 | 0x7f => Key::Backspace,
         0x1b => {
             // Either bare Esc or a CSI sequence. Peek briefly for '['.
             // Switch to non-blocking poll for the rest of the sequence.
@@ -945,7 +1204,14 @@ mod tests {
             allow_root_mode: true,
             pending_learn: false,
             packages_path: PathBuf::from("/engram/user/.packages.json"),
+            shomagent_members: vec![],
         }
+    }
+
+    fn ctx_with_docs(docs: Vec<ShomagentMemberBrief>) -> MenuContext {
+        let mut c = ctx();
+        c.shomagent_members = docs;
+        c
     }
 
     #[test]
@@ -974,7 +1240,29 @@ mod tests {
     }
 
     #[test]
-    fn shomagent_roster_runs_meta() {
+    fn shomagent_category_is_listed() {
+        assert!(Category::ALL.contains(&Category::Shomagent));
+        assert_eq!(Category::Shomagent.label(), "shomagent");
+        let s = MenuState::new(&ctx());
+        // Jump to category and confirm root actions exist.
+        let mut s = s;
+        s.category_idx = Category::Shomagent.index();
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "list agents".to_string(),
+                "readwrite <file>".to_string(),
+                "ask <opened file>".to_string(),
+                "talk <opened file>".to_string(),
+                "dream seed <file>".to_string(),
+                "stop / end <agent>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn shomagent_list_agents_runs_meta() {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
         s.item_idx = 0;
@@ -982,6 +1270,193 @@ mod tests {
             s.activate(),
             Some(MenuAction::RunMeta(":shomagent".into()))
         );
+    }
+
+    #[test]
+    fn shomagent_readwrite_prompts_for_filename() {
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 1; // readwrite <file>
+        assert_eq!(s.activate(), None);
+        assert!(matches!(
+            s.shomagent_sub,
+            Some(ShomagentSub::PromptFile {
+                kind: FilePromptKind::ReadWrite,
+                ..
+            })
+        ));
+        for c in "notes.md".chars() {
+            s.filename_push(c);
+        }
+        assert_eq!(
+            s.confirm_filename(),
+            Some(MenuAction::InsertLine("shomagent readwrite notes.md".into()))
+        );
+        assert!(s.shomagent_sub.is_none());
+    }
+
+    #[test]
+    fn shomagent_dream_seed_prompts_for_filename() {
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 4; // dream seed <file>
+        assert_eq!(s.activate(), None);
+        for c in "ideas.md".chars() {
+            s.filename_push(c);
+        }
+        s.filename_backspace(); // ideas.m
+        s.filename_push('d');
+        assert_eq!(
+            s.confirm_filename(),
+            Some(MenuAction::InsertLine("shomagent dream seed ideas.md".into()))
+        );
+    }
+
+    #[test]
+    fn shomagent_dream_seed_empty_filename_stays_open() {
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 4;
+        assert_eq!(s.activate(), None);
+        assert_eq!(s.confirm_filename(), None);
+        assert!(matches!(
+            s.shomagent_sub,
+            Some(ShomagentSub::PromptFile {
+                kind: FilePromptKind::DreamSeed,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn shomagent_ask_picks_opened_document() {
+        let mut s = MenuState::new(&ctx_with_docs(vec![
+            ShomagentMemberBrief {
+                id: 2,
+                name: "notes.md".into(),
+                state: "readwrite".into(),
+                path: "/engram/user/notes.md".into(),
+            },
+            ShomagentMemberBrief {
+                id: 9,
+                name: "watcher".into(),
+                state: "running".into(),
+                path: "npm run dev".into(),
+            },
+        ]));
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 2; // ask
+        assert_eq!(s.activate(), None);
+        assert!(matches!(
+            s.shomagent_sub,
+            Some(ShomagentSub::PickMember {
+                kind: MemberVerb::Ask
+            })
+        ));
+        // Process members are filtered out — only the document remains.
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert_eq!(labels.len(), 1);
+        assert!(labels[0].contains("#2"));
+        s.item_idx = 0;
+        assert_eq!(
+            s.activate(),
+            Some(MenuAction::InsertLine("shomagent ask 2 ".into()))
+        );
+    }
+
+    #[test]
+    fn shomagent_talk_picks_opened_document() {
+        let mut s = MenuState::new(&ctx_with_docs(vec![ShomagentMemberBrief {
+            id: 3,
+            name: "doc".into(),
+            state: "read".into(),
+            path: "doc.md".into(),
+        }]));
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 3; // talk
+        assert_eq!(s.activate(), None);
+        s.item_idx = 0;
+        assert_eq!(
+            s.activate(),
+            Some(MenuAction::InsertLine("shomagent talk 3".into()))
+        );
+    }
+
+    #[test]
+    fn shomagent_ask_empty_roster_is_info_only() {
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 2;
+        assert_eq!(s.activate(), None);
+        assert_eq!(s.items()[0].label, "(none)");
+        s.item_idx = 0;
+        assert_eq!(s.activate(), None);
+    }
+
+    #[test]
+    fn shomagent_escape_leaves_member_picker() {
+        let mut s = MenuState::new(&ctx_with_docs(vec![ShomagentMemberBrief {
+            id: 1,
+            name: "a.md".into(),
+            state: "readwrite".into(),
+            path: "a.md".into(),
+        }]));
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 2;
+        assert_eq!(s.activate(), None);
+        assert!(s.shomagent_sub.is_some());
+        assert_eq!(s.escape(), None);
+        assert!(s.shomagent_sub.is_none());
+        assert_eq!(s.items()[0].label, "list agents");
+    }
+
+    #[test]
+    fn shomagent_stop_picks_any_member() {
+        let mut s = MenuState::new(&ctx_with_docs(vec![
+            ShomagentMemberBrief {
+                id: 1,
+                name: "notes.md".into(),
+                state: "readwrite".into(),
+                path: "notes.md".into(),
+            },
+            ShomagentMemberBrief {
+                id: 4,
+                name: "dev".into(),
+                state: "running".into(),
+                path: "npm run dev".into(),
+            },
+        ]));
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 5; // stop / end
+        assert_eq!(s.activate(), None);
+        assert!(matches!(
+            s.shomagent_sub,
+            Some(ShomagentSub::PickMember {
+                kind: MemberVerb::Stop
+            })
+        ));
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.iter().any(|l| l.contains("#1")));
+        assert!(labels.iter().any(|l| l.contains("#4")));
+        // Stop the document member.
+        s.item_idx = 0;
+        assert_eq!(
+            s.activate(),
+            Some(MenuAction::InsertLine("shomagent stop 1".into()))
+        );
+    }
+
+    #[test]
+    fn shomagent_stop_empty_roster_is_info_only() {
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 5;
+        assert_eq!(s.activate(), None);
+        assert_eq!(s.items()[0].label, "(none)");
+        assert!(s.items()[0].detail.contains("nothing to stop"));
+        s.item_idx = 0;
+        assert_eq!(s.activate(), None);
     }
 
     #[test]

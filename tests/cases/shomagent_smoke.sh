@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full shomagent verb suite (stub LLM): roster, read, readwrite, write, ask,
-# talk, watch, spawn, pause, resume, stop, persist, novelty.
+# talk, dream, watch, spawn, pause, resume, stop, persist, novelty.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

@@ -69,6 +69,28 @@ impl LlmClient {
     }
 
     pub async fn chat(&self, messages: &[ChatMessage], max_tokens: u32) -> Result<String> {
+        self.chat_with_temperature(messages, max_tokens, 0.0).await
+    }
+
+    pub async fn chat_with_temperature(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        temperature: f32,
+    ) -> Result<String> {
+        self.chat_with_temperature_timeout(messages, max_tokens, temperature, None)
+            .await
+    }
+
+    /// Like [`chat_with_temperature`], with an optional per-request timeout
+    /// (dream uses a shorter budget so small models cannot hang for minutes).
+    pub async fn chat_with_temperature_timeout(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        temperature: f32,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<String> {
         if self.stub {
             return Ok(stub_reply(messages));
         }
@@ -77,16 +99,16 @@ impl LlmClient {
             "model": self.model,
             "messages": messages,
             "stream": false,
-            "temperature": 0.0,
+            "temperature": temperature,
             "max_tokens": max_tokens,
         });
-        let resp = self
-            .http
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("shomagent chat request")?;
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
+        let resp = req.send().await.with_context(|| {
+            format!("shomagent chat request to {url} (model={})", self.model)
+        })?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
@@ -114,6 +136,45 @@ fn stub_reply(messages: &[ChatMessage]) -> String {
         .find(|m| m.role == "system")
         .map(|m| m.content.as_str())
         .unwrap_or("");
+
+    // Dream seed / beat stubs (stable for CI). No visible CARRY lines.
+    if system.contains("shomagent dream") {
+        if last_user.contains("Invent a NEW seed") || last_user.contains("NEW seed") {
+            return "## seed\n**python** — generators as polite laziness\n\n\
+                    one short hook about yield and iterators\n"
+                .into();
+        }
+        let steering = last_user
+            .lines()
+            .find(|l| l.starts_with("Reader steering") || l.contains("steering (follow"))
+            .map(|l| {
+                l.split(':')
+                    .nth(1)
+                    .unwrap_or(l)
+                    .trim()
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty());
+        // Also match older "Steering:" lines from tests.
+        let steering = steering.or_else(|| {
+            last_user
+                .lines()
+                .find(|l| l.starts_with("Steering:"))
+                .map(|l| l.trim_start_matches("Steering:").trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+        if let Some(s) = steering {
+            return format!(
+                "## beat\n**reason:** following the steer toward {s}\n\n\
+                 a small aside: `{s}` as a programming metaphor\n\n\
+                 ```bash\necho \"steered: {s}\"\n```\n"
+            );
+        }
+        return "## beat\n**reason:** drift into pipe composition\n\n\
+                bash pipelines are patience made linear\n\n\
+                ```bash\nprintf 'a\\nb\\n' | wc -l\n```\n"
+            .into();
+    }
 
     if system.contains("finding JSON") || system.contains("structured finding") {
         // Heuristic: if log mentions 500 / error / CVE, emit a finding JSON.
@@ -218,5 +279,21 @@ mod tests {
         ];
         let reply = stub_reply(&messages);
         assert!(reply.contains("\"none\":false") || reply.contains("HTTP 500"));
+    }
+
+    #[test]
+    fn stub_dream_seed_and_steering() {
+        let seed = stub_reply(&[
+            ChatMessage::system("You are shomagent dream #1: a late-night creative journal."),
+            ChatMessage::user("Invent a NEW seed about a different python idea (nonce=1)."),
+        ]);
+        assert!(seed.contains("## seed"), "seed: {seed}");
+        assert!(seed.contains("python") || seed.contains("bash"), "seed: {seed}");
+
+        let beat = stub_reply(&[
+            ChatMessage::system("You are shomagent dream #1: continue a creative journal."),
+            ChatMessage::user("Reader steering (follow this): pipes as patience"),
+        ]);
+        assert!(beat.contains("pipes as patience"), "beat: {beat}");
     }
 }

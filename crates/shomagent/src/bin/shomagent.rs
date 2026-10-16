@@ -4,7 +4,12 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use shomagent::daemon::rpc;
 use shomagent::protocol::{Request, Response};
-use std::io::{self, BufRead, Write};
+use shomagent::rain::{self, LineBuf};
+use std::io::{self, BufRead, IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -83,6 +88,13 @@ enum Commands {
         /// Replace the whole file instead of appending
         #[arg(long)]
         replace: bool,
+    },
+    /// Generative dream journal (persistent TUI until quit)
+    Dream {
+        /// Journal path, or `seed` to plant a user-written opening first
+        arg0: Option<String>,
+        /// Journal path when arg0 is `seed` (default dream.md)
+        arg1: Option<String>,
     },
     /// Pause a member
     Pause {
@@ -187,6 +199,10 @@ async fn main() -> Result<()> {
                 Response::Err { message } => bail!("{message}"),
             }
         }
+        Some(Commands::Dream { arg0, arg1 }) => {
+            let (path, user_seed) = parse_dream_args(arg0, arg1)?;
+            dream_loop(path, user_seed).await
+        }
         Some(Commands::Pause { id }) => simple(Request::Pause { id }).await,
         Some(Commands::Resume { id }) => simple(Request::Resume { id }).await,
         Some(Commands::Stop { id }) => simple(Request::Stop { id }).await,
@@ -230,6 +246,7 @@ async fn print_roster() -> Result<()> {
                     "paused" => "⏸",
                     "read" => "◇",
                     "readwrite" => "◆",
+                    "dream" => "~",
                     _ => "■",
                 };
                 let runtime = format_runtime(m.runtime_secs);
@@ -280,12 +297,14 @@ async fn ask_once(id: u32, question: &str) -> Result<()> {
 }
 
 async fn talk_loop(id: u32) -> Result<()> {
-    // Verify member exists
     match rpc(&Request::Context { id }).await? {
         Response::Ok {
             context: Some(ctx), ..
         } => {
-            println!("shomagent talk #{} ({}) — empty line or :q to leave", id, ctx.name);
+            println!(
+                "shomagent talk #{} ({}) — empty line or :q to leave",
+                id, ctx.name
+            );
         }
         Response::Err { message } => bail!("{message}"),
         _ => bail!("no context for #{id}"),
@@ -320,4 +339,505 @@ async fn talk_loop(id: u32) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_quit(line: &str) -> bool {
+    matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "quit" | ":q" | ":quit" | "exit"
+    )
+}
+
+fn classify_line(line: &str) -> Option<DreamInput> {
+    let t = line.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if is_quit(t) {
+        Some(DreamInput::Quit)
+    } else {
+        Some(DreamInput::Steer(t.to_string()))
+    }
+}
+
+enum DreamInput {
+    Quit,
+    Steer(String),
+}
+
+fn parse_dream_args(arg0: Option<String>, arg1: Option<String>) -> Result<(String, bool)> {
+    match (arg0.as_deref(), arg1.as_deref()) {
+        (None, None) => Ok(("dream.md".into(), false)),
+        (Some("seed"), None) => Ok(("dream.md".into(), true)),
+        (Some("seed"), Some(p)) => Ok((p.to_string(), true)),
+        (Some(p), None) => Ok((p.to_string(), false)),
+        (Some(_), Some(_)) => {
+            bail!("usage: shomagent dream [path] | shomagent dream seed [path]")
+        }
+        (None, Some(_)) => unreachable!("arg1 without arg0"),
+    }
+}
+
+/// Collect a multi-line seed from stdin until `.` alone, quit, or EOF.
+fn read_user_seed() -> Result<Option<String>> {
+    let stdin = io::stdin();
+    let mut lines = Vec::new();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if is_quit(trimmed) && lines.iter().all(|l: &String| l.trim().is_empty()) {
+            return Ok(None);
+        }
+        if trimmed == "." {
+            break;
+        }
+        lines.push(line);
+    }
+    let text = lines.join("\n");
+    if text.trim().is_empty() {
+        bail!("empty seed — write something, then a line with only `.`");
+    }
+    Ok(Some(text))
+}
+
+async fn dream_loop(path: String, user_seed: bool) -> Result<()> {
+    let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+
+    let id = match rpc(&Request::Dream {
+        path: path.clone(),
+        name: None,
+    })
+    .await?
+    {
+        Response::Ok {
+            member: Some(m),
+            message,
+            ..
+        } => {
+            if let Some(msg) = message {
+                println!("{msg}");
+            }
+            m.id
+        }
+        Response::Ok {
+            message: Some(m), ..
+        } => {
+            println!("{m}");
+            m.split('#')
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| anyhow::anyhow!("dream attach returned no member id"))?
+        }
+        Response::Err { message } => bail!("{message}"),
+        _ => bail!("dream attach failed"),
+    };
+
+    println!("shomagent dream — {path}");
+    let mut beat_index: u32 = 0;
+
+    if user_seed {
+        println!("write your seed below");
+        println!("end with a line containing only `.` · Ctrl-D also works · quit to leave");
+        let _ = io::stdout().flush();
+        match read_user_seed()? {
+            None => {
+                let _ = rpc(&Request::DreamEnd { id }).await;
+                println!("quit — leaving dream");
+                return Ok(());
+            }
+            Some(text) => match rpc(&Request::DreamPlant {
+                id,
+                text,
+            })
+            .await?
+            {
+                Response::Ok {
+                    reply: Some(body), ..
+                } => {
+                    let display = format!("── seed ──\n{}", body.trim_end());
+                    beat_index = 1;
+                    let rained = if tty {
+                        rain::play_text(&display, &mut LineBuf::default(), None, |_| {})
+                    } else {
+                        false
+                    };
+                    if !rained {
+                        println!("{display}");
+                    }
+                    if tty {
+                        let _ = write!(io::stdout(), "\x1b[?25h");
+                    }
+                }
+                Response::Err { message } => {
+                    let _ = rpc(&Request::DreamEnd { id }).await;
+                    bail!("{message}");
+                }
+                _ => {
+                    let _ = rpc(&Request::DreamEnd { id }).await;
+                    bail!("dream plant failed");
+                }
+            },
+        }
+    }
+
+    println!("type a line at the steer> prompt · Enter to send · quit to leave");
+    let _ = io::stdout().flush();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_hook(stop);
+    }
+
+    // Cooked stdin + echo: a background thread blocking-reads whole lines so the
+    // LLM wait stays async and the user always sees what they type.
+    let line_rx = spawn_line_reader(Arc::clone(&stop), tty);
+
+    let mut steering: Option<String> = None;
+    let mut stdin_eof = false;
+    let mut fail_streak: u32 = 0;
+
+    let result = async {
+        // Honor a quit (or early steer) already on stdin — e.g. after
+        // `dream seed` collected the plant text from the same pipe.
+        if user_seed {
+            for _ in 0..50 {
+                match drain_line_rx(&line_rx) {
+                    LineEvent::Quit => {
+                        println!("quit — leaving dream");
+                        return Ok(());
+                    }
+                    LineEvent::Steer(s) => {
+                        steering = Some(s);
+                        break;
+                    }
+                    LineEvent::Eof => {
+                        stdin_eof = true;
+                        break;
+                    }
+                    LineEvent::None => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
+            }
+            if stdin_eof && !tty {
+                println!("quit — leaving dream");
+                return Ok(());
+            }
+        }
+
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+
+            show_steer_prompt(tty);
+
+            // Keep a copy so a failed beat can retry with the same steer.
+            let step_steering = steering.clone();
+            let step_req = Request::DreamStep {
+                id,
+                steering: step_steering.clone(),
+            };
+            let step_fut = rpc(&step_req);
+            tokio::pin!(step_fut);
+
+            let mut abort_quit = false;
+            let mut step_failed: Option<String> = None;
+            let think_start = Instant::now();
+            let mut spin_frame = 0usize;
+            let mut last_spin = Instant::now();
+            // Draw first spinner frame immediately so the wait feels alive.
+            if tty {
+                tick_dream_spinner(spin_frame, steering.is_some(), think_start.elapsed());
+                spin_frame = 1;
+            }
+
+            let reply = loop {
+                tokio::select! {
+                    resp = &mut step_fut => {
+                        break match resp {
+                            Ok(Response::Ok { reply: Some(r), .. }) => {
+                                steering = None; // consumed by a successful beat
+                                r
+                            }
+                            Ok(Response::Ok { reply: None, .. }) => {
+                                step_failed = Some("(no dream reply)".into());
+                                String::new()
+                            }
+                            Ok(Response::Err { message }) => {
+                                step_failed = Some(message);
+                                String::new()
+                            }
+                            Err(e) => {
+                                step_failed = Some(format!("{e:#}"));
+                                String::new()
+                            }
+                        };
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(40)) => {
+                        if stop.load(Ordering::SeqCst) {
+                            abort_quit = true;
+                            break String::new();
+                        }
+                        match drain_line_rx(&line_rx) {
+                            LineEvent::Quit => {
+                                abort_quit = true;
+                                break String::new();
+                            }
+                            LineEvent::Steer(s) => {
+                                steering = Some(s);
+                                if tty {
+                                    tick_dream_spinner(
+                                        spin_frame,
+                                        true,
+                                        think_start.elapsed(),
+                                    );
+                                }
+                            }
+                            LineEvent::Eof => {
+                                stdin_eof = true;
+                            }
+                            LineEvent::None => {}
+                        }
+                        if tty && last_spin.elapsed() >= Duration::from_millis(120) {
+                            tick_dream_spinner(
+                                spin_frame,
+                                steering.is_some(),
+                                think_start.elapsed(),
+                            );
+                            spin_frame = spin_frame.wrapping_add(1);
+                            last_spin = Instant::now();
+                        }
+                    }
+                }
+            };
+
+            if tty {
+                // Finish the steer line so the beat does not collide with it.
+                println!();
+            }
+
+            if abort_quit {
+                println!("quit — leaving dream");
+                break;
+            }
+
+            if let Some(err) = step_failed {
+                fail_streak = fail_streak.saturating_add(1);
+                eprintln!("dream: beat failed — {err}");
+                if steering.is_none() {
+                    steering = step_steering;
+                }
+                if fail_streak >= 2 {
+                    eprintln!(
+                        "dream: pausing after repeated failures — type a steer line to retry, or quit"
+                    );
+                    // Wait for the user instead of hammering a slow model.
+                    let mut pause_quit = false;
+                    loop {
+                        if stop.load(Ordering::SeqCst) {
+                            pause_quit = true;
+                            break;
+                        }
+                        match drain_line_rx(&line_rx) {
+                            LineEvent::Quit => {
+                                pause_quit = true;
+                                break;
+                            }
+                            LineEvent::Steer(s) => {
+                                steering = Some(s);
+                                fail_streak = 0;
+                                break;
+                            }
+                            LineEvent::Eof => {
+                                stdin_eof = true;
+                                if !tty {
+                                    pause_quit = true;
+                                    break;
+                                }
+                            }
+                            LineEvent::None => {}
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    if pause_quit {
+                        println!("quit — leaving dream");
+                        break;
+                    }
+                    continue;
+                }
+                eprintln!("dream: retrying once more…");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            fail_streak = 0;
+
+            let banner = if beat_index == 0 {
+                "── seed ──".to_string()
+            } else {
+                format!("── beat {beat_index} ──")
+            };
+            let display = format!("{banner}\n{}", reply.trim_end());
+            beat_index += 1;
+
+            // Rain is visual only; steer input stays on the cooked line reader.
+            let rained = if tty {
+                rain::play_text(&display, &mut LineBuf::default(), None, |_| {})
+            } else {
+                false
+            };
+            if !rained {
+                println!("{display}");
+            }
+            // Ensure cursor is visible again after rain hides it.
+            if tty {
+                let _ = write!(io::stdout(), "\x1b[?25h");
+            }
+
+            // Apply any line that arrived during rain / the last think slice.
+            match drain_line_rx(&line_rx) {
+                LineEvent::Quit => break,
+                LineEvent::Steer(s) => steering = Some(s),
+                LineEvent::Eof => stdin_eof = true,
+                LineEvent::None => {}
+            }
+
+            if stdin_eof && !tty {
+                break;
+            }
+            if !tty && steering.is_none() {
+                // Piped with no further steer queued: one more drain then exit.
+                match drain_line_rx(&line_rx) {
+                    LineEvent::Quit | LineEvent::Eof | LineEvent::None => break,
+                    LineEvent::Steer(s) => steering = Some(s),
+                }
+                if steering.is_none() {
+                    break;
+                }
+            }
+            // Next loop iteration reprints steer> under "thinking…".
+        }
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    stop.store(true, Ordering::SeqCst);
+
+    let _ = rpc(&Request::DreamEnd { id }).await;
+    if let Err(e) = result {
+        eprintln!("dream error: {e}");
+        return Err(e);
+    }
+    println!("dream ended — journal kept at {path}");
+    Ok(())
+}
+
+enum LineEvent {
+    None,
+    Quit,
+    Steer(String),
+    Eof,
+}
+
+/// Blocking `read_line` on a thread (cooked terminal, normal echo).
+fn spawn_line_reader(stop: Arc<AtomicBool>, echo_prompt_hint: bool) -> Receiver<Option<String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        // First prompt is printed by the async loop; this thread only reads.
+        let _ = echo_prompt_hint;
+        while !stop.load(Ordering::SeqCst) {
+            let mut buf = String::new();
+            match stdin.lock().read_line(&mut buf) {
+                Ok(0) => {
+                    let _ = tx.send(None);
+                    break;
+                }
+                Ok(_) => {
+                    if tx.send(Some(buf)).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let _ = tx.send(None);
+                    break;
+                }
+            }
+        }
+    });
+    rx
+}
+
+fn drain_line_rx(rx: &Receiver<Option<String>>) -> LineEvent {
+    // One line per call (FIFO) so piped `steer\nquit\n` applies steer then quit.
+    match rx.try_recv() {
+        Err(TryRecvError::Empty) => LineEvent::None,
+        Err(TryRecvError::Disconnected) => LineEvent::Eof,
+        Ok(None) => LineEvent::Eof,
+        Ok(Some(line)) => match classify_line(&line) {
+            Some(DreamInput::Quit) => LineEvent::Quit,
+            Some(DreamInput::Steer(s)) => LineEvent::Steer(s),
+            None => LineEvent::None,
+        },
+    }
+}
+
+/// Same frames as engram-shell's wait spinner (`- \ | /`).
+const DREAM_SPIN: &[char] = &['-', '\\', '|', '/'];
+
+fn spinner_enabled() -> bool {
+    match std::env::var("ENGRAM_SPINNER")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "0" | "off" | "false" | "no" => false,
+        "always" | "1" | "on" | "true" | "yes" => true,
+        _ => io::stdout().is_terminal(),
+    }
+}
+
+fn show_steer_prompt(tty: bool) {
+    // Status line (animated while waiting) + cooked steer prompt under it.
+    if tty && spinner_enabled() {
+        println!("thinking… -");
+    } else {
+        println!("thinking…");
+    }
+    print!("steer(type quit to exit)> ");
+    let _ = write!(io::stdout(), "\x1b[?25h");
+    let _ = io::stdout().flush();
+}
+
+/// Update the status line above `steer>` without disturbing typed input.
+fn tick_dream_spinner(frame: usize, steered: bool, elapsed: Duration) {
+    if !spinner_enabled() {
+        return;
+    }
+    let spin = DREAM_SPIN[frame % DREAM_SPIN.len()];
+    let dots = match (frame / 2) % 4 {
+        0 => ".  ",
+        1 => ".. ",
+        2 => "...",
+        _ => "   ",
+    };
+    let secs = elapsed.as_secs();
+    let label = if steered {
+        format!("thinking… (steered) [{spin}] {dots} {secs}s")
+    } else {
+        format!("thinking… [{spin}] {dots} {secs}s")
+    };
+    let mut out = io::stdout().lock();
+    // Save cursor (on steer> / typed text), rewrite the line above, restore.
+    let _ = write!(out, "\x1b7\x1b[1A\r\x1b[K{label}\x1b8");
+    let _ = out.flush();
+}
+
+fn ctrlc_hook(stop: Arc<AtomicBool>) {
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        stop.store(true, Ordering::SeqCst);
+    });
 }

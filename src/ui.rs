@@ -10,12 +10,12 @@ const CHARTER: &str = "agents · rust · native LLM in the shell";
 /// SHOMSKY — both S letters use the tall Cool S. Also rasterized by
 /// `matrix.rs` as the mask the digital rain crystallizes into.
 pub const SPLASH_ART: &str = r#"
-     ^  AGENTS                                ^
+     ^  AGENTS                                ^    shomagent stop 1
     / \     shomagent                        / \   shomagent watch "<cwd>" --tell-me "..."
   /     \   shomagent readwrite fil.md     /     \ shomagent spawn "<cmd>"
-/         \ shomagent ask 1 "question.." /         \   NEW COMMAND begin with a comma example: 
+/         \ shomagent ask 1 "question.." /         \   NEW COMMAND (begin with a comma) example: 
 |    |    ||shomagent talk 1             |    |    ||  , show the five largest files
-|    |    ||                             |    |    ||
+|    |    ||shomagent dream seed <file>  |    |    ||  
 \    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
  \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
   \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /

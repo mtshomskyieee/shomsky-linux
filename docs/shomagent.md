@@ -19,6 +19,8 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `write <id> --replace "…"` | Overwrite document |
 | `ask <id> "<q>"` | One-shot Q&A; answer is `#N > …` |
 | `talk <id>` | Interactive chat (`:q` to leave) |
+| `dream [path]` | Generative dream journal (default `dream.md`; `quit` to leave) |
+| `dream seed [path]` | Same, but pause for a user-written seed before the first beat |
 | `pause` / `resume` / `stop <id>` | Lifecycle |
 
 ## Quick use
@@ -57,6 +59,94 @@ Inside `engram-shell`, findings interrupt between prompts:
 ```
 
 Meta: `:shomagent` or `:agents` lists the roster; `:shomagent talk N` peeks.
+Inside the shell, `:menu` → **shomagent** offers list agents, `readwrite` /
+`dream seed` (type a filename), `ask` / `talk` (pick an opened document), and
+`stop` / end (pick any agent — documents detach and keep the file).
+
+## Typical use
+
+A session attaches a member, then you keep working. Create the member before `ask`, `talk`, or `write`. Findings interrupt between prompts; `ask` and `talk` dig into that member.
+
+### Watch a long-running command
+
+```bash
+shomagent watch "npm run dev" --tell-me "when a request 500s, with the stack trace root cause"
+# ⟡ shomagent#1 attached (pid …)
+```
+
+The command runs in the background. stdout and stderr stay in a ring buffer. The summarizer checks new lines against `--tell-me`. The same class of finding is not reported again for an hour.
+
+Return to the shell. A match shows up between prompts:
+
+```text
+⟡ shomagent#1 ─ 3 × 500 on POST /api/orders
+  root cause: …
+```
+
+Ask one question, or open a chat (`:q` leaves it):
+
+```bash
+shomagent ask 1 "is it only orders?"
+# #1 > …
+
+shomagent talk 1
+```
+
+Inside the shell, `:shomagent` or `:agents` lists the roster. `:shomagent talk N` peeks at member N.
+
+Pause, resume, or stop when you are done:
+
+```bash
+shomagent pause 1 && shomagent resume 1 && shomagent stop 1
+```
+
+`shomagent watch … --persist` writes `./shomagent_crew.d/<name>.toml` so the watcher is declared for later. Drop-ins below cover restart policy and overrides.
+
+### Ask a document
+
+```bash
+shomagent readwrite notes.md
+shomagent write 1 "paris is in france"
+shomagent ask 1 "where is paris"
+# #1 > …answer from the document…
+
+shomagent write 1 --replace "new contents"
+
+shomagent read details.md          # read-only
+shomagent ask 2 "summarize this"
+# shomagent write 2 "…" → rejected
+```
+
+`read` is ask and talk only. `readwrite` also accepts `write` (append) and `write --replace`.
+
+### Dream
+
+A persistent foreground session. Seeds a random bash or Python topic, then
+keeps appending ReAct beats to a markdown journal and the terminal. Invented
+commands are shown and saved; they are not executed.
+
+```bash
+shomagent dream              # journal → dream.md
+shomagent dream ideas.md     # journal → ideas.md
+shomagent dream seed         # wait for your seed, then dream → dream.md
+shomagent dream seed ideas.md
+```
+
+With `dream seed`, the session pauses first: type or paste the opening seed,
+then a line containing only `.` (or Ctrl-D) to plant it and begin dreaming.
+Type `quit` before planting to leave without writing.
+
+On a color TTY each beat crystallizes through the same green character rain as
+the splash (`ENGRAM_MATRIX`, `ENGRAM_MATRIX_SECS`, `ENGRAM_MATRIX_GLYPHS`).
+Tall beats are clipped to the terminal height for the rain; overflow prints
+underneath. Default craft is bash/python, but steering may leave that freely.
+Each LLM turn stays small-model friendly: a short recent excerpt plus a hidden
+one-line gist of the last beat (not the whole journal, and not shown as a
+`CARRY:` line). While the model works, a spinner on the `thinking…` line
+(`[/] … 12s`, same `ENGRAM_SPINNER` gate as the shell) shows the session is
+alive. A visible `steer>` prompt accepts normal typed input (echoed) at any
+time — including while thinking. Press Enter to send; type `quit` to leave.
+The roster glyph for a live dream member is `~`.
 
 ## Drop-ins (`shomagent_crew.d`)
 

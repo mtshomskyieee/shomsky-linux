@@ -7,7 +7,9 @@ pub mod notify;
 pub mod novelty;
 pub mod paths;
 pub mod protocol;
+pub mod rain;
 pub mod ring;
+pub mod term;
 
 pub use config::{load_crew_defs, MemberDef, RestartPolicy};
 pub use notify::{Finding, NotifyLane};
