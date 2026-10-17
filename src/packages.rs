@@ -264,7 +264,7 @@ pub fn package_install_command(line: &str) -> Option<String> {
 
     let normalized = normalize_install_line(original);
     let (polite, rest) = strip_request_prefix(&normalized);
-    let tokens = install_tokens(rest);
+    let tokens = install_tokens(&rest);
     if tokens.is_empty() {
         return None;
     }

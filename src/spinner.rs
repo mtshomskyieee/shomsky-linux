@@ -5,13 +5,47 @@
 //! (force off) or `ENGRAM_SPINNER=always` (force on).
 
 use std::future::Future;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::time::{Duration, Instant};
+
+use crate::term::RawGuard;
 
 const FRAMES: &[char] = &['-', '\\', '|', '/'];
 const WARMUP: Duration = Duration::from_millis(200);
 const TICK: Duration = Duration::from_millis(120);
 const BAR_WIDTH: usize = 24;
+const KEY_TICK: Duration = Duration::from_millis(30);
+/// Lone Esc is also the prefix of arrow keys. Wait this long for a follow-up
+/// byte before treating it as a real cancel.
+const ESC_GRACE: Duration = Duration::from_millis(40);
+
+/// Why a wait was cancelled from the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelKey {
+    Esc,
+    /// Ctrl-C arrives as a byte once the tty is in raw mode.
+    CtrlC,
+}
+
+impl CancelKey {
+    pub fn label(self) -> &'static str {
+        match self {
+            CancelKey::Esc => "esc",
+            CancelKey::CtrlC => "^C",
+        }
+    }
+}
+
+/// Result of a wait that can be abandoned from the keyboard.
+pub enum Wait<T> {
+    Done(T),
+    Cancelled(CancelKey),
+}
+
+/// Line printed after Esc / Ctrl-C actually stops a wait.
+pub fn cancel_notice(key: CancelKey, what: &str) -> String {
+    format!("{} — cancelled {what}", key.label())
+}
 
 /// Whether the spinner should draw on stderr.
 pub fn enabled() -> bool {
@@ -45,7 +79,7 @@ pub async fn with_spinner<F: Future>(label: &str, fut: F) -> F::Output {
             biased;
             v = &mut fut => break v,
             _ = ticker.tick() => {
-                draw_spinner(label, frame, start.elapsed());
+                draw_spinner(label, frame, start.elapsed(), "");
                 drew = true;
                 frame = frame.wrapping_add(1);
             }
@@ -92,6 +126,60 @@ pub async fn with_progress_bar<F: Future>(label: &str, max_secs: u64, fut: F) ->
     out
 }
 
+/// Like [`with_spinner`], but Esc (or Ctrl-C) drops `fut` and returns
+/// [`Wait::Cancelled`].
+///
+/// Listens only when stdin is a terminal and raw mode can be entered. Pipes,
+/// `--once`, and tests just await `fut`. Dropping `fut` is what aborts an
+/// LLM request or a `kill_on_drop` child.
+pub async fn with_spinner_cancel<F: Future>(label: &str, fut: F) -> Wait<F::Output> {
+    if !io::stdin().is_terminal() {
+        return Wait::Done(fut.await);
+    }
+    let guard = RawGuard::enter();
+    if !guard.active() {
+        drop(guard);
+        return Wait::Done(fut.await);
+    }
+
+    let draw = enabled();
+    let mut fut = std::pin::pin!(fut);
+    let start = Instant::now();
+    let mut frame = 0usize;
+    let mut drew = false;
+    let mut watch = EscWatch::default();
+    let mut keys = tokio::time::interval(KEY_TICK);
+    keys.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + WARMUP, TICK);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let outcome = loop {
+        tokio::select! {
+            biased;
+            v = &mut fut => break Wait::Done(v),
+            _ = keys.tick() => {
+                if let Some(key) = watch.poll() {
+                    break Wait::Cancelled(key);
+                }
+            }
+            _ = ticker.tick(), if draw => {
+                draw_spinner(label, frame, start.elapsed(), "  · esc cancels");
+                drew = true;
+                frame = frame.wrapping_add(1);
+            }
+        }
+    };
+
+    // Drop the work before restoring the tty so a killed child is signalled
+    // and the acknowledgement line is written in cooked mode.
+    drop(fut);
+    if drew {
+        erase_line();
+    }
+    drop(guard);
+    outcome
+}
+
 fn use_ansi() -> bool {
     if matches!(std::env::var("NO_COLOR"), Ok(v) if !v.is_empty()) {
         return false;
@@ -108,13 +196,107 @@ fn format_elapsed(d: Duration) -> String {
     }
 }
 
-fn draw_spinner(label: &str, frame: usize, elapsed: Duration) {
+fn draw_spinner(label: &str, frame: usize, elapsed: Duration, hint: &str) {
     let glyph = FRAMES[frame % FRAMES.len()];
     let msg = format!(
-        "[{glyph}] {label}... {}",
+        "[{glyph}] {label}... {}{hint}",
         format_elapsed(elapsed)
     );
     paint_line(&msg);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum KeyHit {
+    None,
+    Cancel(CancelKey),
+    Other,
+    /// Buffer ended on a bare Esc; a CSI sequence may still be arriving.
+    PendingEsc,
+}
+
+fn classify_keys(buf: &[u8]) -> KeyHit {
+    if buf.is_empty() {
+        return KeyHit::None;
+    }
+    let mut i = 0;
+    let mut pending = false;
+    let mut other = false;
+    while i < buf.len() {
+        match buf[i] {
+            0x03 => return KeyHit::Cancel(CancelKey::CtrlC),
+            0x1b => match buf.get(i + 1) {
+                None => {
+                    pending = true;
+                    i += 1;
+                }
+                Some(b'[') | Some(b'O') => {
+                    i += 2;
+                    while i < buf.len() && !(0x40..=0x7e).contains(&buf[i]) {
+                        i += 1;
+                    }
+                    if i < buf.len() {
+                        i += 1;
+                    }
+                    other = true;
+                }
+                Some(0x1b) => return KeyHit::Cancel(CancelKey::Esc),
+                Some(_) => {
+                    i += 2;
+                    other = true;
+                }
+            },
+            _ => {
+                i += 1;
+                other = true;
+            }
+        }
+    }
+    if pending {
+        KeyHit::PendingEsc
+    } else if other {
+        KeyHit::Other
+    } else {
+        KeyHit::None
+    }
+}
+
+#[derive(Default)]
+struct EscWatch {
+    pending_since: Option<Instant>,
+}
+
+impl EscWatch {
+    fn poll(&mut self) -> Option<CancelKey> {
+        let mut buf = [0u8; 64];
+        let n = match io::stdin().read(&mut buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => return None,
+            Err(_) => 0,
+        };
+        if n == 0 {
+            if self
+                .pending_since
+                .is_some_and(|t| t.elapsed() >= ESC_GRACE)
+            {
+                self.pending_since = None;
+                return Some(CancelKey::Esc);
+            }
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(n + 1);
+        if self.pending_since.take().is_some() {
+            bytes.push(0x1b);
+        }
+        bytes.extend_from_slice(&buf[..n]);
+        match classify_keys(&bytes) {
+            KeyHit::Cancel(key) => Some(key),
+            KeyHit::PendingEsc => {
+                self.pending_since = Some(Instant::now());
+                None
+            }
+            KeyHit::None | KeyHit::Other => None,
+        }
+    }
 }
 
 fn draw_bar(label: &str, frame: usize, elapsed: Duration, max_secs: u64) {
@@ -169,4 +351,42 @@ fn erase_line() {
         let _ = write!(err, "\r                                        \r");
     }
     let _ = err.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_esc_is_pending_until_grace() {
+        assert_eq!(classify_keys(&[0x1b]), KeyHit::PendingEsc);
+    }
+
+    #[test]
+    fn arrow_keys_are_not_cancel() {
+        assert_eq!(classify_keys(&[0x1b, b'[', b'A']), KeyHit::Other);
+        assert_eq!(classify_keys(&[0x1b, b'O', b'B']), KeyHit::Other);
+    }
+
+    #[test]
+    fn ctrl_c_and_double_esc_cancel() {
+        assert_eq!(classify_keys(&[0x03]), KeyHit::Cancel(CancelKey::CtrlC));
+        assert_eq!(classify_keys(&[0x1b, 0x1b]), KeyHit::Cancel(CancelKey::Esc));
+    }
+
+    #[test]
+    fn cancel_notice_names_the_key() {
+        assert_eq!(
+            cancel_notice(CancelKey::Esc, "thinking"),
+            "esc — cancelled thinking"
+        );
+        assert_eq!(
+            cancel_notice(CancelKey::Esc, "shell_exec: git add ."),
+            "esc — cancelled shell_exec: git add ."
+        );
+        assert_eq!(
+            cancel_notice(CancelKey::CtrlC, "thinking"),
+            "^C — cancelled thinking"
+        );
+    }
 }

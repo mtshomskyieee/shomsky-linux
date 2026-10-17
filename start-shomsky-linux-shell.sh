@@ -48,7 +48,7 @@ choose_workdir() {
   saved_kind="$(env_get SHOMSKY_WORKDIR_KIND "$env_file")"
   if [[ "$reask" != "1" && "${SHOMSKY_CHOOSE_WORKDIR:-}" != "1" && -n "$saved_dir" && -n "$saved_kind" ]]; then
     echo "  Using SHOMSKY_USER_DIR=${saved_dir} (${saved_kind})"
-    echo "  Re-ask with: ./start-shomsky-linux-shell.sh reask"
+    echo "  SWITCH WORKDIR (HOME DIRECTORY/ENGRAM DIRECTORY) with: ./start-shomsky-linux-shell.sh reask"
     echo
     return
   fi
