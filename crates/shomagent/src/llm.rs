@@ -137,6 +137,40 @@ fn stub_reply(messages: &[ChatMessage]) -> String {
         .map(|m| m.content.as_str())
         .unwrap_or("");
 
+    // Refine stubs (stable for CI): full document with task + optional prior line.
+    if system.contains("shomagent refine") {
+        let task = last_user
+            .split("Refinement task:\n")
+            .nth(1)
+            .unwrap_or(last_user)
+            .split("\n\nWrite a complete")
+            .next()
+            .unwrap_or("")
+            .split("\n\nRewrite the whole")
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let prior = last_user
+            .split("Current document:\n---\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n---").next())
+            .map(|doc| {
+                doc.lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty());
+        let mut out = format!("# refined\n\ntask: {task}\n");
+        if let Some(p) = prior {
+            out.push_str(&format!("prior: {p}\n"));
+        }
+        out.push('\n');
+        return out;
+    }
+
     // Dream seed / beat stubs (stable for CI). No visible CARRY lines.
     if system.contains("shomagent dream") {
         if last_user.contains("Invent a NEW seed") || last_user.contains("NEW seed") {

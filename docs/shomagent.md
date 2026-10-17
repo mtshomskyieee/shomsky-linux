@@ -21,6 +21,7 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `talk <id>` | Interactive chat (`:q` to leave) |
 | `dream [path]` | Generative dream journal (default `dream.md`; `quit` to leave) |
 | `dream seed [path]` | Same, but pause for a user-written seed before the first beat |
+| `refine idea [path]` | Rewrite an idea file from a standing task (default `idea.md`; overwrite each pass; `quit` to leave) |
 | `pause` / `resume` / `stop <id>` | Lifecycle |
 
 ## Quick use
@@ -60,8 +61,8 @@ Inside `engram-shell`, findings interrupt between prompts:
 
 Meta: `:shomagent` or `:agents` lists the roster; `:shomagent talk N` peeks.
 Inside the shell, `:menu` → **shomagent** offers list agents, `readwrite` /
-`dream seed` (type a filename), `ask` / `talk` (pick an opened document), and
-`stop` / end (pick any agent — documents detach and keep the file).
+`dream seed` / `refine idea` (type a filename), `ask` / `talk` (pick an opened
+document), and `stop` / end (pick any agent — documents detach and keep the file).
 
 ## Typical use
 
@@ -147,6 +148,21 @@ one-line gist of the last beat (not the whole journal, and not shown as a
 alive. A visible `steer>` prompt accepts normal typed input (echoed) at any
 time — including while thinking. Press Enter to send; type `quit` to leave.
 The roster glyph for a live dream member is `~`.
+
+### Refine idea
+
+A persistent foreground session. You write a refinement task (end with `.`),
+then each pass **loads** the idea file (if it exists), rewrites it from that
+task, and **overwrites** the file. Type a new line at `task>` to replace the
+standing task; type `quit` to leave. Default path is `idea.md`.
+
+```bash
+shomagent refine idea              # → idea.md
+shomagent refine idea notes.md
+```
+
+Unlike dream (which appends beats), refine always replaces the whole file.
+Roster glyph for a live refine member is `✦`.
 
 ## Drop-ins (`shomagent_crew.d`)
 

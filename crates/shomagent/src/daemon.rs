@@ -60,6 +60,8 @@ struct Member {
     document_writable: bool,
     /// Foreground generative dream session over a document.
     dream: bool,
+    /// Foreground refine session: load → rewrite → overwrite an idea file.
+    refine: bool,
     /// Number of dream beats written so far (0 = seed not yet written).
     dream_beats: u32,
     /// Topic chosen at seed (language + subject).
@@ -120,6 +122,7 @@ impl Daemon {
             document: None,
             document_writable: false,
             dream: false,
+            refine: false,
             dream_beats: 0,
             dream_topic: String::new(),
             dream_carry: String::new(),
@@ -177,6 +180,14 @@ fn status_of(m: &Member) -> MemberStatus {
     let (state, command) = if m.dream {
         (
             "dream".into(),
+            m.document
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| m.def.command.clone()),
+        )
+    } else if m.refine {
+        (
+            "refine".into(),
             m.document
                 .as_ref()
                 .map(|p| p.display().to_string())
@@ -497,9 +508,9 @@ impl Daemon {
                     message: e.to_string(),
                 },
             },
-            // DreamStep is handled in handle_client so the LLM await does not
-            // hold the daemon mutex (otherwise quit/DreamEnd blocks for the
-            // whole generation).
+            // DreamStep / RefineStep are handled in handle_client so the LLM
+            // await does not hold the daemon mutex (otherwise quit/End blocks
+            // for the whole generation).
             Request::DreamStep { .. } => Response::Err {
                 message: "internal: DreamStep must be dispatched unlocked".into(),
             },
@@ -518,6 +529,46 @@ impl Daemon {
                 Response::Ok {
                     message: Some(format!(
                         "#{id} dream ended (journal file kept on disk)"
+                    )),
+                    member: None,
+                    roster: vec![],
+                    context: None,
+                    reply: None,
+                }
+            }
+            Request::Refine { path, name } => match self.attach_refine(&path, name.as_deref()) {
+                Ok(member) => Response::Ok {
+                    message: Some(format!(
+                        "⟡ shomagent#{} refine ({})",
+                        member.id, member.command
+                    )),
+                    member: Some(member),
+                    roster: vec![],
+                    context: None,
+                    reply: None,
+                },
+                Err(e) => Response::Err {
+                    message: e.to_string(),
+                },
+            },
+            Request::RefineStep { .. } => Response::Err {
+                message: "internal: RefineStep must be dispatched unlocked".into(),
+            },
+            Request::RefineEnd { id } => {
+                let Some(m) = self.members.get(&id) else {
+                    return Response::Err {
+                        message: format!("unknown member #{id}"),
+                    };
+                };
+                if !m.refine {
+                    return Response::Err {
+                        message: format!("#{id} is not a refine member"),
+                    };
+                }
+                self.members.remove(&id);
+                Response::Ok {
+                    message: Some(format!(
+                        "#{id} refine ended (idea file kept on disk)"
                     )),
                     member: None,
                     roster: vec![],
@@ -615,6 +666,7 @@ impl Daemon {
             document: Some(path_buf.clone()),
             document_writable: writable,
             dream: false,
+            refine: false,
             dream_beats: 0,
             dream_topic: String::new(),
             dream_carry: String::new(),
@@ -690,6 +742,71 @@ impl Daemon {
             document: Some(path_buf.clone()),
             document_writable: true,
             dream: true,
+            refine: false,
+            dream_beats: 0,
+            dream_topic: String::new(),
+            dream_carry: String::new(),
+            dream_excerpt: String::new(),
+        };
+        let status = status_of(&member);
+        self.members.insert(id, member);
+        Ok(status)
+    }
+
+    /// Attach a refine session. Creates parent dirs; does **not** create the file.
+    fn attach_refine(&mut self, path: &str, name: Option<&str>) -> Result<MemberStatus> {
+        let path_buf = if std::path::Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            self.cwd.join(path)
+        };
+        if let Some(parent) = path_buf.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+        }
+        if path_buf.exists() && !path_buf.is_file() {
+            return Err(anyhow!("{} is not a file", path_buf.display()));
+        }
+
+        let name = name.map(|s| s.to_string()).unwrap_or_else(|| {
+            path_buf
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("idea")
+                .to_string()
+        });
+        let id = self.next_id;
+        self.next_id += 1;
+        let def = MemberDef {
+            name: name.clone(),
+            command: "refine".into(),
+            args: vec![path_buf.display().to_string()],
+            tell_me: format!("refine idea document at {}", path_buf.display()),
+            restart: RestartPolicy::Never,
+            autostart: false,
+            budget_tokens: 1200,
+            ring_lines: 2000,
+            shell: None,
+        };
+        let member = Member {
+            id,
+            def,
+            state: MemberState::Running,
+            child: None,
+            pid: None,
+            ring: RingBuffer::new(2000),
+            started: Instant::now(),
+            findings_count: 0,
+            findings: Vec::new(),
+            summarize_cursor: 0,
+            novelty: NoveltyFilter::new(Duration::from_secs(3600)),
+            talk_history: Vec::new(),
+            document: Some(path_buf.clone()),
+            document_writable: true,
+            dream: false,
+            refine: true,
             dream_beats: 0,
             dream_topic: String::new(),
             dream_carry: String::new(),
@@ -846,6 +963,69 @@ impl Daemon {
             m.dream_carry = fallback_dream_carry(&body);
             m.dream_excerpt = excerpt_dream_body(&body, 520);
             m.talk_history.clear();
+        }
+
+        Ok(body)
+    }
+
+    /// Build refine LLM messages without calling the model (lock may be held).
+    fn refine_step_begin(
+        &self,
+        id: u32,
+        task: &str,
+    ) -> Result<(LlmClient, Vec<ChatMessage>, RefineStepMeta)> {
+        let m = self
+            .members
+            .get(&id)
+            .ok_or_else(|| anyhow!("unknown member #{id}"))?;
+        if !m.refine {
+            return Err(anyhow!("#{id} is not a refine member"));
+        }
+        let path = m
+            .document
+            .clone()
+            .ok_or_else(|| anyhow!("#{id} has no document"))?;
+        let task = task.trim();
+        if task.is_empty() {
+            return Err(anyhow!("empty refine task"));
+        }
+
+        let (current, clipped) = if path.exists() {
+            let raw = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let clipped = raw.chars().count() > 6_000;
+            (truncate_chars(&raw, 6_000), clipped)
+        } else {
+            (String::new(), false)
+        };
+
+        let messages = refine_messages(id, task, &current, clipped);
+        Ok((
+            self.llm.clone(),
+            messages,
+            RefineStepMeta { id, path },
+        ))
+    }
+
+    /// Overwrite the idea file with the refined document.
+    fn refine_step_finish(&mut self, meta: RefineStepMeta, mut reply: String) -> Result<String> {
+        reply = reply.trim().to_string();
+        let mut body = strip_wrapping_fence(&reply);
+        if body.trim().is_empty() {
+            body = "# idea\n\n(empty refine — try again with a clearer task)\n".into();
+        }
+        let mut body = truncate_chars(&body, 8_000);
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+
+        std::fs::write(&meta.path, &body)
+            .with_context(|| format!("writing {}", meta.path.display()))?;
+
+        if let Some(m) = self.members.get_mut(&meta.id) {
+            if m.refine {
+                m.talk_history.clear();
+            }
         }
 
         Ok(body)
@@ -1140,6 +1320,69 @@ struct DreamStepMeta {
     path: PathBuf,
     beats: u32,
     is_seed: bool,
+}
+
+struct RefineStepMeta {
+    id: u32,
+    path: PathBuf,
+}
+
+fn refine_messages(id: u32, task: &str, current: &str, clipped: bool) -> Vec<ChatMessage> {
+    let task = truncate_chars(task, 800);
+    let clip_note = if clipped {
+        "\n(Note: the current document was truncated for the model; refine the idea as given.)"
+    } else {
+        ""
+    };
+    let system = format!(
+        "You are shomagent refine #{id}: rewrite an idea document.\n\
+         Apply the reader's task to the current file contents.\n\
+         Return the COMPLETE refined markdown document only — no preamble, no commentary.\n\
+         Keep under ~6000 characters."
+    );
+    let user = if current.trim().is_empty() {
+        format!(
+            "There is no existing document yet.\n\
+             Refinement task:\n{task}\n\n\
+             Write a complete idea.md from this task."
+        )
+    } else {
+        format!(
+            "Current document:\n\
+             ---\n{current}\n\
+             ---{clip_note}\n\n\
+             Refinement task:\n{task}\n\n\
+             Rewrite the whole document to satisfy the task. Output only the new document."
+        )
+    };
+    vec![
+        ChatMessage::system(truncate_chars(&system, 500)),
+        ChatMessage::user(truncate_chars(&user, 7_000)),
+    ]
+}
+
+/// Strip a single wrapping ``` or ```markdown fence if the whole reply is fenced.
+fn strip_wrapping_fence(text: &str) -> String {
+    let t = text.trim();
+    if !t.starts_with("```") {
+        return t.to_string();
+    }
+    let mut lines = t.lines();
+    let first = lines.next().unwrap_or("");
+    let fence = first.trim();
+    if fence != "```" && fence != "```markdown" && fence != "```md" {
+        return t.to_string();
+    }
+    let rest: Vec<&str> = lines.collect();
+    if rest.is_empty() {
+        return t.to_string();
+    }
+    let last = rest.last().map(|l| l.trim()).unwrap_or("");
+    if last != "```" {
+        return t.to_string();
+    }
+    let inner = &rest[..rest.len() - 1];
+    inner.join("\n")
 }
 
 fn dream_seed_messages(id: u32, nonce: u64) -> Vec<ChatMessage> {
@@ -1596,6 +1839,66 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                                     message: format!(
                                         "{:#}",
                                         last_err.unwrap_or_else(|| anyhow!("dream LLM failed"))
+                                    ),
+                                },
+                            }
+                        }
+                    }
+                }
+                Request::RefineStep { id, task } => {
+                    let begun = {
+                        let d = daemon.lock().await;
+                        d.refine_step_begin(id, &task)
+                    };
+                    match begun {
+                        Err(e) => Response::Err {
+                            message: e.to_string(),
+                        },
+                        Ok((llm, messages, meta)) => {
+                            let mut last_err = None;
+                            let mut raw_ok = None;
+                            for attempt in 1..=2 {
+                                match llm
+                                    .chat_with_temperature_timeout(
+                                        &messages,
+                                        1200,
+                                        0.4,
+                                        Some(Duration::from_secs(90)),
+                                    )
+                                    .await
+                                {
+                                    Ok(raw) => {
+                                        raw_ok = Some(raw);
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        last_err = Some(e);
+                                        if attempt < 2 {
+                                            tokio::time::sleep(Duration::from_millis(500)).await;
+                                        }
+                                    }
+                                }
+                            }
+                            match raw_ok {
+                                Some(raw) => {
+                                    let mut d = daemon.lock().await;
+                                    match d.refine_step_finish(meta, raw) {
+                                        Ok(reply) => Response::Ok {
+                                            message: None,
+                                            member: d.members.get(&id).map(status_of),
+                                            roster: vec![],
+                                            context: None,
+                                            reply: Some(reply),
+                                        },
+                                        Err(e) => Response::Err {
+                                            message: format!("{e:#}"),
+                                        },
+                                    }
+                                }
+                                None => Response::Err {
+                                    message: format!(
+                                        "{:#}",
+                                        last_err.unwrap_or_else(|| anyhow!("refine LLM failed"))
                                     ),
                                 },
                             }

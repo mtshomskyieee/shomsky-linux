@@ -27,7 +27,7 @@ pub enum MenuAction {
 pub struct ShomagentMemberBrief {
     pub id: u32,
     pub name: String,
-    /// `read` / `readwrite` / `dream` / process states.
+    /// `read` / `readwrite` / `dream` / `refine` / process states.
     pub state: String,
     /// Document path for doc members; command line for process members.
     pub path: String,
@@ -37,7 +37,7 @@ impl ShomagentMemberBrief {
     pub fn is_document(&self) -> bool {
         matches!(
             self.state.as_str(),
-            "read" | "readwrite" | "dream"
+            "read" | "readwrite" | "dream" | "refine"
         )
     }
 }
@@ -106,6 +106,7 @@ enum Focus {
 enum FilePromptKind {
     ReadWrite,
     DreamSeed,
+    RefineIdea,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -456,6 +457,7 @@ impl MenuState {
         let line = match kind {
             FilePromptKind::ReadWrite => format!("shomagent readwrite {path}"),
             FilePromptKind::DreamSeed => format!("shomagent dream seed {path}"),
+            FilePromptKind::RefineIdea => format!("shomagent refine idea {path}"),
         };
         Some(MenuAction::InsertLine(line))
     }
@@ -646,6 +648,11 @@ fn shomagent_root_items() -> Vec<Item> {
             kind: ItemKind::ShomagentPromptFile(FilePromptKind::DreamSeed),
         },
         Item {
+            label: "refine idea <file>".into(),
+            detail: "Rewrite an idea file from a standing task — type a filename".into(),
+            kind: ItemKind::ShomagentPromptFile(FilePromptKind::RefineIdea),
+        },
+        Item {
             label: "stop / end <agent>".into(),
             detail: "Stop a watcher or detach a document (file kept)".into(),
             kind: ItemKind::ShomagentPickMember(MemberVerb::Stop),
@@ -684,6 +691,7 @@ fn member_pick_items(members: &[ShomagentMemberBrief], verb: MemberVerb) -> Vec<
                 "read" => "◇",
                 "readwrite" => "◆",
                 "dream" => "~",
+                "refine" => "✦",
                 "running" => "▶",
                 "paused" => "⏸",
                 "stopped" | "exited" => "■",
@@ -1083,6 +1091,7 @@ fn draw(state: &MenuState) {
         let tag = match kind {
             FilePromptKind::ReadWrite => "readwrite",
             FilePromptKind::DreamSeed => "dream seed",
+            FilePromptKind::RefineIdea => "refine idea",
         };
         format!("{tag} file: {buf}█  Enter · Esc")
     } else if let Some(ShomagentSub::PickMember { kind }) = &state.shomagent_sub {
@@ -1256,6 +1265,7 @@ mod tests {
                 "ask <opened file>".to_string(),
                 "talk <opened file>".to_string(),
                 "dream seed <file>".to_string(),
+                "refine idea <file>".to_string(),
                 "stop / end <agent>".to_string(),
             ]
         );
@@ -1326,6 +1336,21 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn shomagent_refine_idea_prompts_for_filename() {
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Shomagent.index();
+        s.item_idx = 5; // refine idea <file>
+        assert_eq!(s.activate(), None);
+        for c in "idea.md".chars() {
+            s.filename_push(c);
+        }
+        assert_eq!(
+            s.confirm_filename(),
+            Some(MenuAction::InsertLine("shomagent refine idea idea.md".into()))
+        );
     }
 
     #[test]
@@ -1427,7 +1452,7 @@ mod tests {
             },
         ]));
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 5; // stop / end
+        s.item_idx = 6; // stop / end
         assert_eq!(s.activate(), None);
         assert!(matches!(
             s.shomagent_sub,
@@ -1451,7 +1476,7 @@ mod tests {
     fn shomagent_stop_empty_roster_is_info_only() {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 5;
+        s.item_idx = 6;
         assert_eq!(s.activate(), None);
         assert_eq!(s.items()[0].label, "(none)");
         assert!(s.items()[0].detail.contains("nothing to stop"));

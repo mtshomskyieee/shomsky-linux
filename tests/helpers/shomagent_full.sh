@@ -166,6 +166,36 @@ need_not "$(cat dream-plant.md)" "generators as polite laziness" "user seed skip
 roster="$("$SHOMAGENT" 2>&1)"
 need_not "$roster" "dream-test.md|dream-steer.md|dream-plant.md" "dream members ended after quit"
 
+# --- refine idea (piped: overwrite; stub LLM) ---
+rm -f refine-new.md refine-old.md refine-loop.md
+# Quit before planting: file must not appear.
+refine_out="$(printf 'quit\n' | "$SHOMAGENT" refine idea refine-new.md 2>&1 || true)"
+need "$refine_out" "quit|leaving refine" "refine quit before task"
+[ ! -f refine-new.md ] && ok "refine-new.md absent after early quit" || bad "refine-new.md created on early quit"
+
+# Missing file: task + . + quit creates and contains the task.
+refine_out="$(printf '%s\n' 'clarify the pitch' '.' 'quit' | "$SHOMAGENT" refine idea refine-new.md 2>&1 || true)"
+need "$refine_out" "refine|clarify the pitch" "refine creates missing file session"
+[ -f refine-new.md ] && ok "refine-new.md created" || bad "refine-new.md missing"
+need "$(cat refine-new.md)" "clarify the pitch" "refine file contains task"
+need "$(cat refine-new.md)" "^# refined" "refine stub header"
+
+# Existing file: overwrite (OLD UNIQUE not first line; prior: preserved).
+printf '%s\n' 'OLD UNIQUE' 'body line' > refine-old.md
+refine_out="$(printf '%s\n' 'make it sharper' '.' 'quit' | "$SHOMAGENT" refine idea refine-old.md 2>&1 || true)"
+need "$refine_out" "make it sharper|refined" "refine overwrite session"
+need "$(cat refine-old.md)" "^# refined" "refine overwrote first line"
+need "$(cat refine-old.md)" "prior: OLD UNIQUE" "refine read prior content"
+need_not "$(head -n1 refine-old.md)" "OLD UNIQUE" "refine first line is not OLD UNIQUE"
+
+# Two tasks then quit: file reflects the second task.
+refine_out="$(printf '%s\n' 'first pass task' '.' 'second pass task' 'quit' | "$SHOMAGENT" refine idea refine-loop.md 2>&1 || true)"
+need "$refine_out" "second pass task|refined" "refine two-pass session"
+need "$(cat refine-loop.md)" "second pass task" "refine file has second task"
+
+roster="$("$SHOMAGENT" 2>&1)"
+need_not "$roster" "refine-new.md|refine-old.md|refine-loop.md" "refine members ended after quit"
+
 echo
 echo "shomagent full suite: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

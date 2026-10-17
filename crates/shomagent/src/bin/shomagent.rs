@@ -96,6 +96,13 @@ enum Commands {
         /// Journal path when arg0 is `seed` (default dream.md)
         arg1: Option<String>,
     },
+    /// Iteratively refine an idea document (overwrite each pass)
+    Refine {
+        /// Must be `idea`
+        kind: String,
+        /// Idea file path (default idea.md)
+        path: Option<String>,
+    },
     /// Pause a member
     Pause {
         id: u32,
@@ -203,6 +210,13 @@ async fn main() -> Result<()> {
             let (path, user_seed) = parse_dream_args(arg0, arg1)?;
             dream_loop(path, user_seed).await
         }
+        Some(Commands::Refine { kind, path }) => {
+            if kind != "idea" {
+                bail!("usage: shomagent refine idea [path]");
+            }
+            let path = path.unwrap_or_else(|| "idea.md".into());
+            refine_loop(path).await
+        }
         Some(Commands::Pause { id }) => simple(Request::Pause { id }).await,
         Some(Commands::Resume { id }) => simple(Request::Resume { id }).await,
         Some(Commands::Stop { id }) => simple(Request::Stop { id }).await,
@@ -247,6 +261,7 @@ async fn print_roster() -> Result<()> {
                     "read" => "◇",
                     "readwrite" => "◆",
                     "dream" => "~",
+                    "refine" => "✦",
                     _ => "■",
                 };
                 let runtime = format_runtime(m.runtime_secs);
@@ -809,6 +824,310 @@ fn show_steer_prompt(tty: bool) {
     print!("steer(type quit to exit)> ");
     let _ = write!(io::stdout(), "\x1b[?25h");
     let _ = io::stdout().flush();
+}
+
+fn show_task_prompt(tty: bool) {
+    if tty && spinner_enabled() {
+        println!("thinking… -");
+    } else {
+        println!("thinking…");
+    }
+    print!("task(type quit to exit)> ");
+    let _ = write!(io::stdout(), "\x1b[?25h");
+    let _ = io::stdout().flush();
+}
+
+/// Collect a multi-line refinement task from stdin until `.` alone, quit, or EOF.
+fn read_refine_task() -> Result<Option<String>> {
+    // Same delimiter UX as dream seed.
+    read_user_seed()
+}
+
+async fn refine_loop(path: String) -> Result<()> {
+    let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+
+    let id = match rpc(&Request::Refine {
+        path: path.clone(),
+        name: None,
+    })
+    .await?
+    {
+        Response::Ok {
+            member: Some(m),
+            message,
+            ..
+        } => {
+            if let Some(msg) = message {
+                println!("{msg}");
+            }
+            m.id
+        }
+        Response::Ok {
+            message: Some(m), ..
+        } => {
+            println!("{m}");
+            m.split('#')
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| anyhow::anyhow!("refine attach returned no member id"))?
+        }
+        Response::Err { message } => bail!("{message}"),
+        _ => bail!("refine attach failed"),
+    };
+
+    println!("shomagent refine — {path}");
+    println!("write your refinement task below");
+    println!("end with a line containing only `.` · Ctrl-D also works · quit to leave");
+    let _ = io::stdout().flush();
+
+    let standing_task = match read_refine_task()? {
+        None => {
+            let _ = rpc(&Request::RefineEnd { id }).await;
+            println!("quit — leaving refine");
+            return Ok(());
+        }
+        Some(text) => text,
+    };
+
+    println!("type a line at the task> prompt to replace the task · Enter to send · quit to leave");
+    let _ = io::stdout().flush();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_hook(stop);
+    }
+
+    let line_rx = spawn_line_reader(Arc::clone(&stop), tty);
+
+    let mut task = standing_task;
+    let mut stdin_eof = false;
+    let mut fail_streak: u32 = 0;
+    let mut first_pass = true;
+    let mut pending_quit = false;
+
+    let result = async {
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+
+            show_task_prompt(tty);
+
+            let step_task = task.clone();
+            let step_req = Request::RefineStep {
+                id,
+                task: step_task.clone(),
+            };
+            let step_fut = rpc(&step_req);
+            tokio::pin!(step_fut);
+
+            let mut abort_quit = false;
+            let mut step_failed: Option<String> = None;
+            let think_start = Instant::now();
+            let mut spin_frame = 0usize;
+            let mut last_spin = Instant::now();
+            if tty {
+                tick_dream_spinner(spin_frame, false, think_start.elapsed());
+                spin_frame = 1;
+            }
+
+            let reply = loop {
+                tokio::select! {
+                    resp = &mut step_fut => {
+                        break match resp {
+                            Ok(Response::Ok { reply: Some(r), .. }) => r,
+                            Ok(Response::Ok { reply: None, .. }) => {
+                                step_failed = Some("(no refine reply)".into());
+                                String::new()
+                            }
+                            Ok(Response::Err { message }) => {
+                                step_failed = Some(message);
+                                String::new()
+                            }
+                            Err(e) => {
+                                step_failed = Some(format!("{e:#}"));
+                                String::new()
+                            }
+                        };
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(40)) => {
+                        if stop.load(Ordering::SeqCst) {
+                            abort_quit = true;
+                            break String::new();
+                        }
+                        match drain_line_rx(&line_rx) {
+                            LineEvent::Quit => {
+                                // Honor quit after the first save; during the first
+                                // pass keep going so the task is applied once.
+                                if first_pass {
+                                    pending_quit = true;
+                                } else {
+                                    abort_quit = true;
+                                    break String::new();
+                                }
+                            }
+                            LineEvent::Steer(s) => {
+                                task = s;
+                                if tty {
+                                    tick_dream_spinner(
+                                        spin_frame,
+                                        true,
+                                        think_start.elapsed(),
+                                    );
+                                }
+                            }
+                            LineEvent::Eof => {
+                                stdin_eof = true;
+                            }
+                            LineEvent::None => {}
+                        }
+                        if tty && last_spin.elapsed() >= Duration::from_millis(120) {
+                            tick_dream_spinner(
+                                spin_frame,
+                                false,
+                                think_start.elapsed(),
+                            );
+                            spin_frame = spin_frame.wrapping_add(1);
+                            last_spin = Instant::now();
+                        }
+                    }
+                }
+            };
+
+            if tty {
+                println!();
+            }
+
+            if abort_quit {
+                println!("quit — leaving refine");
+                break;
+            }
+
+            if let Some(err) = step_failed {
+                fail_streak = fail_streak.saturating_add(1);
+                eprintln!("refine: pass failed — {err}");
+                if fail_streak >= 2 {
+                    eprintln!(
+                        "refine: pausing after repeated failures — type a new task to retry, or quit"
+                    );
+                    let mut pause_quit = false;
+                    loop {
+                        if stop.load(Ordering::SeqCst) {
+                            pause_quit = true;
+                            break;
+                        }
+                        match drain_line_rx(&line_rx) {
+                            LineEvent::Quit => {
+                                pause_quit = true;
+                                break;
+                            }
+                            LineEvent::Steer(s) => {
+                                task = s;
+                                fail_streak = 0;
+                                break;
+                            }
+                            LineEvent::Eof => {
+                                stdin_eof = true;
+                                if !tty {
+                                    pause_quit = true;
+                                    break;
+                                }
+                            }
+                            LineEvent::None => {}
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    if pause_quit {
+                        println!("quit — leaving refine");
+                        break;
+                    }
+                    continue;
+                }
+                eprintln!("refine: retrying once more…");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            fail_streak = 0;
+            first_pass = false;
+
+            let display = format!("── refine ──\n{}", reply.trim_end());
+            let rained = if tty {
+                rain::play_text(&display, &mut LineBuf::default(), None, |_| {})
+            } else {
+                false
+            };
+            if !rained {
+                println!("{display}");
+            }
+            if tty {
+                let _ = write!(io::stdout(), "\x1b[?25h");
+            }
+
+            if pending_quit {
+                println!("quit — leaving refine");
+                break;
+            }
+
+            // Apply any line that arrived during rain / the last think slice.
+            let mut got_new_task = false;
+            match drain_line_rx(&line_rx) {
+                LineEvent::Quit => {
+                    println!("quit — leaving refine");
+                    break;
+                }
+                LineEvent::Steer(s) => {
+                    task = s;
+                    got_new_task = true;
+                }
+                LineEvent::Eof => stdin_eof = true,
+                LineEvent::None => {}
+            }
+
+            if stdin_eof && !tty && !got_new_task {
+                break;
+            }
+            if !tty {
+                if got_new_task {
+                    // Another pass with the replacement task.
+                    continue;
+                }
+                // Brief poll so a piped replacement task is not lost to timing.
+                let mut leave = true;
+                for _ in 0..50 {
+                    match drain_line_rx(&line_rx) {
+                        LineEvent::Quit | LineEvent::Eof => break,
+                        LineEvent::Steer(s) => {
+                            task = s;
+                            leave = false;
+                            break;
+                        }
+                        LineEvent::None => {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    }
+                }
+                if leave {
+                    break;
+                }
+                continue;
+            }
+            // TTY: immediately continue with the standing (or replaced) task.
+        }
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    stop.store(true, Ordering::SeqCst);
+
+    let _ = rpc(&Request::RefineEnd { id }).await;
+    if let Err(e) = result {
+        eprintln!("refine error: {e}");
+        return Err(e);
+    }
+    println!("refine ended — idea kept at {path}");
+    Ok(())
 }
 
 /// Update the status line above `steer>` without disturbing typed input.

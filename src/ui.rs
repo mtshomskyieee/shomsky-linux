@@ -13,9 +13,9 @@ pub const SPLASH_ART: &str = r#"
      ^  AGENTS                                ^    shomagent stop 1
     / \     shomagent                        / \   shomagent watch "<cwd>" --tell-me "..."
   /     \   shomagent readwrite fil.md     /     \ shomagent spawn "<cmd>"
-/         \ shomagent ask 1 "question.." /         \   NEW COMMAND (begin with a comma) example: 
-|    |    ||shomagent talk 1             |    |    ||  , show the five largest files
-|    |    ||shomagent dream seed <file>  |    |    ||  
+/         \ shomagent ask 1 "question.." /         \  shomagent refine idea <file> 
+|    |    ||shomagent talk 1             |    |    || NEW COMMAND (begin with a comma) example: 
+|    |    ||shomagent dream seed <file>  |    |    || , show the five largest files
 \    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
  \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
   \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /

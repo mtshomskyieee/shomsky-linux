@@ -144,6 +144,7 @@ shomagentd starts with the container. SKIP_SHOMAGENT=1 skips it. Create a member
 - shomagent readwrite <path> allows ask and talk, plus write <id> "<text>" (append) and write <id> --replace.
 - shomagent dream [path] is a foreground generative journal (default dream.md). Seeds a bash/Python topic, appends ReAct beats; type a line to steer, quit to leave. Per-beat rain uses ENGRAM_MATRIX*.
 - shomagent dream seed [path] waits for a user-written seed (end with . or Ctrl-D) before the first LLM beat.
+- shomagent refine idea [path] is a foreground idea rewrite (default idea.md). Standing task; each pass loads and overwrites the file. Type a line to replace the task, quit to leave.
 - pause, resume, and stop <id> are the process lifecycle. stop on a document detaches and keeps the file.
 
 --persist writes ./shomagent_crew.d/<name>.toml. Findings interrupt between prompts via /run/shomagent/notify. :shomagent or :agents lists the roster. SHOMAGENT_STUB_LLM=1 is for CI without a model. The summarizer uses the same local OpenAI-compatible URL.
@@ -172,7 +173,7 @@ Skills are markdown with YAML frontmatter: name, description, always_load.
 - learn                              on demand via load_skill.
 - ignore_llm_for_these_commands      on demand. The shell also reads it as the TUI bypass list.
 
-:menu or :m on a color TTY covers Modes, Learn, Packages, shomagent, Help, and System. Under shomagent: list agents, type a filename for readwrite / dream seed, or pick an opened document for ask / talk. :help is the same map as text. Both stay available from the ready line.
+:menu or :m on a color TTY covers Modes, Learn, Packages, shomagent, Help, and System. Under shomagent: list agents, type a filename for readwrite / dream seed / refine idea, or pick an opened document for ask / talk. :help is the same map as text. Both stay available from the ready line.
 
 
 IF YOU ARE CHANGING THE REPOSITORY

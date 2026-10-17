@@ -667,6 +667,7 @@ impl Repl {
                             "paused" => "⏸",
                             "read" => "◇",
                             "readwrite" => "◆",
+                            "refine" => "✦",
                             "dream" => "~",
                             _ => "■",
                         };
@@ -1380,7 +1381,7 @@ Meta-commands:
 Feature menu (TTY):
   :menu | :m         Slip into Modes / Learn / Packages / shomagent / Help / System
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
-  menu → shomagent   list · readwrite/dream seed <file> · ask/talk <doc> · stop/end <agent>
+  menu → shomagent   list · readwrite/dream seed/refine idea <file> · ask/talk <doc> · stop/end <agent>
 
 Learn (agent mode):
   , <intent>         Plan → confirm → run a real shell command from intent

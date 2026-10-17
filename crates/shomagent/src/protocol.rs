@@ -79,6 +79,21 @@ pub enum Request {
     DreamEnd {
         id: u32,
     },
+    /// Attach a refine session over an idea document (foreground `shomagent refine`).
+    Refine {
+        path: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Rewrite the idea file from a standing task (overwrite, never append).
+    RefineStep {
+        id: u32,
+        task: String,
+    },
+    /// End a refine session (detach member; keep the file).
+    RefineEnd {
+        id: u32,
+    },
     Ping,
 }
 
