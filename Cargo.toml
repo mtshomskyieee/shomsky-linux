@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/engram-cmdfreq", "crates/shomagent", "crates/shomsky"]
+members = [".", "crates/engram-cmdfreq", "crates/shomagent", "crates/shomsky", "crates/quickyn"]
 resolver = "2"
 
 [package]

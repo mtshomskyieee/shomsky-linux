@@ -1468,6 +1468,11 @@ Meta-commands:
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 
+quickyn (agent mode / PATH):
+  quickyn \"q\"       Yes/no + confidence from the current model (exit 0=yes, 1=no)
+  quickyn \"q\" file  Same; file is chain-of-thought context before the question
+
+
 Feature menu (TTY):
   :menu | :m         Slip into Modes / Learn / Packages / shomagent / Help / System
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu

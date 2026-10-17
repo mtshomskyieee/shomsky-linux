@@ -63,6 +63,7 @@ Workspace (docs/adr/0002-rust-language-and-style.md):
 - engram-cmdfreq   crates/engram-cmdfreq/      stdio MCP: record_command, top_commands
 - shomagent        crates/shomagent/           shomagentd and the shomagent CLI
 - shomsky          crates/shomsky/             learn registry and shomsky publish
+- quickyn          crates/quickyn/             yes/no + confidence CLI
 
 engram-shell modules: main.rs (CLI, --once, --script, --self-test), config.rs, modes.rs, repl.rs, llm.rs, tools/, mcp/, skills.rs, ui.rs, menu.rs, spinner.rs, completer.rs, learn/, halluc_fs.rs, halluc_session.rs.
 
@@ -92,6 +93,7 @@ docs/engram.md
 - /usr/local/bin/shomagent               Crew CLI.
 - /usr/local/bin/shomagentd              Crew daemon.
 - /usr/local/bin/shomsky                 Learn publish CLI.
+- /usr/local/bin/quickyn                 Yes/no + confidence CLI.
 - /usr/local/bin/engram-cmdfreq          Command-frequency MCP.
 - /usr/local/bin/mistralrs               Inference server.
 
@@ -131,6 +133,18 @@ A line starting with a comma or ?? is intent, handled before direct-shell and LL
 - Registry     ~/bin/.learn/<name>.toml
 
 shomsky publish <name> emits a local apk for /usr/local/bin and the system man page. There is no community registry. ENGRAM_LEARN_STUB=1 serves canned payloads for CI. ENGRAM_LEARN_AUTO=1 auto-confirms run and save.
+
+
+QUICKYN
+
+docs/quickyn.md
+docs/adr/0009-quickyn-yes-no.md
+First-party binary beside shomagent. One-shot yes/no plus confidence from the current model.
+
+- quickyn "<question>" prints yes 0.91 or no 0.42; exit 0 yes, 1 no, 2 error.
+- quickyn "<question>" <file> uses the file body as pre-prompt context before the question.
+- Files over 1000 characters warn on stderr; the call still runs. QUICKYN_STUB_LLM=1 for CI.
+- Agent mode treats quickyn as a direct shell command.
 
 
 SHOMAGENT
@@ -182,7 +196,7 @@ IF YOU ARE CHANGING THE REPOSITORY
 2. Keep the musl/CPU image buildable. Do not add a glibc-only dependency to the flagship path.
 3. Keep tool execution and mode checks in the shell.
 4. Cover non-LLM behavior in tests/cases/ or --self-test. Run: docker compose run --rm tests   or   ./tests/run.sh
-5. Use: cargo test -p shomagent -p shomsky
+5. Use: cargo test -p shomagent -p shomsky -p quickyn
 6. Write an ADR when the change moves a cross-cutting boundary (sandbox, MCP transport, CI gates, license posture), adds or removes an integration, or would surprise someone who only read the code. Skip ADRs for routine bugfixes and doc clarifications that do not change a decision.
 7. How-to docs stay detailed. ADRs stay short: Status, Date, Context, Decision, Consequences, optional Steering.
 8. Do not commit weights, tokens, or .env.
@@ -221,6 +235,8 @@ WHERE TO READ NEXT
 - Licensing inventory          docs/licensing.md
 - Background agents            docs/adr/0007-shomagent-background-crew.md
 - shomagent how-to             docs/shomagent.md
+- Yes/no CLI                   docs/adr/0009-quickyn-yes-no.md
+- quickyn how-to               docs/quickyn.md
 - Learn decision               docs/adr/0008-learn-userland-verb.md
 - Learn how-to                 docs/learn.md
 - Modes, menu, tool protocol   docs/shell-modes.md

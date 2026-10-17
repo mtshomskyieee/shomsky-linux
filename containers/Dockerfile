@@ -79,13 +79,14 @@ COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     mkdir -p /out \
- && cargo build --release -p engram-shell -p engram-cmdfreq -p shomagent -p shomsky \
+ && cargo build --release -p engram-shell -p engram-cmdfreq -p shomagent -p shomsky -p quickyn \
  && cp target/release/engram-shell /out/engram-shell \
  && cp target/release/engram-cmdfreq /out/engram-cmdfreq \
  && cp target/release/shomagent /out/shomagent \
  && cp target/release/shomagentd /out/shomagentd \
  && cp target/release/shomsky /out/shomsky \
- && strip /out/engram-shell /out/engram-cmdfreq /out/shomagent /out/shomagentd /out/shomsky
+ && cp target/release/quickyn /out/quickyn \
+ && strip /out/engram-shell /out/engram-cmdfreq /out/shomagent /out/shomagentd /out/shomsky /out/quickyn
 
 # ---------------------------------------------------------------------------
 # Runtime
@@ -122,6 +123,7 @@ COPY --from=workspace /out/engram-cmdfreq /usr/local/bin/engram-cmdfreq
 COPY --from=workspace /out/shomagent /usr/local/bin/shomagent
 COPY --from=workspace /out/shomagentd /usr/local/bin/shomagentd
 COPY --from=workspace /out/shomsky /usr/local/bin/shomsky
+COPY --from=workspace /out/quickyn /usr/local/bin/quickyn
 COPY --from=mistral /out/mistralrs /usr/local/bin/mistralrs
 COPY containers/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY containers/shomsky-tests.sh /usr/local/bin/shomsky-tests
@@ -131,6 +133,7 @@ RUN chmod 755 /usr/local/bin/engram-shell \
               /usr/local/bin/shomagent \
               /usr/local/bin/shomagentd \
               /usr/local/bin/shomsky \
+              /usr/local/bin/quickyn \
               /usr/local/bin/mistralrs \
               /usr/local/bin/entrypoint.sh \
               /usr/local/bin/shomsky-tests \
