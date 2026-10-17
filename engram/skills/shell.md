@@ -57,7 +57,9 @@ tail -n N FILE      last N lines
 wc -l FILE          line count
 uname -a            kernel / OS info
 cat /etc/os-release distribution identity
+shominstall PKG     user asked to install a package — follow the packages skill (`apk add`)
 apk add PKG         install package (needs UID 0 + network; follow the packages skill)
+install -m … S D    BusyBox install (copy a file). Do not use this to add software.
 ```
 
 ## Filesystem layout (Shomsky)

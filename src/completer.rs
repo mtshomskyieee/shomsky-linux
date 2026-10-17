@@ -10,6 +10,8 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+const SHELL_VERBS: &[&str] = &["shominstall"];
+
 const META_COMMANDS: &[&str] = &[
     ":help", ":h", ":menu", ":m", ":sys", ":uname", ":splash", ":exit", ":quit", ":q",
     ":mode", ":tools", ":tool-style", ":skills", ":model", ":clear", ":logs", ":top",
@@ -114,6 +116,15 @@ impl Completer for EngramHelper {
         // Intent prefixes: don't complete as shell.
         if prefix.starts_with(',') || prefix.starts_with('?') {
             return Ok((0, candidates));
+        }
+
+        for verb in SHELL_VERBS {
+            if verb.starts_with(prefix) && *verb != prefix {
+                candidates.push(Pair {
+                    display: format!("{verb}  (package)"),
+                    replacement: (*verb).to_string(),
+                });
+            }
         }
 
         self.refresh_if_needed();

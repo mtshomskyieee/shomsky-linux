@@ -241,6 +241,9 @@ impl Repl {
                 Mode::Root => {
                     if tools::is_ignore_llm_command(&line, self.skills.ignore_llm_commands()) {
                         self.run_interactive_shell(&line).await?;
+                    } else if let Some(cmd) = crate::packages::package_install_command(&line) {
+                        eprintln!("→ {cmd}");
+                        self.run_root(&cmd).await?;
                     } else {
                         self.run_root(&line).await?;
                     }
@@ -248,6 +251,11 @@ impl Repl {
                 Mode::Agent => {
                     if tools::is_ignore_llm_command(&line, self.skills.ignore_llm_commands()) {
                         self.run_interactive_shell(&line).await?;
+                    } else if let Some(prompt) = crate::packages::shominstall_agent_prompt(&line) {
+                        self.run_llm(&prompt).await?;
+                    } else if let Some(cmd) = crate::packages::package_install_command(&line) {
+                        eprintln!("→ {cmd}");
+                        self.run_direct_shell(&cmd).await?;
                     } else if self.cfg.direct_shell && tools::looks_like_shell_command(&line) {
                         self.run_direct_shell(&line).await?;
                     } else {
@@ -433,6 +441,9 @@ impl Repl {
             Mode::Root => {
                 if tools::is_ignore_llm_command(prompt, self.skills.ignore_llm_commands()) {
                     self.run_interactive_shell(prompt).await?;
+                } else if let Some(cmd) = crate::packages::package_install_command(prompt) {
+                    eprintln!("→ {cmd}");
+                    self.run_root(&cmd).await?;
                 } else {
                     self.run_root(prompt).await?;
                 }
@@ -440,6 +451,11 @@ impl Repl {
             Mode::Agent => {
                 if tools::is_ignore_llm_command(prompt, self.skills.ignore_llm_commands()) {
                     self.run_interactive_shell(prompt).await?;
+                } else if let Some(steered) = crate::packages::shominstall_agent_prompt(prompt) {
+                    self.run_llm(&steered).await?;
+                } else if let Some(cmd) = crate::packages::package_install_command(prompt) {
+                    eprintln!("→ {cmd}");
+                    self.run_direct_shell(&cmd).await?;
                 } else if self.cfg.direct_shell && tools::looks_like_shell_command(prompt) {
                     self.run_direct_shell(prompt).await?;
                 } else {
@@ -1317,7 +1333,10 @@ fn build_agent_prompt(cfg: &Config, skills: &SkillStore) -> String {
         "Shell commands are usually executed by the host before they reach you. \
          You handle natural-language questions and anything that is not a direct \
          shell command. Answer clearly and concisely.\n\
-         If you need filesystem facts, use tools rather than inventing paths.\n\n",
+         If you need filesystem facts, use tools rather than inventing paths.\n\
+         `shominstall PKG` means the user wants that Alpine package installed. \
+         Follow the packages skill and run `apk add`. Do not execute `shominstall` \
+         and do not use BusyBox `install`.\n\n",
     );
 
     match cfg.tool_style {
@@ -1390,6 +1409,9 @@ Learn (agent mode):
   shomsky publish N  Package ~/bin/N as an apk → /usr/local/bin
 
 Packages:
+  shominstall NAME   Ask the agent to install an Alpine package (`apk add`)
+  install NAME       Also installs a package (runs `apk add NAME`)
+  install -m … SRC DEST   BusyBox install (copy). Flags and paths are unchanged.
   :packages          Ledger of successful apk add / apk del (also :menu → Packages)
   :menu → Packages   Enter on ● pkg → [u]ninstall; on ○ pkg → [r]einstall
   Stored in /engram/user/.packages.json

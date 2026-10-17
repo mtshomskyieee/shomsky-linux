@@ -140,9 +140,13 @@ pub async fn execute_tool(
 
     let result = match call.function.name.as_str() {
         "shell_exec" => {
-            let command = text_parse::strip_shell_command_quotes(
+            let original = text_parse::strip_shell_command_quotes(
                 args.get("command").and_then(|v| v.as_str()).unwrap_or(""),
             );
+            // Models often emit BusyBox `install git` or `apt-get install git`.
+            // Rewrite clear package requests; leave real BusyBox install alone.
+            let rewritten = crate::packages::package_install_command(&original);
+            let command = rewritten.clone().unwrap_or(original);
             match mode {
                 Mode::Agent | Mode::Root => {
                     if is_ignore_llm_command(&command, skills.ignore_llm_commands()) {
@@ -164,7 +168,10 @@ pub async fn execute_tool(
                                 &command,
                             );
                         }
-                        r.output
+                        match rewritten {
+                            Some(cmd) => format!("→ {cmd}\n{}", r.output),
+                            None => r.output,
+                        }
                     }
                 }
                 Mode::Hallucination => {
