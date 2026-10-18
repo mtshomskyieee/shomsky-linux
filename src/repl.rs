@@ -649,6 +649,9 @@ impl Repl {
             ":shomagent" | ":agents" => {
                 self.handle_shomagent_meta(arg, parts.next()).await;
             },
+            ":quickyn" => {
+                crate::quickyn_tui::run(self.cwd.clone()).await;
+            },
             other => eprintln!("unknown meta-command '{other}' (try :help)"),
         }
         Ok(false)
@@ -1465,12 +1468,14 @@ Meta-commands:
   :packages | :pkgs  Show apk install / uninstall ledger
   :logs [N]          Show last N lines of mistralrs log (default 40)
   :shomagent         Roster background agents (:agents); :shomagent talk N peeks
+  :quickyn           Split-screen yes/no TUI (question + file left; check/X right)
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 
 quickyn (agent mode / PATH):
   quickyn \"q\"       Yes/no + confidence from the current model (exit 0=yes, 1=no)
   quickyn \"q\" file  Same; file is chain-of-thought context before the question
+  :quickyn           Interactive split TUI over the same decide path
 
 
 Feature menu (TTY):

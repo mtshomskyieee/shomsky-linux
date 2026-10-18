@@ -577,6 +577,11 @@ fn items_for(
                 kind: ItemKind::RunMeta(":splash"),
             },
             Item {
+                label: ":quickyn".into(),
+                detail: "Split-screen yes/no TUI (question + file → check/X)".into(),
+                kind: ItemKind::RunMeta(":quickyn"),
+            },
+            Item {
                 label: ":model".into(),
                 detail: "Active model / LLM endpoint".into(),
                 kind: ItemKind::RunMeta(":model"),

@@ -19,6 +19,7 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 engram-cmdfreq = { path = "crates/engram-cmdfreq" }
+quickyn = { path = "crates/quickyn" }
 shomagent = { path = "crates/shomagent" }
 shomsky = { path = "crates/shomsky" }
 futures-util = "0.3"

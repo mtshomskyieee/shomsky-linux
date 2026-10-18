@@ -51,7 +51,7 @@ Keep responsibilities split under `src/`:
 | LLM | `llm.rs` |
 | Tools | `tools/` (builtins, shell detect, text tool parse) |
 | MCP client | `mcp/` |
-| Skills / UI | `skills.rs`, `ui.rs`, `spinner.rs`, `completer.rs` |
+| Skills / UI | `skills.rs`, `ui.rs`, `spinner.rs`, `completer.rs`, `menu.rs`, `quickyn_tui.rs` |
 | Learn | `learn/` (intent prefix, plan, promote; uses `shomsky` lib) |
 | Hallucination | `halluc_fs.rs`, `halluc_session.rs` |
 

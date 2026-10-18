@@ -62,7 +62,27 @@ fi
 `quickyn` is a known direct-shell command in agent mode, so the line runs the
 binary immediately instead of going to chat. See `:help`.
 
+## Interactive (`:quickyn`)
+
+Inside `engram-shell`, `:quickyn` opens a split-screen TUI over the same
+`decide` path as the binary:
+
+| Pane | Content |
+|------|---------|
+| Left | Question editor + optional file path |
+| Right top | Text checkmark (yes) or X (no); `···` while waiting |
+| Right bottom | `yes 0.91` / `no 0.42`, size warning, or error |
+
+Keys: **Enter** ask · **Tab** question/file · **^O** browse · **^U** clear
+focused field · **Esc** back (or cancel browse / in-flight ask).
+
+Off a TTY (or if raw mode fails): prints
+`quickyn: interactive only — use quickyn "question" [file]` and returns.
+
+Also listed under `:menu` → System.
+
 ## Tests
 
 - Unit: `cargo test -p quickyn`
+- TUI state: `cargo test quickyn_tui`
 - Smoke: `tests/cases/quickyn_smoke.sh` (stub LLM; skips if binary missing)

@@ -3,8 +3,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use quickyn::{
-    build_user_message, file_size_warning, parse_verdict, should_warn_file_size, system_prompt,
-    ChatMessage, LlmClient, EXIT_ERROR,
+    decide, file_size_warning, should_warn_file_size, DecideError, EXIT_ERROR,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -58,22 +57,16 @@ async fn run() -> Result<i32> {
         None
     };
 
-    let messages = vec![
-        ChatMessage::system(system_prompt()),
-        ChatMessage::user(build_user_message(
-            question,
-            file_body.as_deref(),
-        )),
-    ];
-
-    let client = LlmClient::from_env()?;
-    let raw = client.chat(&messages, 64).await?;
-    let Some(verdict) = parse_verdict(&raw) else {
-        eprintln!("quickyn: could not parse decision from model reply:");
-        eprintln!("{raw}");
-        return Ok(EXIT_ERROR);
-    };
-
-    println!("{}", verdict.format_line());
-    Ok(verdict.exit_code())
+    match decide(question, file_body.as_deref()).await {
+        Ok(verdict) => {
+            println!("{}", verdict.format_line());
+            Ok(verdict.exit_code())
+        }
+        Err(DecideError::Unparseable { raw }) => {
+            eprintln!("quickyn: could not parse decision from model reply:");
+            eprintln!("{raw}");
+            Ok(EXIT_ERROR)
+        }
+        Err(DecideError::Llm(e)) => Err(e),
+    }
 }

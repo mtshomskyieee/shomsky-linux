@@ -205,6 +205,41 @@ pub fn stub_reply_text(question: &str, file_body: Option<&str>) -> String {
     )
 }
 
+/// Failure from [`decide`]: LLM transport/HTTP, or an unparseable model reply.
+#[derive(Debug)]
+pub enum DecideError {
+    Llm(anyhow::Error),
+    Unparseable { raw: String },
+}
+
+impl std::fmt::Display for DecideError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecideError::Llm(e) => write!(f, "{e:#}"),
+            DecideError::Unparseable { raw } => {
+                write!(f, "could not parse decision from model reply:\n{raw}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecideError {}
+
+/// Ask the configured local model a yes/no question (shared by CLI and shell TUI).
+pub async fn decide(question: &str, file_body: Option<&str>) -> Result<Verdict, DecideError> {
+    let question = question.trim();
+    let messages = vec![
+        ChatMessage::system(system_prompt()),
+        ChatMessage::user(build_user_message(question, file_body)),
+    ];
+    let client = LlmClient::from_env().map_err(DecideError::Llm)?;
+    let raw = client
+        .chat(&messages, 64)
+        .await
+        .map_err(DecideError::Llm)?;
+    parse_verdict(&raw).ok_or(DecideError::Unparseable { raw })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +313,22 @@ mod tests {
         assert_eq!(Decision::Yes.exit_code(), 0);
         assert_eq!(Decision::No.exit_code(), 1);
         assert_eq!(EXIT_ERROR, 2);
+    }
+
+    #[tokio::test]
+    async fn decide_stub_yes_and_no() {
+        std::env::set_var("QUICKYN_STUB_LLM", "1");
+        let y = decide("is paris in france?", None).await.unwrap();
+        assert_eq!(y.decision, Decision::Yes);
+        assert!((y.confidence - 0.91).abs() < 0.001);
+
+        let n = decide("stub-no please", None).await.unwrap();
+        assert_eq!(n.decision, Decision::No);
+        assert!((n.confidence - 0.87).abs() < 0.001);
+
+        let n2 = decide("anything", Some("context stub-no here"))
+            .await
+            .unwrap();
+        assert_eq!(n2.decision, Decision::No);
     }
 }

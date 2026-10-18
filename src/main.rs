@@ -9,6 +9,7 @@ mod mcp;
 mod menu;
 mod modes;
 mod packages;
+mod quickyn_tui;
 mod repl;
 mod skills;
 mod spinner;

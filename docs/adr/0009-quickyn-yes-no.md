@@ -24,12 +24,15 @@ Ship a first-party **`quickyn`** binary at the same layer as `shomagent`:
 |---------|----------|
 | `quickyn "<question>"` | Yes/no + confidence from the configured local model |
 | `quickyn "<question>" <file>` | File body is pre-prompt context before the question |
+| `:quickyn` (shell) | Split-screen TUI over the same `decide` function (question + file left; check/X + verdict right) |
 | stdout | One line: `yes 0.91` or `no 0.42` |
 | exit | `0` = yes, `1` = no, `2` = usage / missing file / unparseable |
 | stderr | Size warning when file `chars().count() > 1000`; errors |
 
 - Workspace crate **`crates/quickyn/`** (lib + CLI). Thin OpenAI-compatible chat
-  client; **no** dependency on `shomagent`.
+  client; **no** dependency on `shomagent`. Shared **`decide(question, file_body)`**
+  used by the binary and by `engram-shell`’s `:quickyn` TUI (`src/quickyn_tui.rs`,
+  ANSI + BusyBox `stty` like `:menu`).
 - Env: `ENGRAM_LLM_URL` / `ENGRAM_LLM_MODEL` (defaults match the shell). Stub:
   `QUICKYN_STUB_LLM=1` (yes unless question or file contains `stub-no`).
 - Image installs `/usr/local/bin/quickyn`.
