@@ -91,6 +91,7 @@ talked around by the LLM. Unknown tool names are ignored.
 | `/usr/local/bin/engram-cmdfreq` | First-party command-frequency MCP (stdio child) |
 | `/usr/local/bin/shomagent` / `shomagentd` | Background crew CLI + daemon |
 | `/usr/local/bin/shomsky` | Learn publish CLI (`shomsky publish`) |
+| `/usr/local/bin/quickyn` | Yes/no + confidence CLI |
 | `/engram/user/bin/` | Agent-grown commands from learn promote |
 | `/engram/user/share/man/` | Man pages for learned commands |
 | `/engram/user/.command_freq.json` | Command frequency store (Completer / `:top` / MCP) |

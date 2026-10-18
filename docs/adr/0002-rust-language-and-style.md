@@ -24,6 +24,8 @@ must follow [ADR-0000](0000-what-is-an-adr.md) and
     + `shomagent` CLI (see [ADR-0007](0007-shomagent-background-crew.md))
   - member crate **`shomsky`** (`crates/shomsky/`) — learn registry / apk publish
     + `shomsky` CLI (see [ADR-0008](0008-learn-userland-verb.md))
+  - member crate **`quickyn`** (`crates/quickyn/`) — yes/no + confidence CLI
+    (see [ADR-0009](0009-quickyn-yes-no.md))
 - Prefer MIT / Apache-2.0 dependencies consistent with the distro stack.
 
 ### Runtime and libraries
@@ -49,7 +51,7 @@ Keep responsibilities split under `src/`:
 | LLM | `llm.rs` |
 | Tools | `tools/` (builtins, shell detect, text tool parse) |
 | MCP client | `mcp/` |
-| Skills / UI | `skills.rs`, `ui.rs`, `spinner.rs`, `completer.rs` |
+| Skills / UI | `skills.rs`, `ui.rs`, `spinner.rs`, `completer.rs`, `menu.rs`, `quickyn_tui.rs` |
 | Learn | `learn/` (intent prefix, plan, promote; uses `shomsky` lib) |
 | Hallucination | `halluc_fs.rs`, `halluc_session.rs` |
 

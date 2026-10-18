@@ -60,6 +60,7 @@ Workspace ([ADR-0002](adr/0002-rust-language-and-style.md)):
 | `engram-cmdfreq` | `crates/engram-cmdfreq/` | stdio MCP: `record_command`, `top_commands` |
 | `shomagent` | `crates/shomagent/` | `shomagentd` + `shomagent` CLI |
 | `shomsky` | `crates/shomsky/` | learn registry and `shomsky publish` |
+| `quickyn` | `crates/quickyn/` | yes/no + confidence CLI |
 
 `engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`.
 
@@ -87,7 +88,7 @@ Tests: unit tests live next to the module. Behavior and golden paths live in `te
 | `/etc/shomsky/shomagent_crew.d/` | System crew drop-ins. `./shomagent_crew.d/` overrides the same `name`. |
 | `/run/shomagent/` | Control socket and notify lane. |
 | `/usr/local/bin/engram-shell` | The shell. |
-| `/usr/local/bin/{shomagent,shomagentd,shomsky,engram-cmdfreq,mistralrs}` | Crew, publish, MCP, inference. |
+| `/usr/local/bin/{shomagent,shomagentd,shomsky,quickyn,engram-cmdfreq,mistralrs}` | Crew, publish, yes/no, MCP, inference. |
 
 ## Modes
 
@@ -124,6 +125,17 @@ A line starting with `,` or `??` is intent, handled before direct-shell and LLM 
 | Registry | `~/bin/.learn/<name>.toml` |
 
 `shomsky publish <name>` emits a local apk for `/usr/local/bin` and the system man page. There is no community registry. `ENGRAM_LEARN_STUB=1` canned payloads for CI. `ENGRAM_LEARN_AUTO=1` auto-confirms run and save.
+
+## quickyn
+
+[quickyn.md](quickyn.md), [ADR-0009](adr/0009-quickyn-yes-no.md). First-party binary beside `shomagent`. One-shot yes/no + confidence from the current model.
+
+| Verb | Effect |
+|------|--------|
+| `quickyn "<question>"` | Prints `yes 0.91` or `no 0.42`; exit `0` yes, `1` no, `2` error |
+| `quickyn "<question>" <file>` | File body is pre-prompt context before the question |
+
+Files over 1000 characters warn on stderr (call still runs). `QUICKYN_STUB_LLM=1` for CI. Agent mode treats `quickyn` as a direct shell command.
 
 ## shomagent
 
@@ -170,7 +182,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 2. Keep the musl/CPU image buildable. Do not add a glibc-only dependency to the flagship path.
 3. Keep tool execution and mode checks in the shell.
 4. Cover non-LLM behavior in `tests/cases/` or `--self-test`. Run `docker compose run --rm tests` (or `./tests/run.sh`).
-5. Use `cargo test -p shomagent -p shomsky` for those crates.
+5. Use `cargo test -p shomagent -p shomsky -p quickyn` for those crates.
 6. Write an ADR when the change moves a cross-cutting boundary (sandbox, MCP transport, CI gates, license posture), adds or removes an integration, or would surprise someone who only read the code. Skip ADRs for routine bugfixes and doc clarifications that do not change a decision.
 7. How-to docs stay detailed. ADRs stay short: Status, Date, Context, Decision, Consequences, optional Steering.
 8. Do not commit weights, tokens, or `.env`.
@@ -206,6 +218,7 @@ You are the agent in Shomsky Linux, an Alpine container, talking to a person at 
 | License and AI contributions | [adr/0006](adr/0006-mit-as-is-and-ai-contributions.md), [licensing.md](licensing.md) |
 | Background agents | [adr/0007](adr/0007-shomagent-background-crew.md), [shomagent.md](shomagent.md) |
 | Learn / publish | [adr/0008](adr/0008-learn-userland-verb.md), [learn.md](learn.md) |
+| Yes/no CLI | [adr/0009](adr/0009-quickyn-yes-no.md), [quickyn.md](quickyn.md) |
 | Modes, menu, tool protocol | [shell-modes.md](shell-modes.md) |
 | `/engram` and skills | [engram.md](engram.md) |
 | Build, GHCR | [build-and-publish.md](build-and-publish.md) |

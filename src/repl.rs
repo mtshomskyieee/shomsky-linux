@@ -19,7 +19,7 @@ use crate::mcp::McpRegistry;
 use crate::menu::{self, MenuAction, MenuContext, ShomagentMemberBrief};
 use crate::modes::Mode;
 use crate::skills::SkillStore;
-use crate::spinner::{self, with_progress_bar, with_spinner};
+use crate::spinner::{self, with_progress_bar, with_spinner, with_spinner_cancel, CancelKey, Wait};
 use crate::tools::{self, shell_exec, shell_exec_interactive};
 use crate::ui;
 
@@ -241,6 +241,9 @@ impl Repl {
                 Mode::Root => {
                     if tools::is_ignore_llm_command(&line, self.skills.ignore_llm_commands()) {
                         self.run_interactive_shell(&line).await?;
+                    } else if let Some(cmd) = crate::packages::package_install_command(&line) {
+                        eprintln!("→ {cmd}");
+                        self.run_root(&cmd).await?;
                     } else {
                         self.run_root(&line).await?;
                     }
@@ -248,6 +251,11 @@ impl Repl {
                 Mode::Agent => {
                     if tools::is_ignore_llm_command(&line, self.skills.ignore_llm_commands()) {
                         self.run_interactive_shell(&line).await?;
+                    } else if let Some(prompt) = crate::packages::shominstall_agent_prompt(&line) {
+                        self.run_llm(&prompt).await?;
+                    } else if let Some(cmd) = crate::packages::package_install_command(&line) {
+                        eprintln!("→ {cmd}");
+                        self.run_direct_shell(&cmd).await?;
                     } else if self.cfg.direct_shell && tools::looks_like_shell_command(&line) {
                         self.run_direct_shell(&line).await?;
                     } else {
@@ -433,6 +441,9 @@ impl Repl {
             Mode::Root => {
                 if tools::is_ignore_llm_command(prompt, self.skills.ignore_llm_commands()) {
                     self.run_interactive_shell(prompt).await?;
+                } else if let Some(cmd) = crate::packages::package_install_command(prompt) {
+                    eprintln!("→ {cmd}");
+                    self.run_root(&cmd).await?;
                 } else {
                     self.run_root(prompt).await?;
                 }
@@ -440,6 +451,11 @@ impl Repl {
             Mode::Agent => {
                 if tools::is_ignore_llm_command(prompt, self.skills.ignore_llm_commands()) {
                     self.run_interactive_shell(prompt).await?;
+                } else if let Some(steered) = crate::packages::shominstall_agent_prompt(prompt) {
+                    self.run_llm(&steered).await?;
+                } else if let Some(cmd) = crate::packages::package_install_command(prompt) {
+                    eprintln!("→ {cmd}");
+                    self.run_direct_shell(&cmd).await?;
                 } else if self.cfg.direct_shell && tools::looks_like_shell_command(prompt) {
                     self.run_direct_shell(prompt).await?;
                 } else {
@@ -632,6 +648,9 @@ impl Repl {
             },
             ":shomagent" | ":agents" => {
                 self.handle_shomagent_meta(arg, parts.next()).await;
+            },
+            ":quickyn" => {
+                crate::quickyn_tui::run(self.cwd.clone()).await;
             },
             other => eprintln!("unknown meta-command '{other}' (try :help)"),
         }
@@ -933,7 +952,7 @@ impl Repl {
                 arguments: serde_json::json!({ "command": line }).to_string(),
             },
         };
-        let result = with_spinner("running shell", async {
+        let result = match with_spinner_cancel("running shell", async {
             tools::execute_tool(
                 &call,
                 self.cfg.mode,
@@ -944,7 +963,14 @@ impl Repl {
             )
             .await
         })
-        .await?;
+        .await
+        {
+            Wait::Cancelled(key) => {
+                println!("{}", spinner::cancel_notice(key, &format!("shell: {line}")));
+                return Ok(());
+            }
+            Wait::Done(result) => result?,
+        };
         print!("{result}");
         if !result.ends_with('\n') {
             println!();
@@ -998,9 +1024,45 @@ impl Repl {
         Ok(())
     }
 
+    fn restore_turn(&mut self, history: Vec<ChatMessage>, cwd: PathBuf) {
+        self.history = history;
+        if self.cwd != cwd {
+            tools::adopt_cwd(&mut self.cwd, cwd);
+        }
+    }
+
+    /// Close tool calls that were abandoned so the next turn stays valid.
+    fn note_cancelled_tools(&mut self, calls: &[ToolCall], text_style: bool) {
+        for call in calls {
+            let note = "cancelled by user — do not retry this command".to_string();
+            if text_style {
+                self.history.push(ChatMessage::user(format!(
+                    "<tool_result name=\"{}\">\n{note}\n</tool_result>\n\
+                     The user cancelled. Stop. Do not run more tools.",
+                    call.function.name
+                )));
+            } else {
+                self.history.push(ChatMessage::tool_result(
+                    &call.id,
+                    &call.function.name,
+                    note,
+                ));
+            }
+        }
+    }
+
+    fn ack_cancel(key: CancelKey, what: &str) {
+        println!("{}", spinner::cancel_notice(key, what));
+    }
+
     async fn run_llm(&mut self, line: &str) -> Result<()> {
+        let saved_history = self.history.clone();
+        let saved_cwd = self.cwd.clone();
         self.history.push(ChatMessage::user(line));
         self.trim_history();
+        // False until a tool in this turn finishes. Cancelling before that
+        // drops the turn (so a caps-lock EXIT never sticks in history).
+        let mut committed = false;
 
         // Hallucination is a pure LLM shell simulator — do not advertise tools.
         let schemas = if self.cfg.mode == Mode::Hallucination {
@@ -1023,11 +1085,21 @@ impl Repl {
             } else {
                 format!("thinking (round {})", round + 1)
             };
-            let response = match with_spinner(&label, self.llm.chat(&self.history, &schemas, false))
-                .await
+            let response = match with_spinner_cancel(
+                &label,
+                self.llm.chat(&self.history, &schemas, false),
+            )
+            .await
             {
-                Ok(r) => r,
-                Err(e) => {
+                Wait::Cancelled(key) => {
+                    if !committed {
+                        self.restore_turn(saved_history, saved_cwd);
+                    }
+                    Self::ack_cancel(key, "thinking");
+                    return Ok(());
+                }
+                Wait::Done(Ok(r)) => r,
+                Wait::Done(Err(e)) => {
                     eprintln!("llm error: {e:#}");
                     self.history.pop();
                     return Ok(());
@@ -1065,9 +1137,9 @@ impl Repl {
                     }
                 }
 
-                if self.cfg.tool_style == ToolStyle::Text
-                    || response.tool_calls.is_empty()
-                {
+                let text_style = self.cfg.tool_style == ToolStyle::Text
+                    || response.tool_calls.is_empty();
+                if text_style {
                     // Text-pattern path: store as plain assistant text + synthetic tool results
                     self.history.push(ChatMessage::assistant_text(if raw.is_empty() {
                         format!("(calling {} tools)", calls.len())
@@ -1081,14 +1153,14 @@ impl Repl {
                     ));
                 }
 
-                for call in &calls {
+                for (idx, call) in calls.iter().enumerate() {
                     eprintln!(
                         "  ↳ {}({})",
                         call.function.name,
                         truncate_args(&call.function.arguments, 80)
                     );
                     let tool_label = format!("running {}", call.function.name);
-                    let result = with_spinner(&tool_label, async {
+                    let result = match with_spinner_cancel(&tool_label, async {
                         tools::execute_tool(
                             call,
                             self.cfg.mode,
@@ -1099,7 +1171,19 @@ impl Repl {
                         )
                         .await
                     })
-                    .await?;
+                    .await
+                    {
+                        Wait::Cancelled(key) => {
+                            if committed {
+                                self.note_cancelled_tools(&calls[idx..], text_style);
+                            } else {
+                                self.restore_turn(saved_history, saved_cwd);
+                            }
+                            Self::ack_cancel(key, &describe_cancel(call));
+                            return Ok(());
+                        }
+                        Wait::Done(result) => result?,
+                    };
                     // Always show tool output to the user (not only to the model).
                     print!("{result}");
                     if !result.ends_with('\n') {
@@ -1108,10 +1192,9 @@ impl Repl {
                     if let Some(cmd) = tools::shell_exec_command(call) {
                         self.record_command(&cmd).await;
                     }
+                    committed = true;
 
-                    if self.cfg.tool_style == ToolStyle::Text
-                        || response.tool_calls.is_empty()
-                    {
+                    if text_style {
                         // For text-style models, feed results as a user/tool observation.
                         self.history.push(ChatMessage::user(format!(
                             "<tool_result name=\"{}\">\n{}\n</tool_result>\n\
@@ -1317,7 +1400,10 @@ fn build_agent_prompt(cfg: &Config, skills: &SkillStore) -> String {
         "Shell commands are usually executed by the host before they reach you. \
          You handle natural-language questions and anything that is not a direct \
          shell command. Answer clearly and concisely.\n\
-         If you need filesystem facts, use tools rather than inventing paths.\n\n",
+         If you need filesystem facts, use tools rather than inventing paths.\n\
+         `shominstall PKG` means the user wants that Alpine package installed. \
+         Follow the packages skill and run `apk add`. Do not execute `shominstall` \
+         and do not use BusyBox `install`.\n\n",
     );
 
     match cfg.tool_style {
@@ -1353,6 +1439,13 @@ fn build_agent_prompt(cfg: &Config, skills: &SkillStore) -> String {
     s
 }
 
+fn describe_cancel(call: &ToolCall) -> String {
+    match tools::shell_exec_command(call) {
+        Some(cmd) => format!("shell_exec: {cmd}"),
+        None => call.function.name.clone(),
+    }
+}
+
 fn truncate_args(s: &str, limit: usize) -> String {
     if s.len() <= limit {
         s.to_string()
@@ -1375,8 +1468,15 @@ Meta-commands:
   :packages | :pkgs  Show apk install / uninstall ledger
   :logs [N]          Show last N lines of mistralrs log (default 40)
   :shomagent         Roster background agents (:agents); :shomagent talk N peeks
+  :quickyn           Split-screen yes/no TUI (question + file left; check/X right)
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
+
+quickyn (agent mode / PATH):
+  quickyn \"q\"       Yes/no + confidence from the current model (exit 0=yes, 1=no)
+  quickyn \"q\" file  Same; file is chain-of-thought context before the question
+  :quickyn           Interactive split TUI over the same decide path
+
 
 Feature menu (TTY):
   :menu | :m         Slip into Modes / Learn / Packages / shomagent / Help / System
@@ -1390,6 +1490,9 @@ Learn (agent mode):
   shomsky publish N  Package ~/bin/N as an apk → /usr/local/bin
 
 Packages:
+  shominstall NAME   Ask the agent to install an Alpine package (`apk add`)
+  install NAME       Also installs a package (runs `apk add NAME`)
+  install -m … SRC DEST   BusyBox install (copy). Flags and paths are unchanged.
   :packages          Ledger of successful apk add / apk del (also :menu → Packages)
   :menu → Packages   Enter on ● pkg → [u]ninstall; on ○ pkg → [r]einstall
   Stored in /engram/user/.packages.json
@@ -1409,7 +1512,7 @@ Modes:
   hallucination  Guided virtual shell (builtins) + LLM; no disk writes
   root           Bypass LLM; BusyBox ash with persistent cwd
 
-Shell-shaped lines (ls, cd, echo, cat, pipelines, redirects, ...) execute
+Shell-shaped lines (ls, git, cd, echo, cat, pipelines, redirects, ...) execute
 immediately in agent mode — they do not wait on the LLM.
 In agent/root, `cd` changes the session directory (shown in the prompt).
   agent: cd ~ → /engram/user    root: cd ~ → /root
@@ -1434,6 +1537,8 @@ Logs:
   Set MISTRALRS_LOG_TO_TTY=1 to stream logs to the terminal instead.
 
 Spinner (TTY only; silent under pipes / --once / --script):
+  Esc                  Cancel thinking or the tool/shell command in progress.
+                       The shell prints 'esc — cancelled …' and returns to the prompt.
   ENGRAM_SPINNER=auto|always|off   Status line while waiting on LLM/tools
   ENGRAM_LLM_READY_TRIES=N         Startup model wait budget in seconds (default 600)
   NO_COLOR=1                       Disable splash / prompt colors

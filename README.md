@@ -75,6 +75,22 @@ COMPOSE_MENU=false SHOMSKY_MODEL=tiny docker compose up --menu=false
 
 Switch at the prompt with `:mode agent|hallucination|root`.
 
+## quickyn
+
+One-shot yes/no from the current local model, with a confidence score. Optional
+file is chain-of-thought context before the question. Full reference:
+[docs/quickyn.md](docs/quickyn.md).
+
+```bash
+quickyn "is paris in france?"
+# yes 0.91
+
+quickyn "ship this?" notes.md   # warns on stderr if file > 1000 chars
+```
+
+Stdout: `yes 0.91` or `no 0.42`. Exit: `0` = yes, `1` = no, `2` = error.
+In agent mode the name runs as a direct shell command (not chat).
+
 ## shomagent
 
 Background agents you can hold a conversation with. Long-running watches stay
@@ -199,13 +215,13 @@ are inlined into the system prompt; others are loaded on demand via the
 ## Test
 
 ```bash
-docker compose run --rm tests          # shell + shomagent + learn suites (no LLM)
+docker compose run --rm tests          # shell + shomagent + quickyn + learn suites (no LLM)
 docker compose run --rm tests-llm      # agent + hallucination LLM checks (tiny)
 # or on the host against a built image:
 ./tests/run.sh
 RUN_LLM_TESTS=1 ./tests/run.sh         # when mistralrs is already up
 # crate-level unit tests:
-#   cargo test -p shomagent -p shomsky
+#   cargo test -p shomagent -p shomsky -p quickyn
 ```
 
 CPU-only: first start (model load + first tokens) can take several minutes.

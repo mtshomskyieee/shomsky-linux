@@ -65,11 +65,14 @@ pub fn looks_like_shell_command(line: &str) -> bool {
         "command", "hash", "alias", "ulimit", "umask", "readonly", "unset", "shift",
         "date", "clear", "printf", "test", "[", "stat", "realpath", "basename", "dirname",
         "sed", "awk", "sort", "uniq", "cut", "tr", "tee", "sleep", "true", "false",
+        "git",
         "busybox", "sh", "ash", "hostname", "free", "uptime", "mount", "umount", "kill",
         "wget", "curl", "tar", "gzip", "gunzip", "sha256sum", "md5sum", "diff", "patch",
         "seq", "yes", "od", "hexdump", "strings", "cmp", "comm", "expand", "unexpand",
         "fold", "fmt", "nl", "rev", "paste", "join", "split", "csplit", "xargs",
         "dirname", "readlink", "sync", "install", "dd", "df", "sync",
+        // First-party CLI verbs (same PATH layer as shomagent).
+        "shomagent", "shomsky", "quickyn",
     ];
     CMDS.contains(&cmd)
 }
@@ -96,8 +99,16 @@ mod tests {
         assert!(looks_like_shell_command("ls -la"));
         assert!(looks_like_shell_command("echo hi > file.txt"));
         assert!(looks_like_shell_command("cat file.txt"));
+        assert!(looks_like_shell_command("git status"));
+        assert!(looks_like_shell_command("git add ."));
         assert!(!looks_like_shell_command("what is in /etc?"));
         assert!(!looks_like_shell_command("please list the files"));
+    }
+
+    #[test]
+    fn quickyn_runs_as_direct_shell() {
+        assert!(looks_like_shell_command("quickyn \"is it ready\""));
+        assert!(looks_like_shell_command("quickyn is-it-ready notes.md"));
     }
 
     #[test]

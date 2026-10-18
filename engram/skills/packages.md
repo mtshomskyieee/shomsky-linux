@@ -1,6 +1,6 @@
 ---
 name: packages
-description: Install and remove Alpine software with apk, including search when the binary name differs from the package. Use when the user asks to install, add, uninstall, or remove a program (neovim, curl, …).
+description: Install and remove Alpine software with apk. `shominstall PKG` means the user wants that package installed. Use when the user asks to install, add, uninstall, or remove a program (neovim, curl, …).
 always_load: true
 ---
 
@@ -20,14 +20,21 @@ ledger by hand unless the user asks.
 
 ## Rules
 
-1. **apk only.** Never `apt`, `dnf`, or `pacman`. “apt install neovim” means
-   `apk add` after resolving the package name.
-2. **UID 0 and network.** Run `id -u` first; it must be `0`. The image has no
+1. **`shominstall PKG` means install a package.** The user (or the splash)
+   types `shominstall git`. That word is not a binary. Install the named
+   Alpine package: resolve the name, then `apk add`. Do not execute
+   `shominstall`, and do not run BusyBox `install`.
+2. **apk only.** Never run `apt`, `apt-get`, `dnf`, or `pacman`. Never run
+   BusyBox `install` to add software — that applet copies files. A clear
+   request (`install git`, `please install git`, `apt-get install -y git`,
+   or a tool call of `shominstall git`) is `apk add`. When you call
+   `shell_exec`, the command must be `apk add PKG` (or `apk del`).
+3. **UID 0 and network.** Run `id -u` first; it must be `0`. The image has no
    `doas` or `sudo`. If not root, or if apk cannot reach the network, stop and
    report the error (do not send the user to `:mode root` for privileges).
-3. **Musl Alpine only.** Do not enable `edge`, pipe `curl` into a shell, or
+4. **Musl Alpine only.** Do not enable `edge`, pipe `curl` into a shell, or
    install glibc / `gcompat` binaries.
-4. **Not learn.** `~/bin` commands and `shomsky publish` are the `learn` skill.
+5. **Not learn.** `~/bin` commands and `shomsky publish` are the `learn` skill.
 
 ## Install
 
