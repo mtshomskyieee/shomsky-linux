@@ -168,11 +168,19 @@ shomagent refine idea notes.md
 ```
 
 Unlike dream (which appends beats), refine replaces the whole file when the
-pass still reads as the idea. A substantial document (about 120 words or more)
+pass still reads as the idea. Before that replacement, the current file is
+copied to `name.v0`, then `name.v1`, and so on (`example.md` becomes
+`example.md.v0` on the first rewrite). A file longer than 6,000 characters is
+clipped for the model. The pass continues, the terminal names the `.vN` file
+that holds the full text from before the clip, and the rewrite is saved as usual.
+A substantial document (about 120 words or more)
 ends the session instead of being saved when the rewrite is nearly empty,
-drops most of the piece, or no longer reads as a document. A pass that only
-repeats the current text, including a punctuation-only edit, also ends the
-session. The previous text stays on disk. Roster glyph for a live refine member is `✦`.
+drops most of the piece, or no longer reads as a document. An empty rewrite of
+any existing file ends the same way. A pass that only repeats the current
+text, including a punctuation-only edit, also ends the session. The previous
+text stays on disk. A `**reason:**` line still counts when a preamble comes
+before it; that preamble is not written into the file. Roster glyph for a live
+refine member is `✦`.
 
 ## Drop-ins (`shomagent_crew.d`)
 

@@ -1228,6 +1228,7 @@ impl Daemon {
                 path,
                 gen,
                 previous: current,
+                clipped,
             },
         ))
     }
@@ -1272,6 +1273,17 @@ impl Daemon {
             ));
         }
         if body.trim().is_empty() {
+            if !meta.previous.trim().is_empty() {
+                if let Some(m) = self.members.get_mut(&meta.id) {
+                    if m.step_gen == meta.gen {
+                        m.step_busy = false;
+                        m.last_activity = Instant::now();
+                    }
+                }
+                return Err(anyhow!(
+                    "refine turned destructive: the rewrite has almost no content. the previous idea was kept"
+                ));
+            }
             body = "# idea\n\n(empty refine — try again with a clearer task)\n".into();
         }
         let mut body = truncate_chars(&body, 8_000);
@@ -1296,6 +1308,7 @@ impl Daemon {
             m.last_activity = Instant::now();
         }
 
+        let saved = snapshot_refine_source(&meta.path)?;
         atomic_write(&meta.path, &body)?;
 
         if let Some(m) = self.members.get_mut(&meta.id) {
@@ -1308,10 +1321,17 @@ impl Daemon {
             }
         }
 
+        let clip_note = match saved {
+            Some(path) if meta.clipped => format!(
+                "clipped to 6,000 characters — the full text before this pass is at {}\n\n",
+                path.display()
+            ),
+            _ => String::new(),
+        };
         if act.reason.is_empty() {
-            Ok(body)
+            Ok(format!("{clip_note}{body}"))
         } else {
-            Ok(format!("**reason:** {}\n\n{body}", act.reason))
+            Ok(format!("{clip_note}**reason:** {}\n\n{body}", act.reason))
         }
     }
 
@@ -1842,6 +1862,38 @@ struct RefineStepMeta {
     /// Document text the model was asked to rewrite. A destructive pass is
     /// judged against this, and the file is left unchanged.
     previous: String,
+    /// The file on disk was longer than the excerpt sent to the model.
+    clipped: bool,
+}
+
+/// `example.md` snapshots are `example.md.v0`, `example.md.v1`, …
+fn refine_version_path(path: &std::path::Path, n: u32) -> PathBuf {
+    let mut full = path.as_os_str().to_os_string();
+    full.push(format!(".v{n}"));
+    PathBuf::from(full)
+}
+
+fn next_refine_version(path: &std::path::Path) -> u32 {
+    let mut n = 0u32;
+    while n < 10_000 && refine_version_path(path, n).exists() {
+        n += 1;
+    }
+    n
+}
+
+/// Copy the current file to the next `.vN` before a rewrite replaces it.
+/// The copy is the full file, including text the model never saw.
+fn snapshot_refine_source(path: &std::path::Path) -> Result<Option<PathBuf>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let n = next_refine_version(path);
+    if n >= 10_000 {
+        anyhow::bail!("too many versions of {}", path.display());
+    }
+    let dest = refine_version_path(path, n);
+    std::fs::copy(path, &dest).with_context(|| format!("saving {}", dest.display()))?;
+    Ok(Some(dest))
 }
 
 /// Replace `path` by renaming a fully written temp file in the same directory.
@@ -2113,30 +2165,45 @@ struct RefineAct {
     document: String,
 }
 
-/// Split a reason-then-act reply. A reply with no reason line is the document.
+fn is_starred_reason_line(line: &str) -> bool {
+    line.trim().to_ascii_lowercase().starts_with("**reason:**")
+}
+
+/// A bare `reason:` line counts only when it is the first text line, so a
+/// later sentence in the document is left alone. `**reason:**` may follow a preamble.
+fn find_refine_reason_line(lines: &[&str]) -> Option<usize> {
+    if let Some(i) = lines.iter().position(|line| is_starred_reason_line(line)) {
+        return Some(i);
+    }
+    let first = lines.iter().position(|line| !line.trim().is_empty())?;
+    let trimmed = lines[first].trim();
+    trimmed
+        .to_ascii_lowercase()
+        .starts_with("reason:")
+        .then_some(first)
+}
+
+/// Split a reason-then-act reply. The reason line may follow a short preamble;
+/// that preamble is dropped. A reply with no reason line is the document.
 fn split_refine_react(reply: &str) -> RefineAct {
     let text = reply.trim();
-    let mut lines = text.lines();
-    let Some(first) = lines.next() else {
-        return RefineAct {
-            reason: String::new(),
-            document: String::new(),
-        };
-    };
-    let trimmed = first.trim();
-    let Some(reason_body) = strip_reason_prefix(trimmed) else {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(idx) = find_refine_reason_line(&lines) else {
         return RefineAct {
             reason: String::new(),
             document: text.to_string(),
         };
     };
-    let reason = reason_body.to_string();
-    while lines.clone().next().is_some_and(|l| l.trim().is_empty()) {
-        lines.next();
+    let reason = strip_reason_prefix(lines[idx].trim())
+        .unwrap_or("")
+        .to_string();
+    let mut rest = lines[idx + 1..].iter().copied().peekable();
+    while rest.peek().is_some_and(|line| line.trim().is_empty()) {
+        rest.next();
     }
     RefineAct {
         reason,
-        document: lines.collect::<Vec<_>>().join("\n"),
+        document: rest.collect::<Vec<_>>().join("\n"),
     }
 }
 
@@ -3122,6 +3189,142 @@ mod tests {
         assert!(std::fs::read_to_string(&path)
             .unwrap()
             .contains("bitter candy"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clipped_refine_saves_the_full_text_before_rewriting() {
+        let dir = scratch_dir("refine-clip");
+        let mut daemon = Daemon::new(LlmClient::from_env().unwrap(), dir.clone());
+        let path = dir.join("example.md");
+        let original = "word ".repeat(2_000);
+        assert!(original.chars().count() > 6_000);
+        std::fs::write(&path, &original).unwrap();
+        let status = daemon.attach_refine(path.to_str().unwrap(), None).unwrap();
+
+        let (_llm, msgs, meta) = daemon.refine_step_begin(status.id, "tighten it").unwrap();
+        let user = &msgs.iter().find(|m| m.role == "user").unwrap().content;
+        assert!(user.contains("truncated"), "{user}");
+        assert!(user.chars().count() < original.chars().count());
+        let rewrite = "The revised chapter walks through the clipped idea and keeps a full paragraph of new prose. ".repeat(40);
+        let shown = daemon.refine_step_finish(meta, rewrite.clone()).unwrap();
+        let v0 = dir.join("example.md.v0");
+        assert_eq!(std::fs::read_to_string(&v0).unwrap(), original);
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.contains("revised chapter"));
+        assert!(first.chars().count() < original.chars().count());
+        assert!(shown.contains("clipped to 6,000 characters"), "{shown}");
+        assert!(shown.contains("example.md.v0"), "{shown}");
+        assert!(!first.contains("clipped to 6,000"));
+
+        let (_llm, _msgs, meta) = daemon.refine_step_begin(status.id, "tighten it").unwrap();
+        let err = daemon.refine_step_finish(meta, first.clone()).unwrap_err();
+        assert!(err.to_string().contains("refine stalled"), "{err}");
+        assert!(!dir.join("example.md.v1").exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+
+        let (_llm, _msgs, meta) = daemon
+            .refine_step_begin(status.id, "change the ending")
+            .unwrap();
+        let later = "A later pass changes the ending and adds a concrete scene the first rewrite did not have. ".repeat(40);
+        let shown = daemon.refine_step_finish(meta, later).unwrap();
+        assert!(!shown.contains("clipped"), "{shown}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("example.md.v1")).unwrap(),
+            first
+        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("concrete scene"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_refine_keeps_a_short_document() {
+        let dir = scratch_dir("refine-empty");
+        let mut daemon = Daemon::new(LlmClient::from_env().unwrap(), dir.clone());
+        let path = dir.join("idea.md");
+        let poem = "tandy ate some candy,\nsome candy that was bad,\n";
+        std::fs::write(&path, poem).unwrap();
+        let status = daemon.attach_refine(path.to_str().unwrap(), None).unwrap();
+        let (_llm, _msgs, meta) = daemon
+            .refine_step_begin(status.id, "you're a poet")
+            .unwrap();
+        let err = daemon.refine_step_finish(meta, "   \n".into()).unwrap_err();
+        assert!(
+            err.to_string().contains("refine turned destructive"),
+            "{err}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), poem);
+        assert!(!dir.join("idea.md.v0").exists());
+
+        let fresh = dir.join("new.md");
+        let status = daemon.attach_refine(fresh.to_str().unwrap(), None).unwrap();
+        let (_llm, _msgs, meta) = daemon.refine_step_begin(status.id, "start").unwrap();
+        let saved = daemon.refine_step_finish(meta, "\n".into()).unwrap();
+        assert!(saved.contains("empty refine"));
+        assert!(std::fs::read_to_string(&fresh)
+            .unwrap()
+            .contains("empty refine"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refine_reason_after_a_preamble_is_not_written() {
+        let dir = scratch_dir("refine-preamble");
+        let mut daemon = Daemon::new(LlmClient::from_env().unwrap(), dir.clone());
+        let path = dir.join("idea.md");
+        let poem = "tandy ate some candy\nsome candy that was bad\n";
+        std::fs::write(&path, poem).unwrap();
+        let status = daemon.attach_refine(path.to_str().unwrap(), None).unwrap();
+
+        let (_llm, _msgs, meta) = daemon
+            .refine_step_begin(status.id, "you're a poet")
+            .unwrap();
+        let err = daemon
+            .refine_step_finish(
+                meta,
+                "Here is the refined poem:\n\n\
+                 **reason:** give the candy a bitter aftertaste\n\n\
+                 tandy ate some candy\nsome candy that was bad\n"
+                    .into(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("refine stalled"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), poem);
+
+        let (_llm, _msgs, meta) = daemon
+            .refine_step_begin(status.id, "you're a poet")
+            .unwrap();
+        let shown = daemon
+            .refine_step_finish(
+                meta,
+                "Sure, one change:\n\n\
+                 **reason:** give the candy a bitter aftertaste\n\n\
+                 tandy ate some bitter candy\nand the sweetness turned\n"
+                    .into(),
+            )
+            .unwrap();
+        assert!(shown.contains("bitter aftertaste"));
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(file.contains("bitter candy"));
+        assert!(!file.to_ascii_lowercase().contains("sure, one change"));
+        assert!(!file.to_ascii_lowercase().contains("reason"));
+
+        let later = dir.join("later.md");
+        std::fs::write(&later, "a short note\n").unwrap();
+        let status = daemon.attach_refine(later.to_str().unwrap(), None).unwrap();
+        let (_llm, _msgs, meta) = daemon.refine_step_begin(status.id, "expand").unwrap();
+        daemon
+            .refine_step_finish(
+                meta,
+                "A short note\n\nThe middle stays.\n\nreason: the door opened\n\nThe end stays.\n"
+                    .into(),
+            )
+            .unwrap();
+        let kept = std::fs::read_to_string(&later).unwrap();
+        assert!(kept.contains("reason: the door opened"), "{kept}");
+        assert!(kept.contains("A short note"), "{kept}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
