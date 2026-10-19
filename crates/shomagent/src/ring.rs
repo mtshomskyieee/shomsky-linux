@@ -64,6 +64,15 @@ impl RingBuffer {
         (out, self.total_pushed)
     }
 
+    /// Lines pushed after `cursor` that have already fallen out of the ring.
+    pub fn dropped_since(&self, cursor: u64) -> u64 {
+        if cursor >= self.total_pushed {
+            return 0;
+        }
+        let missing = self.total_pushed.saturating_sub(self.lines.len() as u64);
+        missing.saturating_sub(cursor)
+    }
+
     pub fn recent(&self, n: usize) -> Vec<String> {
         let len = self.lines.len();
         let start = len.saturating_sub(n);
@@ -102,5 +111,15 @@ mod tests {
         let (new2, cur2) = r.lines_since(cur);
         assert_eq!(new2, vec!["three"]);
         assert_eq!(cur2, 3);
+    }
+
+    #[test]
+    fn dropped_since_counts_evicted_lines() {
+        let mut r = RingBuffer::new(2);
+        r.push("a");
+        r.push("b");
+        r.push("c");
+        assert_eq!(r.dropped_since(0), 1);
+        assert_eq!(r.dropped_since(1), 0);
     }
 }

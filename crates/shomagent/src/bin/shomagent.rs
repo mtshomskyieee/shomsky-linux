@@ -4,7 +4,8 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use shomagent::daemon::rpc;
 use shomagent::protocol::{Request, Response};
-use shomagent::rain::{self, LineBuf};
+use shomagent::rain;
+use std::future::Future;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -49,9 +50,7 @@ enum Commands {
         persist: bool,
     },
     /// Scoped chat with one member's stream
-    Talk {
-        id: u32,
-    },
+    Talk { id: u32 },
     /// One-shot question to a member (non-interactive talk)
     Ask {
         /// Member id from the roster
@@ -104,17 +103,11 @@ enum Commands {
         path: Option<String>,
     },
     /// Pause a member
-    Pause {
-        id: u32,
-    },
+    Pause { id: u32 },
     /// Resume a paused member
-    Resume {
-        id: u32,
-    },
+    Resume { id: u32 },
     /// Stop a member
-    Stop {
-        id: u32,
-    },
+    Stop { id: u32 },
     /// List members (same as bare `shomagent`)
     Roster,
 }
@@ -140,11 +133,12 @@ async fn main() -> Result<()> {
                 command,
                 tell_me,
                 name,
-                watch: true,
                 persist,
             };
             match rpc(&req).await? {
-                Response::Ok { message, member, .. } => {
+                Response::Ok {
+                    message, member, ..
+                } => {
                     if let Some(msg) = message {
                         println!("{msg}");
                     } else if let Some(m) = member {
@@ -165,22 +159,26 @@ async fn main() -> Result<()> {
             path,
             tell_me,
             name,
-        }) => doc_attach(Request::Read {
-            path,
-            tell_me,
-            name,
-        })
-        .await,
+        }) => {
+            doc_attach(Request::Read {
+                path,
+                tell_me,
+                name,
+            })
+            .await
+        }
         Some(Commands::ReadWrite {
             path,
             tell_me,
             name,
-        }) => doc_attach(Request::ReadWrite {
-            path,
-            tell_me,
-            name,
-        })
-        .await,
+        }) => {
+            doc_attach(Request::ReadWrite {
+                path,
+                tell_me,
+                name,
+            })
+            .await
+        }
         Some(Commands::Write {
             id,
             content,
@@ -418,37 +416,20 @@ fn read_user_seed() -> Result<Option<String>> {
 async fn dream_loop(path: String, user_seed: bool) -> Result<()> {
     let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
 
-    let id = match rpc(&Request::Dream {
-        path: path.clone(),
-        name: None,
-    })
-    .await?
-    {
-        Response::Ok {
-            member: Some(m),
-            message,
-            ..
-        } => {
-            if let Some(msg) = message {
-                println!("{msg}");
-            }
-            m.id
-        }
-        Response::Ok {
-            message: Some(m), ..
-        } => {
-            println!("{m}");
-            m.split('#')
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-                .and_then(|s| s.parse().ok())
-                .ok_or_else(|| anyhow::anyhow!("dream attach returned no member id"))?
-        }
-        Response::Err { message } => bail!("{message}"),
-        _ => bail!("dream attach failed"),
-    };
+    let id = attached_id(
+        rpc(&Request::Dream {
+            path: path.clone(),
+            name: None,
+        })
+        .await?,
+        "dream",
+    )?;
 
     println!("shomagent dream — {path}");
+    println!(
+        "each turn stays near 1,000 characters. past that, the next beat auto-compacts \
+         to a short recent excerpt and the dream keeps going. the full journal stays in the file."
+    );
     let mut beat_index: u32 = 0;
 
     if user_seed {
@@ -461,28 +442,13 @@ async fn dream_loop(path: String, user_seed: bool) -> Result<()> {
                 println!("quit — leaving dream");
                 return Ok(());
             }
-            Some(text) => match rpc(&Request::DreamPlant {
-                id,
-                text,
-            })
-            .await?
-            {
+            Some(text) => match rpc(&Request::DreamPlant { id, text }).await? {
                 Response::Ok {
                     reply: Some(body), ..
                 } => {
                     let display = format!("── seed ──\n{}", body.trim_end());
                     beat_index = 1;
-                    let rained = if tty {
-                        rain::play_text(&display, &mut LineBuf::default(), None, |_| {})
-                    } else {
-                        false
-                    };
-                    if !rained {
-                        println!("{display}");
-                    }
-                    if tty {
-                        let _ = write!(io::stdout(), "\x1b[?25h");
-                    }
+                    reveal(tty, &display);
                 }
                 Response::Err { message } => {
                     let _ = rpc(&Request::DreamEnd { id }).await;
@@ -547,99 +513,35 @@ async fn dream_loop(path: String, user_seed: bool) -> Result<()> {
                 break;
             }
 
-            show_steer_prompt(tty);
+            show_wait_prompt(tty, "steer");
 
             // Keep a copy so a failed beat can retry with the same steer.
             let step_steering = steering.clone();
-            let step_req = Request::DreamStep {
-                id,
-                steering: step_steering.clone(),
-            };
-            let step_fut = rpc(&step_req);
-            tokio::pin!(step_fut);
-
-            let mut abort_quit = false;
-            let mut step_failed: Option<String> = None;
-            let think_start = Instant::now();
-            let mut spin_frame = 0usize;
-            let mut last_spin = Instant::now();
-            // Draw first spinner frame immediately so the wait feels alive.
-            if tty {
-                tick_dream_spinner(spin_frame, steering.is_some(), think_start.elapsed());
-                spin_frame = 1;
+            let outcome = await_step(
+                rpc(&Request::DreamStep {
+                    id,
+                    steering: step_steering.clone(),
+                }),
+                &line_rx,
+                &stop,
+                tty,
+                "(no dream reply)",
+                steering.is_some(),
+                true,
+                |s| steering = Some(s),
+                || true,
+            )
+            .await;
+            if outcome.saw_eof {
+                stdin_eof = true;
             }
 
-            let reply = loop {
-                tokio::select! {
-                    resp = &mut step_fut => {
-                        break match resp {
-                            Ok(Response::Ok { reply: Some(r), .. }) => {
-                                steering = None; // consumed by a successful beat
-                                r
-                            }
-                            Ok(Response::Ok { reply: None, .. }) => {
-                                step_failed = Some("(no dream reply)".into());
-                                String::new()
-                            }
-                            Ok(Response::Err { message }) => {
-                                step_failed = Some(message);
-                                String::new()
-                            }
-                            Err(e) => {
-                                step_failed = Some(format!("{e:#}"));
-                                String::new()
-                            }
-                        };
-                    }
-                    _ = tokio::time::sleep(Duration::from_millis(40)) => {
-                        if stop.load(Ordering::SeqCst) {
-                            abort_quit = true;
-                            break String::new();
-                        }
-                        match drain_line_rx(&line_rx) {
-                            LineEvent::Quit => {
-                                abort_quit = true;
-                                break String::new();
-                            }
-                            LineEvent::Steer(s) => {
-                                steering = Some(s);
-                                if tty {
-                                    tick_dream_spinner(
-                                        spin_frame,
-                                        true,
-                                        think_start.elapsed(),
-                                    );
-                                }
-                            }
-                            LineEvent::Eof => {
-                                stdin_eof = true;
-                            }
-                            LineEvent::None => {}
-                        }
-                        if tty && last_spin.elapsed() >= Duration::from_millis(120) {
-                            tick_dream_spinner(
-                                spin_frame,
-                                steering.is_some(),
-                                think_start.elapsed(),
-                            );
-                            spin_frame = spin_frame.wrapping_add(1);
-                            last_spin = Instant::now();
-                        }
-                    }
-                }
-            };
-
-            if tty {
-                // Finish the steer line so the beat does not collide with it.
-                println!();
-            }
-
-            if abort_quit {
+            if outcome.quit {
                 println!("quit — leaving dream");
                 break;
             }
 
-            if let Some(err) = step_failed {
+            if let Some(err) = outcome.failed {
                 fail_streak = fail_streak.saturating_add(1);
                 eprintln!("dream: beat failed — {err}");
                 if steering.is_none() {
@@ -649,44 +551,23 @@ async fn dream_loop(path: String, user_seed: bool) -> Result<()> {
                     eprintln!(
                         "dream: pausing after repeated failures — type a steer line to retry, or quit"
                     );
-                    // Wait for the user instead of hammering a slow model.
-                    let mut pause_quit = false;
-                    loop {
-                        if stop.load(Ordering::SeqCst) {
-                            pause_quit = true;
+                    match wait_for_retry(&line_rx, &stop, tty, &mut stdin_eof).await {
+                        Some(s) => {
+                            steering = Some(s);
+                            fail_streak = 0;
+                            continue;
+                        }
+                        None => {
+                            println!("quit — leaving dream");
                             break;
                         }
-                        match drain_line_rx(&line_rx) {
-                            LineEvent::Quit => {
-                                pause_quit = true;
-                                break;
-                            }
-                            LineEvent::Steer(s) => {
-                                steering = Some(s);
-                                fail_streak = 0;
-                                break;
-                            }
-                            LineEvent::Eof => {
-                                stdin_eof = true;
-                                if !tty {
-                                    pause_quit = true;
-                                    break;
-                                }
-                            }
-                            LineEvent::None => {}
-                        }
-                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
-                    if pause_quit {
-                        println!("quit — leaving dream");
-                        break;
-                    }
-                    continue;
                 }
                 eprintln!("dream: retrying once more…");
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
+            steering = None;
             fail_streak = 0;
 
             let banner = if beat_index == 0 {
@@ -694,22 +575,9 @@ async fn dream_loop(path: String, user_seed: bool) -> Result<()> {
             } else {
                 format!("── beat {beat_index} ──")
             };
-            let display = format!("{banner}\n{}", reply.trim_end());
+            let display = format!("{banner}\n{}", outcome.reply.trim_end());
             beat_index += 1;
-
-            // Rain is visual only; steer input stays on the cooked line reader.
-            let rained = if tty {
-                rain::play_text(&display, &mut LineBuf::default(), None, |_| {})
-            } else {
-                false
-            };
-            if !rained {
-                println!("{display}");
-            }
-            // Ensure cursor is visible again after rain hides it.
-            if tty {
-                let _ = write!(io::stdout(), "\x1b[?25h");
-            }
+            reveal(tty, &display);
 
             // Apply any line that arrived during rain / the last think slice.
             match drain_line_rx(&line_rx) {
@@ -814,27 +682,170 @@ fn spinner_enabled() -> bool {
     }
 }
 
-fn show_steer_prompt(tty: bool) {
-    // Status line (animated while waiting) + cooked steer prompt under it.
+fn attached_id(resp: Response, what: &str) -> Result<u32> {
+    match resp {
+        Response::Ok {
+            member: Some(m),
+            message,
+            ..
+        } => {
+            if let Some(msg) = message {
+                println!("{msg}");
+            }
+            Ok(m.id)
+        }
+        Response::Err { message } => bail!("{message}"),
+        _ => bail!("{what} attach returned no member id"),
+    }
+}
+
+fn show_wait_prompt(tty: bool, label: &str) {
     if tty && spinner_enabled() {
         println!("thinking… -");
     } else {
         println!("thinking…");
     }
-    print!("steer(type quit to exit)> ");
+    print!("{label}(type quit to exit)> ");
     let _ = write!(io::stdout(), "\x1b[?25h");
     let _ = io::stdout().flush();
 }
 
-fn show_task_prompt(tty: bool) {
-    if tty && spinner_enabled() {
-        println!("thinking… -");
-    } else {
-        println!("thinking…");
+fn reveal(tty: bool, display: &str) {
+    let rained = if tty { rain::play_text(display) } else { false };
+    if !rained {
+        println!("{display}");
     }
-    print!("task(type quit to exit)> ");
-    let _ = write!(io::stdout(), "\x1b[?25h");
-    let _ = io::stdout().flush();
+    if tty {
+        let _ = write!(io::stdout(), "\x1b[?25h");
+    }
+}
+
+struct StepOutcome {
+    reply: String,
+    failed: Option<String>,
+    quit: bool,
+    saw_eof: bool,
+}
+
+/// Spinner + stdin while one dream or refine RPC is in flight.
+///
+/// `on_quit` returns true to abort the wait. Refine's first piped pass returns
+/// false so the rewrite can finish.
+async fn await_step<Fut, OnSteer, OnQuit>(
+    step_fut: Fut,
+    line_rx: &Receiver<Option<String>>,
+    stop: &AtomicBool,
+    tty: bool,
+    empty_reply: &str,
+    mut steered: bool,
+    track_steer: bool,
+    mut on_steer: OnSteer,
+    mut on_quit: OnQuit,
+) -> StepOutcome
+where
+    Fut: Future<Output = Result<Response>>,
+    OnSteer: FnMut(String),
+    OnQuit: FnMut() -> bool,
+{
+    let mut step_fut = std::pin::pin!(step_fut);
+    let mut quit = false;
+    let mut failed: Option<String> = None;
+    let mut saw_eof = false;
+    let think_start = Instant::now();
+    let mut spin_frame = 0usize;
+    let mut last_spin = Instant::now();
+    if tty {
+        tick_dream_spinner(spin_frame, steered, think_start.elapsed());
+        spin_frame = 1;
+    }
+
+    let reply = loop {
+        tokio::select! {
+            resp = &mut step_fut => {
+                break match resp {
+                    Ok(Response::Ok { reply: Some(r), .. }) => r,
+                    Ok(Response::Ok { reply: None, .. }) => {
+                        failed = Some(empty_reply.to_string());
+                        String::new()
+                    }
+                    Ok(Response::Err { message }) => {
+                        failed = Some(message);
+                        String::new()
+                    }
+                    Err(e) => {
+                        failed = Some(format!("{e:#}"));
+                        String::new()
+                    }
+                };
+            }
+            _ = tokio::time::sleep(Duration::from_millis(40)) => {
+                if stop.load(Ordering::SeqCst) {
+                    quit = true;
+                    break String::new();
+                }
+                match drain_line_rx(line_rx) {
+                    LineEvent::Quit => {
+                        if on_quit() {
+                            quit = true;
+                            break String::new();
+                        }
+                    }
+                    LineEvent::Steer(s) => {
+                        on_steer(s);
+                        if track_steer {
+                            steered = true;
+                        }
+                        if tty {
+                            tick_dream_spinner(spin_frame, true, think_start.elapsed());
+                        }
+                    }
+                    LineEvent::Eof => saw_eof = true,
+                    LineEvent::None => {}
+                }
+                if tty && last_spin.elapsed() >= Duration::from_millis(120) {
+                    tick_dream_spinner(spin_frame, steered, think_start.elapsed());
+                    spin_frame = spin_frame.wrapping_add(1);
+                    last_spin = Instant::now();
+                }
+            }
+        }
+    };
+    if tty {
+        println!();
+    }
+    StepOutcome {
+        reply,
+        failed,
+        quit,
+        saw_eof,
+    }
+}
+
+/// After repeated model failures, wait for a new line or quit.
+/// `Some` is the retry text. `None` means leave the session.
+async fn wait_for_retry(
+    line_rx: &Receiver<Option<String>>,
+    stop: &AtomicBool,
+    tty: bool,
+    saw_eof: &mut bool,
+) -> Option<String> {
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return None;
+        }
+        match drain_line_rx(line_rx) {
+            LineEvent::Quit => return None,
+            LineEvent::Steer(s) => return Some(s),
+            LineEvent::Eof => {
+                *saw_eof = true;
+                if !tty {
+                    return None;
+                }
+            }
+            LineEvent::None => {}
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Collect a multi-line refinement task from stdin until `.` alone, quit, or EOF.
@@ -846,35 +857,14 @@ fn read_refine_task() -> Result<Option<String>> {
 async fn refine_loop(path: String) -> Result<()> {
     let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
 
-    let id = match rpc(&Request::Refine {
-        path: path.clone(),
-        name: None,
-    })
-    .await?
-    {
-        Response::Ok {
-            member: Some(m),
-            message,
-            ..
-        } => {
-            if let Some(msg) = message {
-                println!("{msg}");
-            }
-            m.id
-        }
-        Response::Ok {
-            message: Some(m), ..
-        } => {
-            println!("{m}");
-            m.split('#')
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-                .and_then(|s| s.parse().ok())
-                .ok_or_else(|| anyhow::anyhow!("refine attach returned no member id"))?
-        }
-        Response::Err { message } => bail!("{message}"),
-        _ => bail!("refine attach failed"),
-    };
+    let id = attached_id(
+        rpc(&Request::Refine {
+            path: path.clone(),
+            name: None,
+        })
+        .await?,
+        "refine",
+    )?;
 
     println!("shomagent refine — {path}");
     println!("write your refinement task below");
@@ -913,137 +903,70 @@ async fn refine_loop(path: String) -> Result<()> {
                 break;
             }
 
-            show_task_prompt(tty);
+            show_wait_prompt(tty, "task");
 
             let step_task = task.clone();
-            let step_req = Request::RefineStep {
-                id,
-                task: step_task.clone(),
-            };
-            let step_fut = rpc(&step_req);
-            tokio::pin!(step_fut);
-
-            let mut abort_quit = false;
-            let mut step_failed: Option<String> = None;
-            let think_start = Instant::now();
-            let mut spin_frame = 0usize;
-            let mut last_spin = Instant::now();
-            if tty {
-                tick_dream_spinner(spin_frame, false, think_start.elapsed());
-                spin_frame = 1;
+            let outcome = await_step(
+                rpc(&Request::RefineStep {
+                    id,
+                    task: step_task.clone(),
+                }),
+                &line_rx,
+                &stop,
+                tty,
+                "(no refine reply)",
+                false,
+                false,
+                |s| task = s,
+                || {
+                    // On a TTY, leave immediately so RefineEnd lands before an
+                    // in-flight rewrite replaces the file. A pipe keeps the
+                    // first pass: `task`, `.`, `quit` is the one-shot script.
+                    if tty || !first_pass {
+                        true
+                    } else {
+                        pending_quit = true;
+                        false
+                    }
+                },
+            )
+            .await;
+            if outcome.saw_eof {
+                stdin_eof = true;
             }
 
-            let reply = loop {
-                tokio::select! {
-                    resp = &mut step_fut => {
-                        break match resp {
-                            Ok(Response::Ok { reply: Some(r), .. }) => r,
-                            Ok(Response::Ok { reply: None, .. }) => {
-                                step_failed = Some("(no refine reply)".into());
-                                String::new()
-                            }
-                            Ok(Response::Err { message }) => {
-                                step_failed = Some(message);
-                                String::new()
-                            }
-                            Err(e) => {
-                                step_failed = Some(format!("{e:#}"));
-                                String::new()
-                            }
-                        };
-                    }
-                    _ = tokio::time::sleep(Duration::from_millis(40)) => {
-                        if stop.load(Ordering::SeqCst) {
-                            abort_quit = true;
-                            break String::new();
-                        }
-                        match drain_line_rx(&line_rx) {
-                            LineEvent::Quit => {
-                                // Honor quit after the first save; during the first
-                                // pass keep going so the task is applied once.
-                                if first_pass {
-                                    pending_quit = true;
-                                } else {
-                                    abort_quit = true;
-                                    break String::new();
-                                }
-                            }
-                            LineEvent::Steer(s) => {
-                                task = s;
-                                if tty {
-                                    tick_dream_spinner(
-                                        spin_frame,
-                                        true,
-                                        think_start.elapsed(),
-                                    );
-                                }
-                            }
-                            LineEvent::Eof => {
-                                stdin_eof = true;
-                            }
-                            LineEvent::None => {}
-                        }
-                        if tty && last_spin.elapsed() >= Duration::from_millis(120) {
-                            tick_dream_spinner(
-                                spin_frame,
-                                false,
-                                think_start.elapsed(),
-                            );
-                            spin_frame = spin_frame.wrapping_add(1);
-                            last_spin = Instant::now();
-                        }
-                    }
-                }
-            };
-
-            if tty {
-                println!();
-            }
-
-            if abort_quit {
+            if outcome.quit {
                 println!("quit — leaving refine");
                 break;
             }
 
-            if let Some(err) = step_failed {
+            if let Some(err) = outcome.failed {
+                if err.contains("refine turned destructive") || err.contains("refine stalled") {
+                    eprintln!("refine: {err}");
+                    if err.contains("refine stalled") {
+                        println!("refine ended — the pass repeated the document");
+                    } else {
+                        println!("refine ended — refinement turned destructive");
+                    }
+                    break;
+                }
                 fail_streak = fail_streak.saturating_add(1);
                 eprintln!("refine: pass failed — {err}");
                 if fail_streak >= 2 {
                     eprintln!(
                         "refine: pausing after repeated failures — type a new task to retry, or quit"
                     );
-                    let mut pause_quit = false;
-                    loop {
-                        if stop.load(Ordering::SeqCst) {
-                            pause_quit = true;
+                    match wait_for_retry(&line_rx, &stop, tty, &mut stdin_eof).await {
+                        Some(s) => {
+                            task = s;
+                            fail_streak = 0;
+                            continue;
+                        }
+                        None => {
+                            println!("quit — leaving refine");
                             break;
                         }
-                        match drain_line_rx(&line_rx) {
-                            LineEvent::Quit => {
-                                pause_quit = true;
-                                break;
-                            }
-                            LineEvent::Steer(s) => {
-                                task = s;
-                                fail_streak = 0;
-                                break;
-                            }
-                            LineEvent::Eof => {
-                                stdin_eof = true;
-                                if !tty {
-                                    pause_quit = true;
-                                    break;
-                                }
-                            }
-                            LineEvent::None => {}
-                        }
-                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
-                    if pause_quit {
-                        println!("quit — leaving refine");
-                        break;
-                    }
-                    continue;
                 }
                 eprintln!("refine: retrying once more…");
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1052,18 +975,8 @@ async fn refine_loop(path: String) -> Result<()> {
             fail_streak = 0;
             first_pass = false;
 
-            let display = format!("── refine ──\n{}", reply.trim_end());
-            let rained = if tty {
-                rain::play_text(&display, &mut LineBuf::default(), None, |_| {})
-            } else {
-                false
-            };
-            if !rained {
-                println!("{display}");
-            }
-            if tty {
-                let _ = write!(io::stdout(), "\x1b[?25h");
-            }
+            let display = format!("── refine ──\n{}", outcome.reply.trim_end());
+            reveal(tty, &display);
 
             if pending_quit {
                 println!("quit — leaving refine");

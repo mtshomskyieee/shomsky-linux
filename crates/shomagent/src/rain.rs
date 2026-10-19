@@ -7,14 +7,13 @@
 use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::term::{self, RawGuard};
+use crate::term;
 
 const TICK: Duration = Duration::from_millis(50);
 const DEFAULT_SECS: f32 = 2.0;
 const MAX_SECS: f32 = 10.0;
 
-const GLYPHS_KANA: &str =
-    "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789";
+const GLYPHS_KANA: &str = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789";
 const GLYPHS_ASCII: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ<>*+-=/\\|{}[]$#@%&";
 
 const LVL_HEAD: u8 = 0;
@@ -81,38 +80,6 @@ impl LineBuf {
     pub fn has_completed(&self) -> bool {
         !self.completed.is_empty()
     }
-
-    /// Poll non-blocking stdin into this buffer (raw mode).
-    /// Returns true if the partial line or completed queue changed.
-    pub fn poll_stdin(&mut self) -> bool {
-        let before_partial = self.partial.clone();
-        let before_done = self.completed.len();
-        let mut buf = [0u8; 64];
-        let n = term::read_available(&mut buf);
-        if n == 0 {
-            return false;
-        }
-        // Detect DSR reply noise (ESC [ row ; col R) and skip it.
-        if buf[..n].contains(&b'[') && buf[..n].contains(&b'R') {
-            let mut i = 0;
-            while i < n {
-                if buf[i] == 0x1b {
-                    while i < n && buf[i] != b'R' {
-                        i += 1;
-                    }
-                    if i < n {
-                        i += 1;
-                    }
-                    continue;
-                }
-                self.feed_bytes(&buf[i..i + 1]);
-                i += 1;
-            }
-        } else {
-            self.feed_bytes(&buf[..n]);
-        }
-        self.partial != before_partial || self.completed.len() != before_done
-    }
 }
 
 /// Whether the rain should play (same knobs as the splash intro).
@@ -154,13 +121,9 @@ fn glyphs() -> Vec<char> {
         std::env::var("ENGRAM_MATRIX_GLYPHS"),
         Ok(v) if v.eq_ignore_ascii_case("ascii")
     );
-    if ascii {
-        GLYPHS_ASCII
-    } else {
-        GLYPHS_KANA
-    }
-    .chars()
-    .collect()
+    if ascii { GLYPHS_ASCII } else { GLYPHS_KANA }
+        .chars()
+        .collect()
 }
 
 struct Rng(u64);
@@ -258,16 +221,10 @@ fn logo_cells(rows: &[String], cols: usize) -> Vec<(usize, usize, char)> {
 ///
 /// Tall beats are truncated to the terminal height so the animation still runs;
 /// any overflow lines are printed after the rain. Positioning is relative to the
-/// current cursor (no raw-mode DSR), so it works with dream's cooked `steer>`
+/// current cursor, so it works with dream's cooked `steer>`
 /// prompt.
 ///
-/// `pump` may feed keystrokes into `lines` each frame; a finished line snaps.
-pub fn play_text(
-    text: &str,
-    lines: &mut LineBuf,
-    _guard: Option<&RawGuard>,
-    mut pump: impl FnMut(&mut LineBuf),
-) -> bool {
+pub fn play_text(text: &str) -> bool {
     if !enabled() {
         return false;
     }
@@ -313,7 +270,7 @@ pub fn play_text(
     }
 
     let logo_sgr = "\x1b[32m";
-    run_frames(grid_rows, cols, secs, logo_sgr, &logo, lines, &mut pump);
+    run_frames(grid_rows, cols, secs, logo_sgr, &logo);
 
     {
         let mut out = io::stdout().lock();
@@ -330,15 +287,7 @@ pub fn play_text(
     true
 }
 
-fn run_frames(
-    rows: usize,
-    cols: usize,
-    secs: f32,
-    logo_sgr: &str,
-    logo: &[(usize, usize, char)],
-    lines: &mut LineBuf,
-    pump: &mut dyn FnMut(&mut LineBuf),
-) {
+fn run_frames(rows: usize, cols: usize, secs: f32, logo_sgr: &str, logo: &[(usize, usize, char)]) {
     let mut rng = Rng::new();
     let alphabet = glyphs();
     let mut columns: Vec<Column> = (0..cols)
@@ -353,11 +302,6 @@ fn run_frames(
     let start = Instant::now();
 
     loop {
-        pump(lines);
-        if lines.has_completed() {
-            break;
-        }
-
         let t = (start.elapsed().as_secs_f32() / secs).min(1.0);
         let spawning = t < 0.60;
         let reveal = ((t - 0.55) / 0.30).clamp(0.0, 1.0);
@@ -435,11 +379,7 @@ fn new_column(rows: usize, alphabet: &[char], rng: &mut Rng, initial: bool) -> C
         head: -(rng.below(6) as f32),
         speed: 0.5 + rng.unit() * 1.2,
         len,
-        delay: if initial {
-            rng.below(12)
-        } else {
-            rng.below(6)
-        },
+        delay: if initial { rng.below(12) } else { rng.below(6) },
         glyphs: (0..rows.max(1))
             .map(|_| alphabet[rng.below(alphabet.len())])
             .collect(),
@@ -493,7 +433,10 @@ mod tests {
     #[test]
     fn wrap_preserves_newlines() {
         let rows = wrap_text("hi\n\nthere", 80);
-        assert_eq!(rows, vec!["hi".to_string(), String::new(), "there".to_string()]);
+        assert_eq!(
+            rows,
+            vec!["hi".to_string(), String::new(), "there".to_string()]
+        );
     }
 
     #[test]

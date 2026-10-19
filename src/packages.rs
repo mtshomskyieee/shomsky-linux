@@ -181,8 +181,8 @@ pub fn record_from_command(path: &Path, command: &str) {
     let _ = store.save(path);
 }
 
-/// A `shominstall` line: the user wants packages installed, and the agent
-/// should do it. Package names may be empty (`shominstall` alone).
+/// A `shominstall` line. Named packages are installed by the shell as
+/// `apk add`. An empty `shominstall` asks the agent which package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shominstall {
     pub packages: Vec<String>,
@@ -224,8 +224,8 @@ pub fn parse_shominstall(line: &str) -> Option<Shominstall> {
     Some(Shominstall { packages })
 }
 
-/// User message for the agent. `shominstall` is not a binary; the agent
-/// installs with `apk` after resolving the name.
+/// Prompt for a `shominstall` the shell did not run itself.
+/// A line with package names is `apk add` before this is consulted.
 pub fn shominstall_agent_prompt(line: &str) -> Option<String> {
     let req = parse_shominstall(line)?;
     if req.packages.is_empty() {
@@ -640,6 +640,11 @@ mod tests {
             package_install_command("shominstall git curl"),
             Some("apk add git curl".into())
         );
+        assert_eq!(
+            package_install_command("shominstall neovim"),
+            Some("apk add neovim".into())
+        );
+        assert_eq!(package_install_command("shominstall"), None);
     }
 
     #[test]

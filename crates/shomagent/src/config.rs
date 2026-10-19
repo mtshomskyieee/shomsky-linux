@@ -36,6 +36,10 @@ pub struct MemberDef {
     /// Optional shell form: if set, run via `sh -c`.
     #[serde(default)]
     pub shell: Option<String>,
+    /// Set by the loader. Cwd drop-ins do not autostart unless
+    /// `SHOMAGENT_LOCAL_AUTOSTART` is set.
+    #[serde(default, skip)]
+    pub from_cwd: bool,
 }
 
 fn default_budget() -> u32 {
@@ -58,22 +62,24 @@ impl MemberDef {
             budget_tokens: default_budget(),
             ring_lines: default_ring(),
             shell: Some(cmdline.to_string()),
+            from_cwd: false,
         }
     }
 }
 
 /// Load and merge system then cwd drop-ins. Later files with the same `name` win.
 pub fn load_crew_defs(cwd: &Path) -> Result<Vec<MemberDef>> {
-    let mut by_name: std::collections::BTreeMap<String, MemberDef> = std::collections::BTreeMap::new();
-    for dir in [paths::system_crew_dir(), paths::local_crew_dir(cwd)] {
-        load_dir_into(&dir, &mut by_name)?;
-    }
+    let mut by_name: std::collections::BTreeMap<String, MemberDef> =
+        std::collections::BTreeMap::new();
+    load_dir_into(&paths::system_crew_dir(), &mut by_name, false)?;
+    load_dir_into(&paths::local_crew_dir(cwd), &mut by_name, true)?;
     Ok(by_name.into_values().collect())
 }
 
 fn load_dir_into(
     dir: &Path,
     into: &mut std::collections::BTreeMap<String, MemberDef>,
+    from_cwd: bool,
 ) -> Result<()> {
     if !dir.is_dir() {
         return Ok(());
@@ -91,10 +97,11 @@ fn load_dir_into(
         .collect();
     entries.sort();
     for path in entries {
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let def: MemberDef = toml::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let text =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let mut def: MemberDef =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        def.from_cwd = from_cwd;
         into.insert(def.name.clone(), def);
     }
     Ok(())
@@ -107,7 +114,13 @@ pub fn persist_local(cwd: &Path, def: &MemberDef) -> Result<PathBuf> {
     let safe: String = def
         .name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let path = dir.join(format!("{safe}.toml"));
     let text = toml::to_string_pretty(def).context("serializing member def")?;
@@ -137,6 +150,16 @@ tell_me = "sys"
         )
         .unwrap();
         fs::write(
+            sys.join("b.toml"),
+            r#"
+name = "sys-only"
+command = "echo"
+args = ["sys-only"]
+autostart = true
+"#,
+        )
+        .unwrap();
+        fs::write(
             cwd.join(paths::LOCAL_CREW_DIR).join("a.toml"),
             r#"
 name = "watch"
@@ -149,8 +172,12 @@ tell_me = "local"
         std::env::set_var("SHOMAGENT_SYSTEM_CREW", sys.to_str().unwrap());
         let defs = load_crew_defs(&cwd).unwrap();
         std::env::remove_var("SHOMAGENT_SYSTEM_CREW");
-        assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].args, vec!["local"]);
+        assert_eq!(defs.len(), 2);
+        let watch = defs.iter().find(|d| d.name == "watch").unwrap();
+        assert_eq!(watch.args, vec!["local"]);
+        assert!(watch.from_cwd);
+        let sys_only = defs.iter().find(|d| d.name == "sys-only").unwrap();
+        assert!(!sys_only.from_cwd);
         let _ = fs::remove_dir_all(&root);
     }
 }
