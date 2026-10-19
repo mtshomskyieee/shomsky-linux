@@ -20,10 +20,10 @@ ledger by hand unless the user asks.
 
 ## Rules
 
-1. **`shominstall PKG` means install a package.** The user (or the splash)
-   types `shominstall git`. That word is not a binary. Install the named
-   Alpine package: resolve the name, then `apk add`. Do not execute
-   `shominstall`, and do not run BusyBox `install`.
+1. **`shominstall PKG` is installed by the shell** as `apk add PKG` before
+   the line reaches you. Bare `shominstall` (no name) means ask which Alpine
+   package to install. Do not execute `shominstall`, and do not run BusyBox
+   `install`.
 2. **apk only.** Never run `apt`, `apt-get`, `dnf`, or `pacman`. Never run
    BusyBox `install` to add software — that applet copies files. A clear
    request (`install git`, `please install git`, `apt-get install -y git`,

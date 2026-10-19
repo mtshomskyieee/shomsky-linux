@@ -15,8 +15,6 @@ pub enum Request {
         #[serde(default)]
         name: Option<String>,
         #[serde(default)]
-        watch: bool,
-        #[serde(default)]
         persist: bool,
     },
     Pause {
