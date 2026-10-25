@@ -203,5 +203,5 @@ Server logs default to `/engram/mistralrs.log` (not the TTY). In the shell:
 To stream logs to the terminal instead:
 
 ```bash
-MISTRALRS_LOG_TO_TTY=1 docker compose run --rm shomsky
+MISTRALRS_LOG_TO_TTY=1 ./agent_sh.sh
 ```

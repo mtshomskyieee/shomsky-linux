@@ -1,9 +1,10 @@
 # Shomsky Linux
 #
-# Interactive shell:
-#   SHOMSKY_MODEL=tiny ENGRAM_TOOL_STYLE=text docker compose run --rm shomsky
+# Interactive shell (commits apk installs to shomskylinux:installed):
+#   ./agent_sh.sh
+#   ./scripts/shell.sh
 #
-# Tests:
+# Tests stay ephemeral:
 #   docker compose run --rm tests          # shell suite, no LLM
 #   docker compose run --rm tests-llm      # agent + hallucination LLM checks
 #
@@ -72,6 +73,7 @@ services:
       SHOMSKY_MODEL: ${SHOMSKY_MODEL:-tiny}
       ENGRAM_TOOL_STYLE: text
       ENGRAM_DIRECT_SHELL: "1"
+      ENGRAM_SKIP_PACKAGE_RESTORE: "1"
       RUN_LLM_TESTS: "1"
       SHOMSKY_IN_CONTAINER: "1"
       TEST_DRIVER: local

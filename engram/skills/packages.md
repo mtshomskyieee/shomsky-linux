@@ -18,6 +18,14 @@ The shell records successful `apk add` / `apk del` into
 removed → [r]einstall). Prefer those over inventing a list. Do not edit the
 ledger by hand unless the user asks.
 
+Interactive launches (`./agent_sh.sh`, `./scripts/shell.sh`) commit apk
+database changes onto a local `shomskylinux:installed` image so the next
+session already contains those packages. Each container start also compares
+the ledger to `apk info -e` and `apk add`s names still marked installed that
+are missing (rebuild, deleted installed image, partial install). A repair
+does not rewrite the ledger. Tests keep `docker compose run --rm` and stay
+ephemeral.
+
 ## Rules
 
 1. **`shominstall PKG` is installed by the shell** as `apk add PKG` before

@@ -78,6 +78,14 @@ if [ -d /engram ]; then
   fi
 fi
 
+# Ledger packages missing from this image (rebuild, new container, partial
+# install). Silent when everything is present. Does not rewrite the ledger.
+if [ "${ENGRAM_SKIP_PACKAGE_RESTORE:-0}" != "1" ] \
+  && [ -x /usr/local/bin/engram-shell ]; then
+  /usr/local/bin/engram-shell --reinstall-missing || \
+    log "warning: missing-package reinstall failed; continuing"
+fi
+
 if [ "$SKIP_MODEL_FETCH" != "1" ]; then
   [ -f "$MODELS_TOML" ] || die "missing models registry: $MODELS_TOML"
   info="$(lookup_model "$SHOMSKY_MODEL" "$MODELS_TOML")" \

@@ -181,12 +181,30 @@ pub fn print_ready_line(cfg: &Config, secs: u64, cwd: &std::path::Path) {
 pub fn print_sys(cfg: &Config, cwd: &std::path::Path) {
     println!("Shomsky Linux  engram-shell");
     println!("{CHARTER}");
-    println!(
-        "mode={}  model={}  tools={}",
-        cfg.mode,
-        cfg.model_alias,
-        cfg.tool_style.as_str()
-    );
+    let info = crate::config::lookup_model_info(&cfg.model_alias);
+    let model_name = info
+        .as_ref()
+        .map(|i| i.filename.clone())
+        .filter(|s| !s.is_empty())
+        .or_else(|| crate::config::active_model_filename(&cfg.model_alias));
+    match model_name {
+        Some(name) => println!(
+            "mode={}  model={}  model_name={}  tools={}",
+            cfg.mode,
+            cfg.model_alias,
+            name,
+            cfg.tool_style.as_str()
+        ),
+        None => println!(
+            "mode={}  model={}  tools={}",
+            cfg.mode,
+            cfg.model_alias,
+            cfg.tool_style.as_str()
+        ),
+    }
+    if let Some(desc) = info.as_ref().filter(|i| !i.description.is_empty()) {
+        println!("model_desc={}", desc.description);
+    }
     println!(
         "llm={}  model_id={}",
         cfg.llm_url, cfg.llm_model

@@ -44,6 +44,7 @@ run_once() {
       -e SKIP_LLM=1 \
       -e SKIP_MODEL_FETCH=1 \
       -e SHOMSKY_MODEL_PATH=/etc/os-release \
+      -e ENGRAM_SKIP_PACKAGE_RESTORE=1 \
       -e "ENGRAM_MODE=${mode}" \
       -e ENGRAM_DIRECT_SHELL=1 \
       -e ENGRAM_TOOL_STYLE=text \
@@ -73,6 +74,7 @@ run_seq() {
       -e SKIP_LLM=1 \
       -e SKIP_MODEL_FETCH=1 \
       -e SHOMSKY_MODEL_PATH=/etc/os-release \
+      -e ENGRAM_SKIP_PACKAGE_RESTORE=1 \
       -e "ENGRAM_MODE=${mode}" \
       -e ENGRAM_DIRECT_SHELL=1 \
       -e ENGRAM_TOOL_STYLE=text \
@@ -106,6 +108,7 @@ run_halluc_isolation_raw() {
       -e SKIP_LLM=1 \
       -e SKIP_MODEL_FETCH=1 \
       -e SHOMSKY_MODEL_PATH=/etc/os-release \
+      -e ENGRAM_SKIP_PACKAGE_RESTORE=1 \
       -e ENGRAM_MODE=hallucination \
       -e ENGRAM_DIRECT_SHELL=1 \
       "$IMAGE" \

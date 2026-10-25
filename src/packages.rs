@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Soft cap on unique package names tracked.
@@ -133,6 +134,15 @@ impl PackageStore {
         }
     }
 
+    /// Names currently marked installed, sorted by name.
+    pub fn installed_names(&self) -> Vec<String> {
+        self.packages
+            .iter()
+            .filter(|(_, entry)| entry.status == PackageStatus::Installed)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     /// Installed first, then removed; each group by name.
     pub fn list_sorted(&self) -> Vec<(&str, &PackageEntry)> {
         let mut items: Vec<(&str, &PackageEntry)> = self
@@ -179,6 +189,77 @@ pub fn record_from_command(path: &Path, command: &str) {
         }
     }
     let _ = store.save(path);
+}
+
+fn skip_package_restore() -> bool {
+    matches!(
+        std::env::var("ENGRAM_SKIP_PACKAGE_RESTORE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn apk_is_installed(name: &str) -> bool {
+    Command::new("apk")
+        .args(["info", "-e", name])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Reinstall ledger packages that `apk info -e` reports missing.
+///
+/// Does not rewrite the ledger. Failures are printed and swallowed so the
+/// entrypoint can continue into the shell. `ENGRAM_SKIP_PACKAGE_RESTORE=1`
+/// skips the check.
+pub fn reinstall_missing(path: &Path) -> Result<()> {
+    if let Err(e) = reinstall_missing_inner(path) {
+        eprintln!("warning: {e:#}");
+    }
+    Ok(())
+}
+
+fn reinstall_missing_inner(path: &Path) -> Result<()> {
+    if skip_package_restore() {
+        return Ok(());
+    }
+    let store = PackageStore::load(path)?;
+    let names = store.installed_names();
+    if names.is_empty() {
+        return Ok(());
+    }
+    if Command::new("apk")
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .is_err()
+    {
+        anyhow::bail!("apk not found; skipping package restore");
+    }
+    let missing: Vec<String> = names
+        .into_iter()
+        .filter(|name| !apk_is_installed(name))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    eprintln!("reinstalling missing packages: {}", missing.join(" "));
+    let status = Command::new("apk")
+        .arg("add")
+        .args(&missing)
+        .status()
+        .context("apk add")?;
+    if !status.success() {
+        anyhow::bail!("apk add failed for {}", missing.join(" "));
+    }
+    Ok(())
 }
 
 /// A `shominstall` line. Named packages are installed by the shell as
@@ -760,5 +841,15 @@ mod tests {
         let loaded = PackageStore::load(&path).unwrap();
         assert_eq!(loaded.packages["neovim"].status, PackageStatus::Removed);
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn installed_names_skips_removed() {
+        let mut store = PackageStore::default();
+        store.record_install("neovim");
+        store.record_install("htop");
+        store.record_remove("htop");
+        store.record_install("curl");
+        assert_eq!(store.installed_names(), vec!["curl", "neovim"]);
     }
 }

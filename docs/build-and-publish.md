@@ -15,10 +15,10 @@ export CARGO_BUILD_JOBS=1
 ## Run with Compose
 
 ```bash
-# Interactive shell (recommended)
-SHOMSKY_MODEL=tiny ENGRAM_TOOL_STYLE=text docker compose run --rm shomsky
-# or
+# Interactive shell (recommended) — commits apk installs to shomskylinux:installed
 ./scripts/shell.sh
+# or
+./agent_sh.sh
 ```
 
 Do **not** rely on bare `docker compose up` for the shell: Compose’s helper
