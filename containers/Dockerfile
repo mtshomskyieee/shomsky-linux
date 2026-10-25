@@ -74,6 +74,7 @@ FROM toolchain AS workspace
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
+COPY VERSION ./VERSION
 COPY src ./src
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

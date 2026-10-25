@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Build the next Shomsky Linux image and push it to GHCR.
+# Build the Shomsky Linux image from repo-root VERSION and push it to GHCR.
 #
 # Usage:
-#   ./scripts/update-container-registry.sh [patch|minor|major|X.Y.Z] [--dry-run]
+#   ./scripts/update-container-registry.sh [--dry-run]
 #
-# Reads the highest X.Y.Z already published on
-# ghcr.io/${GHCR_OWNER}/shomsky-linux and on git tags (vX.Y.Z), bumps it,
-# builds shomskylinux:<version>, and pushes that tag and :latest.
-# Default bump is patch. An explicit X.Y.Z is used as-is when it is not
-# already published.
+# The tag is the contents of VERSION (ADR-0010). Refuses if that X.Y.Z is
+# already published on ghcr.io/${GHCR_OWNER}/shomsky-linux or as git tag
+# vX.Y.Z. Does not invent or auto-increment a next version.
 #
 # Env:
 #   GHCR_OWNER          GitHub user or org (default: mtshomskyieee)
@@ -23,31 +21,31 @@ cd "$ROOT"
 OWNER="${GHCR_OWNER:-mtshomskyieee}"
 IMAGE="${IMAGE:-shomskylinux}"
 REMOTE="ghcr.io/${OWNER}/shomsky-linux"
-BUMP="patch"
-EXPLICIT=""
 DRY_RUN=0
 
 usage() {
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    patch|minor|major) BUMP="$1" ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
-      if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        EXPLICIT="$1"
-      else
-        echo "Unknown argument: $1" >&2
-        usage >&2
-        exit 1
-      fi
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 1
       ;;
   esac
   shift
 done
+
+[[ -f "$ROOT/VERSION" ]] || { echo "missing ${ROOT}/VERSION" >&2; exit 1; }
+version="$(tr -d '[:space:]' < "$ROOT/VERSION")"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "VERSION must be MAJOR.MINOR.PATCH, got: ${version}" >&2
+  exit 1
+fi
 
 # Print one X.Y.Z per line from the GHCR tag list. Follows Link rel=next.
 ghcr_versions() {
@@ -76,22 +74,6 @@ git_versions() {
     | awk '{print $2}' \
     | sed -nE 's#^refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)(\^\{\})?$#\1#p' \
     || true
-}
-
-highest_version() {
-  grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -n 1
-}
-
-bump_version() {
-  local version="$1" kind="$2"
-  local major minor patch
-  IFS=. read -r major minor patch <<<"$version"
-  case "$kind" in
-    major) echo "$((major + 1)).0.0" ;;
-    minor) echo "${major}.$((minor + 1)).0" ;;
-    patch) echo "${major}.${minor}.$((patch + 1))" ;;
-    *) echo "Unknown bump: $kind" >&2; return 1 ;;
-  esac
 }
 
 ensure_registry_login() {
@@ -128,24 +110,12 @@ else
 fi
 known+="$(git_versions)"$'\n'
 
-current="$(printf '%s\n' "$known" | highest_version || true)"
-if [[ -z "$current" ]]; then
-  echo "No published X.Y.Z tag found on GHCR or git." >&2
+if printf '%s\n' "$known" | grep -qx "$version"; then
+  echo "${version} is already published. Bump VERSION in the same change as ADR-0010." >&2
   exit 1
 fi
 
-if [[ -n "$EXPLICIT" ]]; then
-  version="$EXPLICIT"
-  if printf '%s\n' "$known" | grep -qx "$version"; then
-    echo "${version} is already published. Pick a newer tag." >&2
-    exit 1
-  fi
-else
-  version="$(bump_version "$current" "$BUMP")"
-fi
-
-echo "Current: ${current}"
-echo "Next:    ${version}"
+echo "VERSION: ${version}"
 echo "Push:    ${REMOTE}:${version}"
 echo "Push:    ${REMOTE}:latest"
 

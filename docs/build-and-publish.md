@@ -34,6 +34,21 @@ tool style, or memory limits without editing the compose file.
 
 Produces `shomskylinux:dev` and `shomskylinux:latest`.
 
+## Build version
+
+The product build number is the single line in [`VERSION`](../VERSION)
+(`MAJOR.MINOR.PATCH`). Every pull request into `main` must increase it
+(patch `+1` by default; minor or major when the change warrants it).
+Bump with `./scripts/set-version.sh` (Enter accepts the suggested patch;
+type another `X.Y.Z` to override) so `os-release` stays in lockstep.
+[`rootfs/etc/os-release`](../rootfs/etc/os-release) `VERSION_ID` and
+`PRETTY_NAME` must match. The splash footer prints `Build:X.Y.Z`; `:sys` prints `version=X.Y.Z`.
+See [ADR-0010](adr/0010-build-version.md).
+
+CI job `version-bump` runs `./scripts/check-version-bump.sh` on pull
+requests to `main`. `./scripts/update-container-registry.sh` publishes
+that `VERSION` to GHCR and refuses if the tag already exists.
+
 ## Smoke test
 
 ```bash

@@ -1469,7 +1469,7 @@ const HELP_TEXT: &str = "\
 Meta-commands:
   :help              Show this help
   :menu | :m         Feature navigation hub (Modes / Learn / Packages / shomagent / …)
-  :sys | :uname      System identity (mode, model alias, model name, tools, llm) — also: uname
+  :sys | :uname      System identity (version, mode, model alias, model name, tools, llm) — also: uname
   :splash            Replay the startup splash (TTY; matrix intro if enabled)
   :mode [name]       Show or set mode (agent|hallucination|root)
   :tools [style]     Show or set tool style (auto|native|text)
