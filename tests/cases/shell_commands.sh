@@ -252,6 +252,58 @@ run_hallucination_isolation() {
   echo "  SKIP  hallucination UX needs the LLM — run: docker compose run --rm tests-llm"
 }
 
+run_reinstall_missing() {
+  local json="$1"
+  shift
+  local file out
+  file="$(mktemp "${PWD}/.engram-test-pkgs.XXXXXX")"
+  printf '%s\n' "$json" >"$file"
+  if [ "$TEST_DRIVER" = "local" ]; then
+    _engram_env
+    out="$(env ENGRAM_PACKAGES_PATH="$file" "$@" /usr/local/bin/engram-shell --reinstall-missing 2>&1)" || true
+  else
+    local docker_e=()
+    local kv
+    for kv in "$@"; do
+      docker_e+=(-e "$kv")
+    done
+    out="$(docker run --rm \
+      -e SKIP_LLM=1 \
+      -e SKIP_MODEL_FETCH=1 \
+      -e SHOMSKY_MODEL_PATH=/etc/os-release \
+      -e ENGRAM_PACKAGES_PATH=/tmp/packages.json \
+      "${docker_e[@]}" \
+      -v "$file:/tmp/packages.json:ro" \
+      "$IMAGE" \
+      /usr/local/bin/engram-shell --reinstall-missing 2>&1)" || true
+  fi
+  rm -f "$file"
+  printf '%s\n' "$out"
+}
+
+run_package_restore_suite() {
+  echo "==> missing-package restore"
+  local out json
+
+  json='{"packages":{"busybox":{"status":"installed","updated_at":"1"}},"updated_at":"1"}'
+  out="$(run_reinstall_missing "$json")"
+  check_not "$out" "reinstalling missing packages" "busybox already present is silent"
+
+  json='{"packages":{"htop":{"status":"removed","updated_at":"1"}},"updated_at":"1"}'
+  out="$(run_reinstall_missing "$json")"
+  check_not "$out" "reinstalling missing packages" "removed packages are not reinstalled"
+
+  json='{"packages":{"zz-shomsky-no-such-pkg":{"status":"installed","updated_at":"1"}},"updated_at":"1"}'
+  out="$(run_reinstall_missing "$json")"
+  check_contains "$out" "reinstalling missing packages: zz-shomsky-no-such-pkg" \
+    "missing ledger package is reinstalled"
+  check_contains "$out" "warning:" "failed apk add is a warning"
+
+  json='{"packages":{"zz-shomsky-no-such-pkg":{"status":"installed","updated_at":"1"}},"updated_at":"1"}'
+  out="$(run_reinstall_missing "$json" ENGRAM_SKIP_PACKAGE_RESTORE=1)"
+  check_not "$out" "reinstalling missing packages" "ENGRAM_SKIP_PACKAGE_RESTORE skips restore"
+}
+
 run_agent_vs_root_parity() {
   echo "==> agent/root parity on read-only commands"
   local a r
@@ -284,6 +336,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   run_home_tilde_suite
   run_ignore_llm_suite
   run_hallucination_isolation
+  run_package_restore_suite
   run_agent_vs_root_parity
   echo
   echo "==== results: ${PASS} passed, ${FAIL} failed ===="

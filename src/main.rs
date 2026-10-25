@@ -61,6 +61,11 @@ struct Cli {
     /// Exercise tools/modes without calling the LLM (CI / smoke)
     #[arg(long)]
     self_test: bool,
+
+    /// Reinstall ledger packages that apk reports missing, then exit.
+    /// Used by the container entrypoint; does not start the LLM.
+    #[arg(long)]
+    reinstall_missing: bool,
 }
 
 #[tokio::main]
@@ -77,6 +82,10 @@ async fn main() -> Result<()> {
     }
     if let Some(url) = cli.llm_url {
         cfg.llm_url = url;
+    }
+
+    if cli.reinstall_missing {
+        return crate::packages::reinstall_missing(&cfg.packages_path);
     }
 
     let skills = SkillStore::load(&cfg.skills_dir)

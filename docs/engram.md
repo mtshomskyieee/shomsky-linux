@@ -18,8 +18,12 @@ Compose persists models via the `shomsky-models` volume, the agent working
 directory via a host bind mount (default `./engram/user` → `/engram/user`;
 override with `SHOMSKY_USER_DIR`), and hallucination sessions via
 `./.hallucination_shell_history` → `/engram/.hallucination_shell_history`
-(override with `SHOMSKY_HALLUC_HISTORY`). Without those mounts, files live
-only in the container layer and disappear with `docker compose run --rm`.
+(override with `SHOMSKY_HALLUC_HISTORY`). Interactive shells
+(`./agent_sh.sh`, `./scripts/shell.sh`) commit apk database changes onto a
+local `shomskylinux:installed` image so installed packages survive the next
+start. Each start also reinstalls ledger packages that `apk info -e` reports
+missing (including after a rebuild). Tests use `docker compose run --rm` and
+stay ephemeral.
 
 ## Skill format
 
@@ -69,7 +73,9 @@ uninstall with Alpine `apk` (search when the binary name differs from the
 package). It is `always_load: true`. In agent mode the model resolves the
 package name and runs `apk add` / `apk del` via `shell_exec` when UID is 0.
 Successful mutations are recorded in `/engram/user/.packages.json` and shown
-under `:menu` → Packages or `:packages`.
+under `:menu` → Packages or `:packages`. Interactive launches commit those
+packages into `shomskylinux:installed`; a new container reinstalls any ledger
+entry that is missing from the image.
 
 ## Interactive bypass list
 

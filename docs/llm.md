@@ -79,7 +79,7 @@ Tests: unit tests live next to the module. Behavior and golden paths live in `te
 | `/engram/user/` | Agent work tree. Compose bind mount (`SHOMSKY_USER_DIR`). Prompt shows `[home]` or `[engram]`. |
 | `/engram/user/bin/` | Learned commands. Entrypoint prepends this to `PATH`. |
 | `/engram/user/.command_freq.json` | Command counts for `:top` and cmdfreq. |
-| `/engram/user/.packages.json` | Successful `apk add` / `apk del` ledger. |
+| `/engram/user/.packages.json` | Successful `apk add` / `apk del` ledger. Interactive shells commit matching apk files into `shomskylinux:installed`; each start reinstalls names still marked installed that are missing. |
 | `/engram/skills/` | Markdown skills copied from `engram/skills/` at build. |
 | `/engram/models/` | GGUF volume `shomsky-models`. |
 | `/engram/.hallucination_shell_history/` | Session JSON. Host mount `./.hallucination_shell_history`. |
@@ -170,7 +170,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 | Skill | Load |
 |-------|------|
 | `shell` | `always_load: true` — BusyBox vocabulary |
-| `packages` | `always_load: true` — `apk add` / `apk del`; search when the binary name differs from the package; ledger in `.packages.json` |
+| `packages` | `always_load: true` — `apk add` / `apk del`; search when the binary name differs from the package; ledger in `.packages.json`; interactive shells persist installs in `shomskylinux:installed` |
 | `learn` | on demand via `load_skill` |
 | `ignore_llm_for_these_commands` | on demand; the shell also reads it as the TUI bypass list |
 
@@ -187,7 +187,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 7. How-to docs stay detailed. ADRs stay short: Status, Date, Context, Decision, Consequences, optional Steering.
 8. Do not commit weights, tokens, or `.env`.
 
-Build: Docker 24+ with BuildKit. `./start-shomsky-linux-shell.sh` or `docker compose run --rm shomsky`. Bare `docker compose up` lets Compose’s helper menu steal the keyboard. First mistral.rs compile is long. `CARGO_BUILD_JOBS=1` on small builders. See [build-and-publish.md](build-and-publish.md).
+Build: Docker 24+ with BuildKit. `./start-shomsky-linux-shell.sh` or `./scripts/shell.sh`. Bare `docker compose up` lets Compose’s helper menu steal the keyboard. First mistral.rs compile is long. `CARGO_BUILD_JOBS=1` on small builders. See [build-and-publish.md](build-and-publish.md).
 
 ## If you are the model inside the shell
 

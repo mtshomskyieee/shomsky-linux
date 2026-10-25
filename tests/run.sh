@@ -59,6 +59,7 @@ else
     -e SKIP_LLM=1 \
     -e SKIP_MODEL_FETCH=1 \
     -e SHOMSKY_MODEL_PATH=/etc/os-release \
+    -e ENGRAM_SKIP_PACKAGE_RESTORE=1 \
     "$IMAGE" \
     /usr/local/bin/engram-shell --self-test | tee /tmp/shomsky-selftest.out
 fi

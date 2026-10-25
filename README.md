@@ -51,13 +51,15 @@ bind-mounted to `./.hallucination_shell_history` (override with
 ./start-shomsky-linux-shell.sh reask    # also choose the working directory again
 # or: ./agent_sh.sh / ./halluc_sh.sh
 # or: ./scripts/shell.sh
-# or: SHOMSKY_MODEL=tiny ENGRAM_TOOL_STYLE=text docker compose run --rm shomsky
 ```
 
-Use **`run`**, not bare `up`. Compose’s attached helper menu (`w Enable Watch`)
-steals the keyboard, so you never get an `engram-shell` prompt. `run --rm`
-gives a real TTY. `./start-shomsky-linux-shell.sh` wraps that and prompts for
-agent or hallucination mode.
+Use **`./agent_sh.sh`** / **`./scripts/shell.sh`**, not bare `up`. Those
+launchers give a real TTY and commit apk installs onto a local
+`shomskylinux:installed` image so packages survive the next start. Compose’s
+attached helper menu (`w Enable Watch`) steals the keyboard, so you never get
+an `engram-shell` prompt. `./start-shomsky-linux-shell.sh` wraps the launcher
+and prompts for agent or hallucination mode. Tests still use
+`docker compose run --rm`.
 
 If you prefer `up`:
 

@@ -30,6 +30,7 @@ docker run --rm \
   -e SKIP_LLM=1 \
   -e SKIP_MODEL_FETCH=1 \
   -e SKIP_SHOMAGENT=1 \
+  -e ENGRAM_SKIP_PACKAGE_RESTORE=1 \
   -e SHOMSKY_MODEL_PATH=/etc/os-release \
   -e SHOMAGENT_STUB_LLM=1 \
   -e SHOMAGENT=/usr/local/bin/shomagent \

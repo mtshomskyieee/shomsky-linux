@@ -1507,6 +1507,8 @@ Packages:
   :packages          Ledger of successful apk add / apk del (also :menu → Packages)
   :menu → Packages   Enter on ● pkg → [u]ninstall; on ○ pkg → [r]einstall
   Stored in /engram/user/.packages.json
+  Interactive shells commit apk changes to shomskylinux:installed; each start
+  reinstalls ledger packages that are missing from the image.
 
 Top 10 commands:
   :top               or  :top 10
