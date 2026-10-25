@@ -12,6 +12,19 @@ env:
   CARGO_BUILD_JOBS: "2"
 
 jobs:
+  version-bump:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+      - name: Check VERSION bump
+        run: BASE_REF="origin/${{ github.base_ref }}" ./scripts/check-version-bump.sh
+
   build-and-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 180

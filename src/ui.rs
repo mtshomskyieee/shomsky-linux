@@ -7,6 +7,19 @@ use crate::modes::Mode;
 
 const CHARTER: &str = "agents · rust · native LLM in the shell";
 
+/// Distro build version compiled from repo-root `VERSION` (ADR-0010).
+const COMPILED_VERSION: &str = include_str!("../VERSION");
+
+/// Product build version shown on the splash and in `:sys`.
+///
+/// `SHOMSKY_VERSION`, when set and non-empty, overrides the compiled file.
+pub fn build_version() -> String {
+    match std::env::var("SHOMSKY_VERSION") {
+        Ok(ver) if !ver.trim().is_empty() => ver.trim().to_string(),
+        _ => COMPILED_VERSION.trim().to_string(),
+    }
+}
+
 /// SHOMSKY — both S letters use the tall Cool S. Also rasterized by
 /// `matrix.rs` as the mask the digital rain crystallizes into.
 pub const SPLASH_ART: &str = r#"
@@ -156,6 +169,7 @@ pub fn print_splash(cfg: &Config) {
         "  {dim}mode{r} {mode_c}{}{r}  {dim}·  :menu  ·  :help  ·  :splash  ·  :sys{r}",
         cfg.mode.prompt_tag()
     );
+    let _ = writeln!(out, "  {dim}Build:{}{r}", build_version());
     let _ = writeln!(out);
     let _ = out.flush();
 }
@@ -215,11 +229,7 @@ pub fn print_sys(cfg: &Config, cwd: &std::path::Path) {
         prompt_path(cfg.mode, cwd),
         cfg.max_context_messages
     );
-    if let Ok(ver) = std::env::var("SHOMSKY_VERSION") {
-        if !ver.is_empty() {
-            println!("version={ver}");
-        }
-    }
+    println!("version={}", build_version());
 }
 
 /// True when the line is a local identity query (`uname`, `uname -a`, …).
@@ -318,6 +328,47 @@ mod tests {
         assert!(is_sys_command("uname -a"));
         assert!(!is_sys_command("unamex"));
         assert!(!is_sys_command("echo uname"));
+    }
+
+    #[test]
+    fn build_version_uses_compiled_fallback() {
+        let _guard = crate::modes::engram_env_lock();
+        let prev = std::env::var_os("SHOMSKY_VERSION");
+        std::env::remove_var("SHOMSKY_VERSION");
+        let v = build_version();
+        assert_eq!(v, COMPILED_VERSION.trim());
+        let parts: Vec<&str> = v.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "compiled VERSION must be MAJOR.MINOR.PATCH, got {v}"
+        );
+        assert!(
+            parts
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+            "compiled VERSION must be MAJOR.MINOR.PATCH, got {v}"
+        );
+        match prev {
+            Some(val) => std::env::set_var("SHOMSKY_VERSION", val),
+            None => std::env::remove_var("SHOMSKY_VERSION"),
+        }
+    }
+
+    #[test]
+    fn build_version_env_override() {
+        let _guard = crate::modes::engram_env_lock();
+        let prev = std::env::var_os("SHOMSKY_VERSION");
+        std::env::set_var("SHOMSKY_VERSION", "9.9.9");
+        assert_eq!(build_version(), "9.9.9");
+        std::env::set_var("SHOMSKY_VERSION", "  8.1.0  ");
+        assert_eq!(build_version(), "8.1.0");
+        std::env::set_var("SHOMSKY_VERSION", "");
+        assert_eq!(build_version(), COMPILED_VERSION.trim());
+        match prev {
+            Some(val) => std::env::set_var("SHOMSKY_VERSION", val),
+            None => std::env::remove_var("SHOMSKY_VERSION"),
+        }
     }
 }
 
