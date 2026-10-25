@@ -41,7 +41,9 @@ The product **build version** is the single line in repo-root [`VERSION`](../../
 
 When changing identity, splash, publish, or CI:
 
-1. Bump `VERSION` in the same PR that lands on `main`.
+1. Bump `VERSION` in the same PR that lands on `main`. Use
+   `./scripts/set-version.sh` (suggests patch `+1`; type another `X.Y.Z` to
+   override) so `rootfs/etc/os-release` stays in lockstep.
 2. Keep `rootfs/etc/os-release` in lockstep; do not edit one without the other.
 3. Do not invent a next GHCR tag from registry/git history. Publish the
    contents of `VERSION`.
