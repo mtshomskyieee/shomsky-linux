@@ -1,8 +1,8 @@
 NAME="Shomsky Linux"
 ID=shomsky
 ID_LIKE=alpine
-VERSION_ID=0.1.1
-PRETTY_NAME="Shomsky Linux 0.1.1"
+VERSION_ID=1.0.1
+PRETTY_NAME="Shomsky Linux 1.0.1"
 HOME_URL="https://github.com/mtshomskyieee/shomsky-linux"
 DOCUMENTATION_URL="https://github.com/mtshomskyieee/shomsky-linux/tree/main/docs"
 BUG_REPORT_URL="https://github.com/mtshomskyieee/shomsky-linux/issues"
