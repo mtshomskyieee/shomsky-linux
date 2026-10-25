@@ -199,3 +199,84 @@ fn hostname_fallback() -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "shomsky".into())
 }
+
+/// Weights identity for one alias in `models.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelInfo {
+    pub filename: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsFile {
+    #[serde(default)]
+    models: std::collections::BTreeMap<String, ModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelEntry {
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    filename: String,
+}
+
+/// Registry path: `MODELS_TOML`, otherwise `/etc/engram/models.toml`.
+pub fn models_toml_path() -> PathBuf {
+    std::env::var_os("MODELS_TOML")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from("/etc/engram/models.toml"))
+}
+
+/// Look up `alias` in the model registry. Missing file or alias yields `None`.
+pub fn lookup_model_info(alias: &str) -> Option<ModelInfo> {
+    lookup_model_info_in(&models_toml_path(), alias)
+}
+
+pub fn lookup_model_info_in(path: &Path, alias: &str) -> Option<ModelInfo> {
+    let text = fs::read_to_string(path).ok()?;
+    let file: ModelsFile = toml::from_str(&text).ok()?;
+    let entry = file.models.get(alias)?;
+    if entry.filename.is_empty() && entry.description.is_empty() {
+        return None;
+    }
+    Some(ModelInfo {
+        filename: entry.filename.clone(),
+        description: entry.description.clone(),
+    })
+}
+
+/// Concrete model file for `:sys`: registry filename, else `SHOMSKY_MODEL_PATH`.
+pub fn active_model_filename(alias: &str) -> Option<String> {
+    if let Some(info) = lookup_model_info(alias) {
+        if !info.filename.is_empty() {
+            return Some(info.filename);
+        }
+    }
+    std::env::var("SHOMSKY_MODEL_PATH").ok().and_then(|p| {
+        Path::new(&p)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.is_empty())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiny_alias_resolves_to_gguf_name() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("rootfs/etc/engram/models.toml");
+        let info = lookup_model_info_in(&path, "tiny").expect("tiny alias");
+        assert_eq!(info.filename, "qwen2.5-0.5b-instruct-q4_k_m.gguf");
+        assert!(info.description.contains("Qwen2.5 0.5B"));
+    }
+
+    #[test]
+    fn unknown_alias_is_none() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("rootfs/etc/engram/models.toml");
+        assert!(lookup_model_info_in(&path, "not-a-model").is_none());
+    }
+}

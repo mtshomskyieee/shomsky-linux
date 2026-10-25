@@ -607,6 +607,17 @@ impl Repl {
             },
             ":model" => {
                 println!("model alias: {}", self.cfg.model_alias);
+                if let Some(info) = crate::config::lookup_model_info(&self.cfg.model_alias) {
+                    if !info.filename.is_empty() {
+                        println!("model name:  {}", info.filename);
+                    }
+                    if !info.description.is_empty() {
+                        println!("model desc:  {}", info.description);
+                    }
+                } else if let Some(name) = crate::config::active_model_filename(&self.cfg.model_alias)
+                {
+                    println!("model name:  {name}");
+                }
                 println!("llm url:     {}", self.cfg.llm_url);
                 println!("llm model:   {}", self.cfg.llm_model);
                 println!("tool style:  {}", self.cfg.tool_style.as_str());
@@ -1458,7 +1469,7 @@ const HELP_TEXT: &str = "\
 Meta-commands:
   :help              Show this help
   :menu | :m         Feature navigation hub (Modes / Learn / Packages / shomagent / …)
-  :sys | :uname      System identity (mode, model, tools, llm) — also: uname
+  :sys | :uname      System identity (mode, model alias, model name, tools, llm) — also: uname
   :splash            Replay the startup splash (TTY; matrix intro if enabled)
   :mode [name]       Show or set mode (agent|hallucination|root)
   :tools [style]     Show or set tool style (auto|native|text)
