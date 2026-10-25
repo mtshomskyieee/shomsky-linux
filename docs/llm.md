@@ -62,7 +62,7 @@ Workspace ([ADR-0002](adr/0002-rust-language-and-style.md)):
 | `shomsky` | `crates/shomsky/` | learn registry and `shomsky publish` |
 | `quickyn` | `crates/quickyn/` | yes/no + confidence CLI |
 
-`engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`.
+`engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`, `quickyn_tui.rs`, `chat_tui.rs`.
 
 Put new shell behavior in that map. Add a module or a workspace crate only when the boundary is real.
 
@@ -136,6 +136,10 @@ A line starting with `,` or `??` is intent, handled before direct-shell and LLM 
 | `quickyn "<question>" <file>` | File body is pre-prompt context before the question |
 
 Files over 1000 characters warn on stderr (call still runs). `QUICKYN_STUB_LLM=1` for CI. Agent mode treats `quickyn` as a direct shell command.
+
+## chat
+
+[chat.md](chat.md). Immersive framed conversation with the current model (`:chat`). New session: no REPL history, no tools. Title shows estimated token size and percent of the window (`ENGRAM_CONTEXT_TOKENS`, default 32768). `c` compactifies the dialogue into one summary turn and recalculates the counters. Esc exits. Saves `saved_chat_<YYYYMMDDTHHMMSSZ>.md` in the shell cwd (skipped in hallucination mode). `ENGRAM_CHAT_STUB=1` for CI.
 
 ## shomagent
 
@@ -219,6 +223,7 @@ You are the agent in Shomsky Linux, an Alpine container, talking to a person at 
 | Background agents | [adr/0007](adr/0007-shomagent-background-crew.md), [shomagent.md](shomagent.md) |
 | Learn / publish | [adr/0008](adr/0008-learn-userland-verb.md), [learn.md](learn.md) |
 | Yes/no CLI | [adr/0009](adr/0009-quickyn-yes-no.md), [quickyn.md](quickyn.md) |
+| Framed chat | [chat.md](chat.md) |
 | Modes, menu, tool protocol | [shell-modes.md](shell-modes.md) |
 | `/engram` and skills | [engram.md](engram.md) |
 | Build, GHCR | [build-and-publish.md](build-and-publish.md) |

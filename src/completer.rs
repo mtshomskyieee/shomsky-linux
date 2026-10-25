@@ -15,7 +15,7 @@ const SHELL_VERBS: &[&str] = &["shominstall"];
 const META_COMMANDS: &[&str] = &[
     ":help", ":h", ":menu", ":m", ":sys", ":uname", ":splash", ":exit", ":quit", ":q",
     ":mode", ":tools", ":tool-style", ":skills", ":model", ":clear", ":logs", ":top",
-    ":packages", ":pkgs", ":shomagent", ":agents", ":quickyn",
+    ":packages", ":pkgs", ":shomagent", ":agents", ":quickyn", ":chat",
 ];
 
 pub struct EngramHelper {
