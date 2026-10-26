@@ -582,6 +582,11 @@ fn items_for(
                 kind: ItemKind::RunMeta(":quickyn"),
             },
             Item {
+                label: ":chat".into(),
+                detail: "Framed chat with the current model (ctx, compactify, save)".into(),
+                kind: ItemKind::RunMeta(":chat"),
+            },
+            Item {
                 label: ":model".into(),
                 detail: "Active model / LLM endpoint".into(),
                 kind: ItemKind::RunMeta(":model"),

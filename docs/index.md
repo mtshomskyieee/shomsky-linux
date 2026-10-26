@@ -13,6 +13,7 @@
 - [Learn](learn.md) — `,` / `??` intent → promote to `~/bin` → `shomsky publish`
 - [shomagent](shomagent.md) — background watchers, notification lane, stream-scoped talk
 - [quickyn](quickyn.md) — yes/no + confidence from the current model
+- [chat](chat.md) — immersive framed chat with the current model (`:chat`)
 - [MCP (local tools)](mcp.md) — in-container stdio MCP; cmdfreq / top 10 commands
 - [Models](models.md)
 - [Build and publish](build-and-publish.md)

@@ -663,6 +663,9 @@ impl Repl {
             ":quickyn" => {
                 crate::quickyn_tui::run(self.cwd.clone()).await;
             },
+            ":chat" => {
+                crate::chat_tui::run(&self.cfg, self.cwd.clone()).await;
+            },
             other => eprintln!("unknown meta-command '{other}' (try :help)"),
         }
         Ok(false)
@@ -1480,6 +1483,7 @@ Meta-commands:
   :logs [N]          Show last N lines of mistralrs log (default 40)
   :shomagent         Roster background agents (:agents); :shomagent talk N peeks
   :quickyn           Split-screen yes/no TUI (question + file left; check/X right)
+  :chat              Framed chat with the current model (ctx size, compactify, save)
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 
@@ -1487,6 +1491,10 @@ quickyn (agent mode / PATH):
   quickyn \"q\"       Yes/no + confidence from the current model (exit 0=yes, 1=no)
   quickyn \"q\" file  Same; file is chain-of-thought context before the question
   :quickyn           Interactive split TUI over the same decide path
+
+chat:
+  :chat              Immersive framed chat; Esc exits; saves saved_chat_<stamp>.md
+
 
 
 Feature menu (TTY):
