@@ -6,7 +6,7 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::llm::{ChatMessage, LlmClient};
@@ -23,6 +23,9 @@ const COMPACTIFY_MAX_TOKENS: u32 = 512;
 const STUB_REPLY: &str = "stub-reply";
 const STUB_SUMMARY: &str = "stub-summary of the conversation so far.";
 const COMPACTIFY_ASK: &str = "Summarize this conversation so far. Keep decisions, names, and open questions. Be concise. Output only the summary.";
+/// Same glyphs as `spinner.rs` so Alpine TTYs stay ASCII-only.
+const SPIN_FRAMES: &[char] = &['-', '\\', '|', '/'];
+const SPIN_TICK: Duration = Duration::from_millis(120);
 
 // ── Pure state ──────────────────────────────────────────────────────────────
 
@@ -91,6 +94,7 @@ pub struct TuiState {
     pub scroll_top: usize,
     pub follow_bottom: bool,
     pub thinking: Thinking,
+    pub thinking_since: Option<Instant>,
     pub status: Option<String>,
     pub window_tokens: usize,
     pub save_path: PathBuf,
@@ -108,6 +112,7 @@ impl TuiState {
             scroll_top: 0,
             follow_bottom: true,
             thinking: Thinking::None,
+            thinking_since: None,
             status: None,
             window_tokens: context_window_tokens(),
             save_path: cwd.join(saved_chat_filename(&datetimestamp_slug())),
@@ -154,7 +159,28 @@ impl TuiState {
             lines.push("assistant".into());
             lines.push("  ···".into());
         }
+        if self.thinking == Thinking::Compactify {
+            lines.push(format!("  {}", compactify_wait_line(self.thinking_elapsed())));
+        }
         lines
+    }
+
+    pub fn thinking_elapsed(&self) -> Duration {
+        self.thinking_since
+            .map(|t| t.elapsed())
+            .unwrap_or_default()
+    }
+
+    pub fn set_thinking(&mut self, kind: Thinking) {
+        self.thinking = kind;
+        self.thinking_since = if kind == Thinking::None {
+            None
+        } else {
+            Some(Instant::now())
+        };
+        if kind != Thinking::None {
+            self.status = None;
+        }
     }
 
     pub fn clamp_scroll(&mut self, view_h: usize, total: usize) {
@@ -288,7 +314,7 @@ impl TuiState {
             text,
         }];
         self.follow_bottom = true;
-        self.thinking = Thinking::None;
+        self.set_thinking(Thinking::None);
         self.status = Some("compactified".into());
     }
 
@@ -297,12 +323,12 @@ impl TuiState {
             role: Role::Assistant,
             text,
         });
-        self.thinking = Thinking::None;
+        self.set_thinking(Thinking::None);
         self.status = None;
     }
 
     pub fn set_error(&mut self, msg: String) {
-        self.thinking = Thinking::None;
+        self.set_thinking(Thinking::None);
         self.status = Some(msg);
     }
 
@@ -333,6 +359,29 @@ pub fn percent(tokens: usize, window: usize) -> usize {
     } else {
         tokens.saturating_mul(100) / window
     }
+}
+
+pub fn spinner_glyph(elapsed: Duration) -> char {
+    let i = (elapsed.as_millis() / SPIN_TICK.as_millis()) as usize;
+    SPIN_FRAMES[i % SPIN_FRAMES.len()]
+}
+
+fn format_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    }
+}
+
+/// In-frame compactify wait: `[-] compactify 4s`.
+pub fn compactify_wait_line(elapsed: Duration) -> String {
+    format!(
+        "[{}] compactify {}",
+        spinner_glyph(elapsed),
+        format_elapsed(elapsed)
+    )
 }
 
 pub fn transcript_markdown(turns: &[Turn]) -> String {
@@ -479,13 +528,13 @@ pub async fn run(cfg: &Config, cwd: PathBuf) {
                 if let Some(job) = pending.take() {
                     job.handle.abort();
                 }
-                state.thinking = Thinking::None;
+                state.set_thinking(Thinking::None);
                 state.status = Some("cancelled".into());
             }
             Some(Key::Tab) if pending.is_none() => state.toggle_focus(),
             Some(Key::Enter) => match state.on_enter() {
                 SendAction::Reply => {
-                    state.thinking = Thinking::Reply;
+                    state.set_thinking(Thinking::Reply);
                     pending = Some(spawn_job(
                         Thinking::Reply,
                         state.api_messages(),
@@ -496,7 +545,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf) {
                     ));
                 }
                 SendAction::Compactify => {
-                    state.thinking = Thinking::Compactify;
+                    state.set_thinking(Thinking::Compactify);
                     pending = Some(spawn_job(
                         Thinking::Compactify,
                         state.compactify_messages(),
@@ -510,7 +559,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf) {
             },
             Some(Key::Char(c)) => match state.insert_char(c) {
                 SendAction::Compactify => {
-                    state.thinking = Thinking::Compactify;
+                    state.set_thinking(Thinking::Compactify);
                     pending = Some(spawn_job(
                         Thinking::Compactify,
                         state.compactify_messages(),
@@ -719,7 +768,11 @@ fn draw(state: &TuiState) {
     }
 
     let sep_y = lay.transcript_h + 2;
-    let sep_label = state.status.clone().unwrap_or_default();
+    let sep_label = if state.thinking == Thinking::Compactify {
+        compactify_wait_line(state.thinking_elapsed())
+    } else {
+        state.status.clone().unwrap_or_default()
+    };
     let sep_body = if sep_label.is_empty() {
         "─".repeat(lay.inner)
     } else {
@@ -773,6 +826,12 @@ fn style_transcript_line(text: &str, dim: &str, reset: &str, width: usize) -> St
 }
 
 fn footer_text(state: &TuiState, inv: &str, reset: &str, dim: &str) -> String {
+    if state.thinking == Thinking::Compactify {
+        return format!(
+            "{dim} {} · Esc cancel {reset}",
+            compactify_wait_line(state.thinking_elapsed())
+        );
+    }
     if state.thinking != Thinking::None {
         return format!("{dim} ··· Esc cancel {reset}");
     }
@@ -876,6 +935,7 @@ mod tests {
             scroll_top: 0,
             follow_bottom: true,
             thinking: Thinking::None,
+            thinking_since: None,
             status: None,
             window_tokens: 100,
             save_path: PathBuf::from("/tmp/saved_chat_test.md"),
@@ -1060,6 +1120,36 @@ mod tests {
         assert_eq!(s.turns.len(), 1);
         assert_eq!(s.turns[0].role, Role::User);
         assert_eq!(s.status.as_deref(), Some("compactified"));
+    }
+
+    #[test]
+    fn compactify_spinner_cycles_and_shows_elapsed() {
+        assert_eq!(spinner_glyph(Duration::from_millis(0)), '-');
+        assert_eq!(spinner_glyph(Duration::from_millis(120)), '\\');
+        assert_eq!(spinner_glyph(Duration::from_millis(240)), '|');
+        assert_eq!(spinner_glyph(Duration::from_millis(360)), '/');
+        assert_eq!(spinner_glyph(Duration::from_millis(480)), '-');
+        let line = compactify_wait_line(Duration::from_secs(4));
+        assert!(line.contains("compactify"), "{line}");
+        assert!(line.contains("4s"), "{line}");
+        assert!(line.starts_with('['), "{line}");
+        let long = compactify_wait_line(Duration::from_secs(75));
+        assert!(long.contains("1m15s"), "{long}");
+
+        let mut s = test_state();
+        s.turns.push(Turn {
+            role: Role::User,
+            text: "prior".into(),
+        });
+        s.set_thinking(Thinking::Compactify);
+        let shown = s.display_lines(40);
+        assert!(
+            shown.iter().any(|l| l.contains("compactify")),
+            "expected compactify spinner in transcript, got {shown:?}"
+        );
+        s.set_thinking(Thinking::None);
+        let after = s.display_lines(40);
+        assert!(!after.iter().any(|l| l.contains("compactify")));
     }
 
     #[test]

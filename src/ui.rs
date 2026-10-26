@@ -37,10 +37,10 @@ pub const SPLASH_ART: &str = r#"
 /    \    \  MODES                       /    \    \   -==  L I N U X  ==-
 |    |    ||                             |    |    ||  -=  LLM + Shell  =-
 |    |    || :mode agent = LLM assist    |    |    ||  -=  2 cool esses =-
-\         /  :mode hallucination =       \         /   :menu 
- \       /          LLM dreams it's a CLI \       /    :help
-   \   /     :mode root = shell only        \   /      :splash
-     v                    no LLM              v
+\         /  :mode hallucination =       \         /   :menu      :help
+ \       /          LLM dreams it's a CLI \       /    :splash    :sys
+   \   /     :mode root = shell only        \   /      :quickyn   :chat
+     v                    no LLM              v        
 "#;
 
 /// Whether we should paint splash / colors on this TTY.

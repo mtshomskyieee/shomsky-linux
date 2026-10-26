@@ -58,6 +58,10 @@ open questions), then replaces the turns with that summary as a single user
 message under the same system prompt. Counters are recomputed. An empty
 transcript shows `nothing to compactify` and does not call the model.
 
+While the model is summarizing, the frame shows an ASCII spinner and elapsed
+time (`[-] compactify 4s`) in the transcript, the rule above the input, and
+the footer. Esc still cancels.
+
 `ENGRAM_CHAT_STUB=1` skips HTTP: replies are a canned line, and compactify
 substitutes a short canned summary.
 
