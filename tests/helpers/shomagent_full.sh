@@ -94,6 +94,8 @@ need_not "$(cat notes.md)" "france is in europe" "replace cleared old lines"
 # --- talk ---
 talk="$(printf '%s\n' 'where is paris' ':q' | "$SHOMAGENT" talk 2 2>&1 || true)"
 need "$talk" "from the document|only this" "talk session"
+need "$talk" "ctx [0-9]+/[0-9]+ tok" "talk context tokens and buffer"
+need "$talk" "est [0-9]+%" "talk context percent"
 
 # --- watch / spawn / pause / resume / stop (process) ---
 out="$("$SHOMAGENT" spawn "sleep 120" --name sleeper --tell-me "nothing" 2>&1)"

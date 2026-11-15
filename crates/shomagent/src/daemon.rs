@@ -19,7 +19,7 @@ use crate::llm::{ChatMessage, LlmClient};
 use crate::notify::{Finding, NotifyLane};
 use crate::novelty::NoveltyFilter;
 use crate::paths;
-use crate::protocol::{MemberStatus, Request, Response, TalkContext};
+use crate::protocol::{ContextUsage, MemberStatus, Request, Response, TalkContext};
 use crate::ring::RingBuffer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +96,8 @@ struct Member {
     summarize_cursor: u64,
     novelty: NoveltyFilter,
     talk_history: Vec<ChatMessage>,
+    /// Messages removed from `talk_history` because of [`TALK_HISTORY_LIMIT`].
+    talk_history_dropped: u64,
     role: MemberRole,
     /// Number of dream beats written so far (0 = seed not yet written).
     dream_beats: u32,
@@ -235,6 +237,15 @@ const SESSION_STUCK: Duration = Duration::from_secs(300);
 const DATA_BEGIN: &str = "<<<UNTRUSTED DATA>>>";
 const DATA_END: &str = "<<<END DATA>>>";
 
+/// Stored talk messages (user and assistant). Older ones are dropped.
+const TALK_HISTORY_LIMIT: usize = 12;
+/// Stream lines included in a talk or ask prompt.
+const TALK_RING_LINES: usize = 200;
+/// Characters of a document included in a talk or ask prompt.
+const DOC_EXCERPT_MAX: usize = 80_000;
+/// Same default window as `:chat` (`ENGRAM_CONTEXT_TOKENS`).
+const DEFAULT_CONTEXT_TOKENS: u64 = 32_768;
+
 /// Pull complete lines out of `buf`. Invalid UTF-8 becomes U+FFFD and does not
 /// stop the pump. When `flush_partial` is set, a trailing fragment without a
 /// newline is emitted too (end of stream).
@@ -317,6 +328,7 @@ fn fresh_member(id: u32, def: MemberDef, role: MemberRole, state: MemberState) -
         summarize_cursor: 0,
         novelty: NoveltyFilter::new(Duration::from_secs(3600)),
         talk_history: Vec::new(),
+        talk_history_dropped: 0,
         role,
         dream_beats: 0,
         dream_topic: String::new(),
@@ -417,20 +429,46 @@ fn status_of(m: &Member) -> MemberStatus {
     }
 }
 
-fn read_document(path: &std::path::Path) -> Result<String> {
+struct Excerpt {
+    text: String,
+    clipped: bool,
+}
+
+fn read_document(path: &std::path::Path) -> Result<(String, bool)> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading document {}", path.display()))?;
-    const MAX: usize = 80_000;
-    if text.len() <= MAX {
-        Ok(text)
+    if text.len() <= DOC_EXCERPT_MAX {
+        Ok((text, false))
     } else {
-        let end = floor_char_boundary(&text, MAX);
-        Ok(format!(
-            "{}\n\n… [truncated; {} bytes total]",
-            &text[..end],
-            text.len()
+        let end = floor_char_boundary(&text, DOC_EXCERPT_MAX);
+        Ok((
+            format!(
+                "{}\n\n… [truncated; {} bytes total]",
+                &text[..end],
+                text.len()
+            ),
+            true,
         ))
     }
+}
+
+/// Allowed context window in tokens. `ENGRAM_CONTEXT_TOKENS` overrides the default.
+fn context_buffer_tokens() -> u64 {
+    std::env::var("ENGRAM_CONTEXT_TOKENS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n: &u64| n > 0)
+        .unwrap_or(DEFAULT_CONTEXT_TOKENS)
+}
+
+/// `chars / 4` over every message that will be sent, including role names.
+fn estimate_message_tokens(messages: &[ChatMessage]) -> u64 {
+    let mut chars = 0usize;
+    for m in messages {
+        chars = chars.saturating_add(m.role.chars().count());
+        chars = chars.saturating_add(m.content.chars().count());
+    }
+    (chars / 4) as u64
 }
 
 /// Largest index `<= i` that is a char boundary of `s`.
@@ -444,18 +482,28 @@ fn floor_char_boundary(s: &str, mut i: usize) -> usize {
     i
 }
 
-fn member_context_excerpt(m: &Member) -> String {
+fn member_context_excerpt(m: &Member) -> Excerpt {
     if let Some(doc) = m.role.path() {
         match read_document(doc) {
-            Ok(t) if !t.trim().is_empty() => t,
-            Ok(_) => format!(
-                "(document {} is empty — edit it, then ask again)",
-                doc.display()
-            ),
-            Err(e) => format!("(could not read {}: {e})", doc.display()),
+            Ok((t, clipped)) if !t.trim().is_empty() => Excerpt { text: t, clipped },
+            Ok(_) => Excerpt {
+                text: format!(
+                    "(document {} is empty — edit it, then ask again)",
+                    doc.display()
+                ),
+                clipped: false,
+            },
+            Err(e) => Excerpt {
+                text: format!("(could not read {}: {e})", doc.display()),
+                clipped: false,
+            },
         }
     } else {
-        m.ring.join_recent(200)
+        let clipped = m.ring.len() > TALK_RING_LINES || m.ring.total_pushed() > m.ring.len() as u64;
+        Excerpt {
+            text: m.ring.join_recent(TALK_RING_LINES),
+            clipped,
+        }
     }
 }
 
@@ -475,6 +523,7 @@ impl Daemon {
                 roster: vec![],
                 context: None,
                 reply: None,
+                context_usage: None,
             },
             Request::Roster => {
                 let mut roster: Vec<_> = self.members.values().map(status_of).collect();
@@ -485,6 +534,7 @@ impl Daemon {
                     roster,
                     context: None,
                     reply: None,
+                    context_usage: None,
                 }
             }
             Request::Spawn {
@@ -510,6 +560,7 @@ impl Daemon {
                         roster: vec![],
                         context: None,
                         reply: None,
+                        context_usage: None,
                     },
                     Err(e) => Response::Err {
                         message: e.to_string(),
@@ -530,6 +581,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 },
                 Err(e) => Response::Err {
                     message: e.to_string(),
@@ -549,6 +601,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 },
                 Err(e) => Response::Err {
                     message: e.to_string(),
@@ -565,6 +618,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 },
                 Err(e) => Response::Err {
                     message: e.to_string(),
@@ -585,6 +639,7 @@ impl Daemon {
                         roster: vec![],
                         context: None,
                         reply: None,
+                        context_usage: None,
                     };
                 }
                 let name = self.members.get(&id).map(|m| m.def.name.clone());
@@ -596,6 +651,7 @@ impl Daemon {
                         roster: vec![],
                         context: None,
                         reply: None,
+                        context_usage: None,
                     }
                 });
                 if let Some(name) = name {
@@ -603,8 +659,19 @@ impl Daemon {
                 }
                 resp
             }
-            Request::Context { id } => match self.members.get(&id) {
-                Some(m) => Response::Ok {
+            Request::Context { id } => {
+                if !self.members.contains_key(&id) {
+                    return Response::Err {
+                        message: format!("unknown member #{id}"),
+                    };
+                }
+                let context_usage = self.talk_begin(id, "").ok().map(|begun| begun.usage);
+                let Some(m) = self.members.get(&id) else {
+                    return Response::Err {
+                        message: format!("unknown member #{id}"),
+                    };
+                };
+                Response::Ok {
                     message: None,
                     member: None,
                     roster: vec![],
@@ -612,15 +679,13 @@ impl Daemon {
                         id: m.id,
                         name: m.def.name.clone(),
                         tell_me: m.def.tell_me.clone(),
-                        ring_excerpt: member_context_excerpt(m),
+                        ring_excerpt: member_context_excerpt(m).text,
                         findings: m.findings.clone(),
                     }),
                     reply: None,
-                },
-                None => Response::Err {
-                    message: format!("unknown member #{id}"),
-                },
-            },
+                    context_usage,
+                }
+            }
             // Talk awaits the model outside the daemon mutex (see handle_client).
             Request::Talk { .. } => Response::Err {
                 message: "internal: Talk must be dispatched unlocked".into(),
@@ -635,6 +700,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 },
                 Err(e) => Response::Err {
                     message: e.to_string(),
@@ -647,6 +713,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: Some(reply),
+                    context_usage: None,
                 },
                 Err(e) => Response::Err {
                     message: e.to_string(),
@@ -676,6 +743,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 }
             }
             Request::Refine { path, name } => match self.attach_refine(&path, name.as_deref()) {
@@ -688,6 +756,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 },
                 Err(e) => Response::Err {
                     message: e.to_string(),
@@ -714,6 +783,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 }
             }
         }
@@ -1018,6 +1088,7 @@ impl Daemon {
             m.dream_excerpt = excerpt_dream_body(&body, 520);
             m.dream_beats = 1;
             m.talk_history.clear();
+            m.talk_history_dropped = 0;
             m.last_activity = Instant::now();
         }
         Ok(body)
@@ -1163,6 +1234,7 @@ impl Daemon {
                 m.dream_carry = fallback_dream_carry(&body);
                 m.dream_excerpt = excerpt_dream_body(&body, 520);
                 m.talk_history.clear();
+                m.talk_history_dropped = 0;
                 m.last_activity = Instant::now();
             }
         }
@@ -1314,6 +1386,7 @@ impl Daemon {
         if let Some(m) = self.members.get_mut(&meta.id) {
             if m.role.is_refine() && m.step_gen == meta.gen {
                 m.talk_history.clear();
+                m.talk_history_dropped = 0;
                 m.last_activity = Instant::now();
                 if !act.reason.is_empty() {
                     m.refine_reason = act.reason.clone();
@@ -1405,6 +1478,7 @@ impl Daemon {
                 roster: vec![],
                 context: None,
                 reply: None,
+                context_usage: None,
             };
         }
         if m.state != MemberState::Running {
@@ -1433,6 +1507,7 @@ impl Daemon {
             roster: vec![],
             context: None,
             reply: None,
+            context_usage: None,
         }
     }
 
@@ -1473,6 +1548,7 @@ impl Daemon {
                             roster: vec![],
                             context: None,
                             reply: None,
+                            context_usage: None,
                         };
                     }
                     Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
@@ -1499,6 +1575,7 @@ impl Daemon {
                     roster: vec![],
                     context: None,
                     reply: None,
+                    context_usage: None,
                 }
             }
             Err(e) => Response::Err {
@@ -1584,7 +1661,9 @@ impl Daemon {
             .map(|f| format!("- {}: {}", f.title, f.detail))
             .collect::<Vec<_>>()
             .join("\n");
-        let body = member_context_excerpt(m);
+        let excerpt = member_context_excerpt(m);
+        let history_kept = m.talk_history.len() as u64;
+        let history_dropped = m.talk_history_dropped;
         let (system, data_label) = if m.role.path().is_some() {
             let mode = if m.role.writes() {
                 "read/write"
@@ -1628,26 +1707,38 @@ impl Daemon {
         messages.extend(m.talk_history.iter().cloned());
         messages.push(ChatMessage::user(format!(
             "{data_label}:\n{}\n\nQuestion:\n{message}",
-            fence_untrusted(&body)
+            fence_untrusted(&excerpt.text)
         )));
+        let mut usage =
+            ContextUsage::from_counts(estimate_message_tokens(&messages), context_buffer_tokens());
+        usage.history_kept = history_kept;
+        usage.history_limit = TALK_HISTORY_LIMIT as u64;
+        usage.history_dropped = history_dropped;
+        usage.excerpt_clipped = excerpt.clipped;
         Ok(TalkBegin {
             llm: self.llm.clone(),
             messages,
+            usage,
         })
     }
 
     /// Record a talk turn. No-op if the member was removed while the model ran.
-    fn talk_finish(&mut self, id: u32, message: &str, reply: &str) {
+    /// Updates `usage` with the history kept after the cap is applied.
+    fn talk_finish(&mut self, id: u32, message: &str, reply: &str, usage: &mut ContextUsage) {
         let Some(m) = self.members.get_mut(&id) else {
             return;
         };
         m.talk_history.push(ChatMessage::user(message.to_string()));
         m.talk_history
             .push(ChatMessage::assistant(reply.to_string()));
-        if m.talk_history.len() > 12 {
-            let drain = m.talk_history.len() - 12;
+        if m.talk_history.len() > TALK_HISTORY_LIMIT {
+            let drain = m.talk_history.len() - TALK_HISTORY_LIMIT;
             m.talk_history.drain(0..drain);
+            m.talk_history_dropped = m.talk_history_dropped.saturating_add(drain as u64);
         }
+        usage.history_kept = m.talk_history.len() as u64;
+        usage.history_limit = TALK_HISTORY_LIMIT as u64;
+        usage.history_dropped = m.talk_history_dropped;
     }
 
     /// Reap exited children and apply restart policy with backoff.
@@ -1836,6 +1927,7 @@ struct FindingJson {
 struct TalkBegin {
     llm: LlmClient,
     messages: Vec<ChatMessage>,
+    usage: ContextUsage,
 }
 
 struct SummarizeJob {
@@ -2780,16 +2872,17 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                         Err(e) => Response::Err {
                             message: e.to_string(),
                         },
-                        Ok(begun) => match begun.llm.chat(&begun.messages, 256).await {
+                        Ok(mut begun) => match begun.llm.chat(&begun.messages, 256).await {
                             Ok(reply) => {
                                 let mut d = daemon.lock().await;
-                                d.talk_finish(id, &message, &reply);
+                                d.talk_finish(id, &message, &reply, &mut begun.usage);
                                 Response::Ok {
                                     message: None,
                                     member: None,
                                     roster: vec![],
                                     context: None,
                                     reply: Some(reply),
+                                    context_usage: Some(begun.usage),
                                 }
                             }
                             Err(e) => Response::Err {
@@ -2846,6 +2939,7 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                                             roster: vec![],
                                             context: None,
                                             reply: Some(reply),
+                                            context_usage: None,
                                         },
                                         Err(e) => Response::Err {
                                             message: format!("{e:#}"),
@@ -2912,6 +3006,7 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                                             roster: vec![],
                                             context: None,
                                             reply: Some(reply),
+                                            context_usage: None,
                                         },
                                         Err(e) => Response::Err {
                                             message: format!("{e:#}"),
@@ -3026,7 +3121,8 @@ mod tests {
         let mut text = "a".repeat(79_999);
         text.push('你');
         std::fs::write(&path, &text).unwrap();
-        let got = read_document(&path).unwrap();
+        let (got, clipped) = read_document(&path).unwrap();
+        assert!(clipped);
         assert!(got.contains("truncated"), "{got}");
         assert!(!got.contains('你'));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3429,7 +3525,91 @@ mod tests {
         let user = &begun.messages.last().unwrap().content;
         assert!(user.contains("paris is in france"), "{user}");
         assert!(user.contains(DATA_BEGIN), "{user}");
+        assert!(begun.usage.tokens_used > 0);
+        assert_eq!(
+            begun.usage.percent,
+            begun.usage.tokens_used * 100 / begun.usage.buffer_tokens
+        );
+        assert!(begun.usage.summary().contains(&format!(
+            "ctx {}/{} tok · est {}%",
+            begun.usage.tokens_used, begun.usage.buffer_tokens, begun.usage.percent
+        )));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_usage_names_the_buffer_and_cutoffs() {
+        let plain = ContextUsage::from_counts(50, 200);
+        assert_eq!(plain.percent, 25);
+        assert_eq!(plain.summary(), "ctx 50/200 tok · est 25%");
+
+        let mut over = ContextUsage::from_counts(250, 200);
+        over.history_kept = 12;
+        over.history_limit = TALK_HISTORY_LIMIT as u64;
+        over.history_dropped = 4;
+        over.excerpt_clipped = true;
+        assert_eq!(
+            over.summary(),
+            "ctx 250/200 tok · est 125% · history kept 12 of 16 (limit 12) · excerpt clipped · over buffer"
+        );
+    }
+
+    #[test]
+    fn talk_history_cutoff_is_reported() {
+        let dir = scratch_dir("talk-history");
+        let mut daemon = Daemon::new(LlmClient::from_env().unwrap(), dir.clone());
+        let path = dir.join("notes.md");
+        std::fs::write(&path, "paris is in france\n").unwrap();
+        let id = daemon
+            .attach_document(path.to_str().unwrap(), "answer from the file", None, true)
+            .unwrap()
+            .id;
+        let mut usage = daemon.talk_begin(id, "q").unwrap().usage;
+        for i in 0..7 {
+            daemon.talk_finish(id, &format!("q{i}"), "a", &mut usage);
+        }
+        assert_eq!(usage.history_kept, TALK_HISTORY_LIMIT as u64);
+        assert_eq!(usage.history_dropped, 2);
+        assert!(usage.summary().contains("history kept 12 of 14 (limit 12)"));
+        let again = daemon.talk_begin(id, "later").unwrap();
+        assert_eq!(again.usage.history_kept, 12);
+        assert_eq!(again.usage.history_dropped, 2);
+        assert!(again.messages.len() > 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn talk_flags_a_clipped_document() {
+        let dir = scratch_dir("talk-clip");
+        let mut daemon = Daemon::new(LlmClient::from_env().unwrap(), dir.clone());
+        let path = dir.join("big.md");
+        std::fs::write(&path, "a".repeat(DOC_EXCERPT_MAX + 1)).unwrap();
+        let id = daemon
+            .attach_document(path.to_str().unwrap(), "", None, false)
+            .unwrap()
+            .id;
+        let begun = daemon.talk_begin(id, "summarize").unwrap();
+        assert!(begun.usage.excerpt_clipped);
+        assert!(begun.usage.summary().contains("excerpt clipped"));
+        assert!(begun.usage.tokens_used > 0);
+        assert!(begun.usage.buffer_tokens > 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ring_excerpt_marks_lines_past_the_talk_window() {
+        let mut member = fresh_member(
+            1,
+            MemberDef::from_shell_command("w", "true", ""),
+            MemberRole::Process,
+            MemberState::Stopped,
+        );
+        for i in 0..TALK_RING_LINES + 1 {
+            member.ring.push(format!("{i}"));
+        }
+        let excerpt = member_context_excerpt(&member);
+        assert!(excerpt.clipped);
+        assert_eq!(excerpt.text.lines().count(), TALK_RING_LINES);
     }
 
     #[tokio::test]

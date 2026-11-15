@@ -18,7 +18,7 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `write <id> "<text>"` | Append to a readwrite document |
 | `write <id> --replace "…"` | Overwrite document |
 | `ask <id> "<q>"` | One-shot Q&A; answer is `#N > …` |
-| `talk <id>` | Interactive chat (`:q` to leave) |
+| `talk <id>` | Interactive chat (`:q` to leave). Each turn prints context used |
 | `dream [path]` | Generative dream journal (default `dream.md`; `quit` to leave) |
 | `dream seed [path]` | Same, but pause for a user-written seed before the first beat |
 | `refine idea [path]` | Reason, then rewrite an idea file from a standing task (default `idea.md`; `quit` to leave) |
@@ -91,7 +91,30 @@ shomagent ask 1 "is it only orders?"
 # #1 > …
 
 shomagent talk 1
+# shomagent talk #1 (dev-watch) — empty line or :q to leave
+# ctx 840/32768 tok · est 2%
 ```
+
+`talk` prints a context line when the session opens and after every reply:
+
+```text
+ctx 1842/32768 tok · est 5%
+ctx 1900/32768 tok · est 5% · history kept 12 of 14 (limit 12)
+ctx 21000/32768 tok · est 64% · excerpt clipped
+ctx 40000/32768 tok · est 122% · over buffer
+```
+
+`tokens` is `chars / 4` over the prompt that was just sent (system brief, kept
+talk history, and the document or stream excerpt). The buffer is the allowed
+window, `ENGRAM_CONTEXT_TOKENS` (default `32768`), the same window `:chat`
+uses. Percent is `tokens * 100 / buffer`. Above 100% the line adds
+`over buffer`: the prompt is larger than the window.
+
+The line also names our own cutoffs. Talk history keeps the last 12 messages;
+older ones are dropped and the meter says how many remain. A document longer
+than 80,000 characters, or a stream longer than the last 200 lines, adds
+`excerpt clipped`. The full file stays on disk. The ring still holds its
+configured `ring_lines`.
 
 Inside the shell, `:shomagent` or `:agents` lists the roster. `:shomagent talk N` peeks at member N.
 
@@ -235,6 +258,7 @@ Two read-only attaches of the same path are allowed.
 | `SHOMAGENT_SYSTEM_CREW` | `/etc/shomsky/shomagent_crew.d` | System drop-ins |
 | `SHOMAGENT_LOCAL_AUTOSTART` | unset | `1` allows `./shomagent_crew.d` autostart |
 | `SHOMAGENT_LLM_URL` / `ENGRAM_LLM_URL` | `http://127.0.0.1:1234` | OpenAI-compatible API |
+| `ENGRAM_CONTEXT_TOKENS` | `32768` | Context window `shomagent talk` uses for the percent |
 | `SHOMAGENT_STUB_LLM` | unset | `1` = heuristic / no real LLM (CI when `SKIP_LLM=1`) |
 | `SKIP_SHOMAGENT` | `0` | Entrypoint skips starting the daemon |
 

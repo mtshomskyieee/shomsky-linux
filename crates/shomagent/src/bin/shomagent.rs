@@ -3,7 +3,7 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use shomagent::daemon::rpc;
-use shomagent::protocol::{Request, Response};
+use shomagent::protocol::{ContextUsage, Request, Response};
 use shomagent::rain;
 use std::future::Future;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -309,15 +309,24 @@ async fn ask_once(id: u32, question: &str) -> Result<()> {
     }
 }
 
+fn print_context_usage(usage: Option<&ContextUsage>) {
+    if let Some(usage) = usage {
+        println!("{}", usage.summary());
+    }
+}
+
 async fn talk_loop(id: u32) -> Result<()> {
     match rpc(&Request::Context { id }).await? {
         Response::Ok {
-            context: Some(ctx), ..
+            context: Some(ctx),
+            context_usage,
+            ..
         } => {
             println!(
                 "shomagent talk #{} ({}) — empty line or :q to leave",
                 id, ctx.name
             );
+            print_context_usage(context_usage.as_ref());
         }
         Response::Err { message } => bail!("{message}"),
         _ => bail!("no context for #{id}"),
@@ -342,8 +351,13 @@ async fn talk_loop(id: u32) -> Result<()> {
         })
         .await?
         {
-            Response::Ok { reply: Some(r), .. } => {
+            Response::Ok {
+                reply: Some(r),
+                context_usage,
+                ..
+            } => {
                 println!("#{id} > {r}");
+                print_context_usage(context_usage.as_ref());
             }
             Response::Err { message } => {
                 eprintln!("error: {message}");
