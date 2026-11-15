@@ -23,24 +23,24 @@ pub fn build_version() -> String {
 /// SHOMSKY — both S letters use the tall Cool S. Also rasterized by
 /// `matrix.rs` as the mask the digital rain crystallizes into.
 pub const SPLASH_ART: &str = r#"
-     ^  ADD PKG: shominstall <thing2install>  ^    shomagent stop 1
-    / \ AGENTS: shomagent  #lists active     / \   shomagent watch "<cwd>" --tell-me "..."
+     ^-ADD PKG-: shominstall <thing2install>  ^    shomagent stop 1
+    / \ -AGENTS-: shomagent  #lists active   / \   shomagent watch "<cwd>" --tell-me "..."
   /     \   shomagent readwrite fil.md     /     \ shomagent spawn "<cmd>"
 /         \ shomagent ask 1 "facts.md"   /         \  shomagent refine idea <file> 
-|    |    ||shomagent talk 1             |    |    || NEW COMMAND (begin with a comma) example: 
-|    |    ||shomagent dream seed <file>  |    |    || , show the five largest files
+|    |    ||shomagent talk 1             |    |    || -NEW COMMAND- (begin with a comma) example: 
+|    |    ||shomagent web <url>          |    |    || , show the five largest files
 \    \    /   _   _     ___     __  __   \    \    /   _  __  __   __
  \    \  /   | | | |   / _ \   |  \/  |   \    \  /   | |/ /  \ \ / /
   \    \/    | |_| |  | | | |  | |\/| |    \    \/    | ' /    \ V /
   /\    \    |  _  |  | |_| |  | |  | |    /\    \    | . \     | |
  /  \    \   |_| |_|   \___/   |_|  |_|   /  \    \   |_|\_\    |_|
-/    \    \  MODES                       /    \    \   -==  L I N U X  ==-
-|    |    ||                             |    |    ||  -=  LLM + Shell  =-
+/    \    \shomagent web <url> -browser  /    \    \   -==  L I N U X  ==-
+|    |    || -MODES- (agent, root, ... ) |    |    ||  -=  LLM + Shell  =-
 |    |    || :mode agent = LLM assist    |    |    ||  -=  2 cool esses =-
 \         /  :mode hallucination =       \         /   :menu      :help
  \       /          LLM dreams it's a CLI \       /    :splash    :sys
    \   /     :mode root = shell only        \   /      :quickyn   :chat
-     v                    no LLM              v        
+     v                    no LLM              v        :web   
 "#;
 
 /// Whether we should paint splash / colors on this TTY.

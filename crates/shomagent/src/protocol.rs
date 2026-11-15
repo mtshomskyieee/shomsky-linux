@@ -92,6 +92,38 @@ pub enum Request {
     RefineEnd {
         id: u32,
     },
+    /// Attach a live headless-browser member for a URL.
+    Web {
+        url: String,
+        #[serde(default)]
+        tell_me: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Click a link or button by visible text on a web member.
+    Click {
+        id: u32,
+        text: String,
+    },
+    /// Type into a labeled field on a web member (does not submit).
+    Type {
+        id: u32,
+        label: String,
+        text: String,
+    },
+    /// Load a new URL in an existing web member.
+    Navigate {
+        id: u32,
+        url: String,
+    },
+    /// Re-read the live page (DOM as it is now, including script that already ran).
+    Refresh {
+        id: u32,
+    },
+    /// Drop stored talk Q&A for a member (page snapshot stays).
+    ClearTalk {
+        id: u32,
+    },
     Ping,
 }
 
@@ -109,6 +141,9 @@ pub enum Response {
         context: Option<TalkContext>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reply: Option<String>,
+        /// Prompt size for this talk turn: tokens used, buffer, and percent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_usage: Option<ContextUsage>,
     },
     Err {
         message: String,
@@ -134,4 +169,69 @@ pub struct TalkContext {
     pub tell_me: String,
     pub ring_excerpt: String,
     pub findings: Vec<Finding>,
+}
+
+/// How much of the model window a talk prompt used.
+///
+/// `tokens_used` is `chars / 4` over the messages actually sent (same estimate
+/// as `:chat`). `buffer_tokens` is the allowed window. `percent` is
+/// `tokens_used * 100 / buffer_tokens` and may exceed 100.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextUsage {
+    pub tokens_used: u64,
+    pub buffer_tokens: u64,
+    pub percent: u64,
+    /// Talk messages still stored after this turn.
+    #[serde(default)]
+    pub history_kept: u64,
+    /// Cap on stored talk messages.
+    #[serde(default)]
+    pub history_limit: u64,
+    /// Talk messages removed because the cap was hit (cumulative).
+    #[serde(default)]
+    pub history_dropped: u64,
+    /// Document or stream excerpt was shorter than the source.
+    #[serde(default)]
+    pub excerpt_clipped: bool,
+}
+
+impl ContextUsage {
+    pub fn from_counts(tokens_used: u64, buffer_tokens: u64) -> Self {
+        let percent = if buffer_tokens == 0 {
+            0
+        } else {
+            tokens_used.saturating_mul(100) / buffer_tokens
+        };
+        Self {
+            tokens_used,
+            buffer_tokens,
+            percent,
+            history_kept: 0,
+            history_limit: 0,
+            history_dropped: 0,
+            excerpt_clipped: false,
+        }
+    }
+
+    /// Tokens used, allowed buffer, and percent. Extra clauses name a cutoff.
+    pub fn summary(&self) -> String {
+        let mut line = format!(
+            "ctx {}/{} tok · est {}%",
+            self.tokens_used, self.buffer_tokens, self.percent
+        );
+        if self.history_dropped > 0 {
+            let total = self.history_kept.saturating_add(self.history_dropped);
+            line.push_str(&format!(
+                " · history kept {} of {} (limit {})",
+                self.history_kept, total, self.history_limit
+            ));
+        }
+        if self.excerpt_clipped {
+            line.push_str(" · excerpt clipped");
+        }
+        if self.buffer_tokens > 0 && self.tokens_used > self.buffer_tokens {
+            line.push_str(" · over buffer");
+        }
+        line
+    }
 }

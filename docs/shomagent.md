@@ -18,10 +18,17 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `write <id> "<text>"` | Append to a readwrite document |
 | `write <id> --replace "…"` | Overwrite document |
 | `ask <id> "<q>"` | One-shot Q&A; answer is `#N > …` |
-| `talk <id>` | Interactive chat (`:q` to leave) |
+| `talk <id>` | Interactive chat (`:q` to leave). Each turn prints context used |
 | `dream [path]` | Generative dream journal (default `dream.md`; `quit` to leave) |
 | `dream seed [path]` | Same, but pause for a user-written seed before the first beat |
 | `refine idea [path]` | Reason, then rewrite an idea file from a standing task (default `idea.md`; `quit` to leave) |
+| `web <url>` | Attach a live headless-browser page (ask/talk/click/type) |
+| `web <url> --browser` | Same, but stay in the foreground until `quit` |
+| `navigate <id> <url>` | Load a new URL in an existing web member |
+| `refresh <id>` | Re-read the live page without navigating |
+| `:web [url]` (shell) | Split TUI: page left, chat right, url + chat inputs |
+| `click <id> "<text>"` | Click a link or button by visible text |
+| `type <id> <label> <text>` | Type into a labeled field (does not submit) |
 | `pause` / `resume` / `stop <id>` | Lifecycle |
 
 ## Quick use
@@ -91,7 +98,30 @@ shomagent ask 1 "is it only orders?"
 # #1 > …
 
 shomagent talk 1
+# shomagent talk #1 (dev-watch) — empty line or :q to leave
+# ctx 840/32768 tok · est 2%
 ```
+
+`talk` prints a context line when the session opens and after every reply:
+
+```text
+ctx 1842/32768 tok · est 5%
+ctx 1900/32768 tok · est 5% · history kept 12 of 14 (limit 12)
+ctx 21000/32768 tok · est 64% · excerpt clipped
+ctx 40000/32768 tok · est 122% · over buffer
+```
+
+`tokens` is `chars / 4` over the prompt that was just sent (system brief, kept
+talk history, and the document or stream excerpt). The buffer is the allowed
+window, `ENGRAM_CONTEXT_TOKENS` (default `32768`), the same window `:chat`
+uses. Percent is `tokens * 100 / buffer`. Above 100% the line adds
+`over buffer`: the prompt is larger than the window.
+
+The line also names our own cutoffs. Talk history keeps the last 12 messages;
+older ones are dropped and the meter says how many remain. A document longer
+than 80,000 characters, or a stream longer than the last 200 lines, adds
+`excerpt clipped`. The full file stays on disk. The ring still holds its
+configured `ring_lines`.
 
 Inside the shell, `:shomagent` or `:agents` lists the roster. `:shomagent talk N` peeks at member N.
 
@@ -121,6 +151,58 @@ shomagent ask 2 "summarize this"
 ```
 
 `read` is ask and talk only. `readwrite` also accepts `write` (append) and `write --replace`.
+
+### Web
+
+Open a URL in headless Chromium. The page stays live for ask, talk, click, and
+type. Only `http` and `https`. Roster glyph is `◎`.
+
+```bash
+shomagent web https://example.com
+# ⟡ shomagent#1 web (https://example.com)
+
+shomagent ask 1 "what is this page"
+# #1 > …
+
+shomagent click 1 "Learn more"
+shomagent type 1 Search "hello"
+# or: shomagent type 1 Search -- hello world
+
+shomagent stop 1   # closes the browser
+
+shomagent navigate 1 https://news.ycombinator.com
+```
+
+Inside `engram-shell`, `:web` opens a split TUI (page on the left, conversation
+on the right, `url>` and `chat>` on the bottom). The chat side shows the same
+context meter as `shomagent talk` (`ctx used/buffer tok · est %`). A spinner
+with elapsed time stays on screen while a page loads or a reply is in flight.
+Tab switches inputs. Up/Down and PgUp/PgDn scroll the pane for the focused
+input. The left pane paints at load time, then keeps re-reading the live DOM
+until the visible text settles, so script that runs after `readyState` shows
+up on its own. **Ctrl-R** re-reads immediately (scroll stays). Enter on the
+url reloads from the network.
+
+Links are listed at the bottom of the page pane as a numbered **Links and
+buttons** section (body text alone does not mark hyperlinks). In `chat>`:
+
+- `click 3` / `click #3` / `click <visible text>` — follow a link or press a button
+- `type <label> -- <text>` — fill a field (does not submit)
+- `clear` or **Ctrl-L** — drop the chat transcript and talk history for this page
+
+Loading a new URL or clicking a link clears chat context automatically so the
+next question only sees the current page (not prior sites). `:menu` → **Web**
+lists sites saved in `/engram/user/.web_history.json` and can clear that history.
+
+Foreground session (page text on screen until quit):
+
+```bash
+shomagent web https://example.com --browser
+# ask a question, or: click <text|#N> | type <label> -- <text> | quit
+```
+
+CI and smoke tests set `SHOMAGENT_STUB_WEB=1` so no Chromium binary is required.
+Missing Chromium on a real attach fails with `apk add chromium`.
 
 ### Dream
 
@@ -235,6 +317,7 @@ Two read-only attaches of the same path are allowed.
 | `SHOMAGENT_SYSTEM_CREW` | `/etc/shomsky/shomagent_crew.d` | System drop-ins |
 | `SHOMAGENT_LOCAL_AUTOSTART` | unset | `1` allows `./shomagent_crew.d` autostart |
 | `SHOMAGENT_LLM_URL` / `ENGRAM_LLM_URL` | `http://127.0.0.1:1234` | OpenAI-compatible API |
+| `ENGRAM_CONTEXT_TOKENS` | `32768` | Context window `shomagent talk` uses for the percent |
 | `SHOMAGENT_STUB_LLM` | unset | `1` = heuristic / no real LLM (CI when `SKIP_LLM=1`) |
 | `SKIP_SHOMAGENT` | `0` | Entrypoint skips starting the daemon |
 

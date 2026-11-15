@@ -8,6 +8,7 @@ not part of the base OS.
   user/                          Agent working tree (Compose bind mount)
     .command_freq.json           Command-frequency store (MCP cmdfreq / :top)
     .packages.json               apk add / apk del ledger (:packages / :menu)
+    .web_history.json            Sites visited from :web (menu → Web)
   skills/                        Markdown skills (tool manuals, procedures)
   models/                        GGUF weights (Docker named volume)
   .hallucination_shell_history/  Hallucination session JSON (Compose bind mount)

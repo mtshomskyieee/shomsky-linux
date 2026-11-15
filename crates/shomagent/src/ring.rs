@@ -82,6 +82,13 @@ impl RingBuffer {
     pub fn join_recent(&self, n: usize) -> String {
         self.recent(n).join("\n")
     }
+
+    /// Drop all lines and store `text` as a single ring entry.
+    pub fn replace_text(&mut self, text: impl Into<String>) {
+        self.lines.clear();
+        self.lines.push_back(text.into());
+        self.total_pushed = self.total_pushed.saturating_add(1);
+    }
 }
 
 #[cfg(test)]

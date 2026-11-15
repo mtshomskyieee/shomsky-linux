@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod rain;
 pub mod ring;
 pub mod term;
+pub mod web;
 
 pub use config::{load_crew_defs, MemberDef, RestartPolicy};
 pub use notify::{Finding, NotifyLane};

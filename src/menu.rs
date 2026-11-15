@@ -37,7 +37,7 @@ impl ShomagentMemberBrief {
     pub fn is_document(&self) -> bool {
         matches!(
             self.state.as_str(),
-            "read" | "readwrite" | "dream" | "refine"
+            "read" | "readwrite" | "dream" | "refine" | "web"
         )
     }
 }
@@ -49,6 +49,8 @@ pub struct MenuContext {
     pub allow_root_mode: bool,
     pub pending_learn: bool,
     pub packages_path: PathBuf,
+    pub web_history_path: PathBuf,
+    pub web_history: Vec<crate::web_history::Visit>,
     /// Live roster snapshot (may be empty if daemon is down).
     pub shomagent_members: Vec<ShomagentMemberBrief>,
 }
@@ -60,17 +62,19 @@ pub enum Category {
     SavCmd,
     Packages,
     Shomagent,
+    Web,
     Help,
     System,
 }
 
 impl Category {
-    pub const ALL: [Category; 7] = [
+    pub const ALL: [Category; 8] = [
         Category::Modes,
         Category::Learn,
         Category::SavCmd,
         Category::Packages,
         Category::Shomagent,
+        Category::Web,
         Category::Help,
         Category::System,
     ];
@@ -82,6 +86,7 @@ impl Category {
             Category::SavCmd => "sav-cmd",
             Category::Packages => "Packages",
             Category::Shomagent => "shomagent",
+            Category::Web => "Web",
             Category::Help => "Help",
             Category::System => "System",
         }
@@ -107,6 +112,8 @@ enum FilePromptKind {
     ReadWrite,
     DreamSeed,
     RefineIdea,
+    /// Prompt for an http(s) URL → `shomagent web <url>`.
+    WebUrl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +150,9 @@ pub struct MenuState {
     package_pick: Option<(String, PackageStatus)>,
     /// Nested shomagent filename / member picker.
     shomagent_sub: Option<ShomagentSub>,
+    web_clear_confirm: bool,
+    web_history_path: PathBuf,
+    web_history: Vec<crate::web_history::Visit>,
     allow_root_mode: bool,
     mode: Mode,
     pending_learn: bool,
@@ -173,6 +183,10 @@ enum ItemKind {
     /// A concrete opened document chosen for ask/talk.
     ShomagentMember { id: u32, verb: MemberVerb },
     ExitShell,
+    /// Confirm, then wipe `.web_history.json`.
+    ClearWebHistory,
+    /// Open `:web` already pointed at a saved URL.
+    OpenWeb(String),
     InfoOnly,
 }
 
@@ -186,6 +200,9 @@ impl MenuState {
             saved_pick: None,
             package_pick: None,
             shomagent_sub: None,
+            web_clear_confirm: false,
+            web_history_path: ctx.web_history_path.clone(),
+            web_history: ctx.web_history.clone(),
             allow_root_mode: ctx.allow_root_mode,
             mode: ctx.mode,
             pending_learn: ctx.pending_learn,
@@ -200,6 +217,7 @@ impl MenuState {
 
     fn in_overlay(&self) -> bool {
         self.exit_confirm
+            || self.web_clear_confirm
             || self.saved_pick.is_some()
             || self.package_pick.is_some()
             || matches!(
@@ -218,6 +236,7 @@ impl MenuState {
             self.allow_root_mode,
             self.pending_learn,
             &self.packages_path,
+            &self.web_history,
         )
     }
 
@@ -283,6 +302,10 @@ impl MenuState {
             self.exit_confirm = false;
             return;
         }
+        if self.web_clear_confirm {
+            self.web_clear_confirm = false;
+            return;
+        }
         if self.saved_pick.is_some() {
             self.saved_pick = None;
             return;
@@ -312,6 +335,10 @@ impl MenuState {
     pub fn toggle_pane(&mut self) {
         if self.exit_confirm {
             self.exit_confirm = false;
+            return;
+        }
+        if self.web_clear_confirm {
+            self.web_clear_confirm = false;
             return;
         }
         if self.saved_pick.is_some() {
@@ -344,6 +371,10 @@ impl MenuState {
             self.exit_confirm = false;
             return None;
         }
+        if self.web_clear_confirm {
+            self.web_clear_confirm = false;
+            return None;
+        }
         if self.saved_pick.is_some() {
             self.saved_pick = None;
             return None;
@@ -367,6 +398,10 @@ impl MenuState {
     pub fn activate(&mut self) -> Option<MenuAction> {
         if self.exit_confirm {
             return Some(MenuAction::ExitShell);
+        }
+        if self.web_clear_confirm {
+            self.confirm_web_clear();
+            return None;
         }
         if self.saved_pick.is_some() {
             return self.confirm_saved(false);
@@ -420,6 +455,11 @@ impl MenuState {
                 self.exit_confirm = true;
                 None
             }
+            ItemKind::ClearWebHistory => {
+                self.web_clear_confirm = true;
+                None
+            }
+            ItemKind::OpenWeb(url) => Some(MenuAction::RunMeta(format!(":web {url}"))),
             ItemKind::InfoOnly => None,
         }
     }
@@ -458,6 +498,7 @@ impl MenuState {
             FilePromptKind::ReadWrite => format!("shomagent readwrite {path}"),
             FilePromptKind::DreamSeed => format!("shomagent dream seed {path}"),
             FilePromptKind::RefineIdea => format!("shomagent refine idea {path}"),
+            FilePromptKind::WebUrl => format!("shomagent web {path}"),
         };
         Some(MenuAction::InsertLine(line))
     }
@@ -497,6 +538,13 @@ impl MenuState {
         };
         Some(MenuAction::InsertLine(cmd))
     }
+
+    fn confirm_web_clear(&mut self) {
+        let _ = crate::web_history::clear(&self.web_history_path);
+        self.web_history.clear();
+        self.web_clear_confirm = false;
+        self.item_idx = 0;
+    }
 }
 
 fn items_for(
@@ -505,6 +553,7 @@ fn items_for(
     allow_root: bool,
     pending_learn: bool,
     packages_path: &PathBuf,
+    web_history: &[crate::web_history::Visit],
 ) -> Vec<Item> {
     match cat {
         Category::Modes => {
@@ -553,6 +602,7 @@ fn items_for(
         Category::SavCmd => saved_command_items(),
         Category::Packages => package_items(packages_path),
         Category::Shomagent => shomagent_root_items(),
+        Category::Web => web_items(web_history),
         Category::Help => vec![
             Item {
                 label: "full help".into(),
@@ -630,6 +680,42 @@ fn items_for(
     }
 }
 
+fn web_items(history: &[crate::web_history::Visit]) -> Vec<Item> {
+    let mut v = vec![
+        Item {
+            label: "open browser".into(),
+            detail: "Split text browser — page left, chat right".into(),
+            kind: ItemKind::RunMeta(":web"),
+        },
+        Item {
+            label: "clear history".into(),
+            detail: "Forget saved sites".into(),
+            kind: ItemKind::ClearWebHistory,
+        },
+    ];
+    if history.is_empty() {
+        v.push(Item {
+            label: "(no sites yet — open browser and visit a url)".into(),
+            detail: "Visits are saved under .web_history.json".into(),
+            kind: ItemKind::InfoOnly,
+        });
+    } else {
+        for visit in history {
+            let label = if visit.title.is_empty() {
+                visit.url.clone()
+            } else {
+                format!("{}  {}", visit.title, visit.url)
+            };
+            v.push(Item {
+                label,
+                detail: visit.url.clone(),
+                kind: ItemKind::OpenWeb(visit.url.clone()),
+            });
+        }
+    }
+    v
+}
+
 fn shomagent_root_items() -> Vec<Item> {
     vec![
         Item {
@@ -641,6 +727,11 @@ fn shomagent_root_items() -> Vec<Item> {
             label: "readwrite <file>".into(),
             detail: "Attach a read/write document — type a filename".into(),
             kind: ItemKind::ShomagentPromptFile(FilePromptKind::ReadWrite),
+        },
+        Item {
+            label: "web <url>".into(),
+            detail: "Attach a live headless-browser page — type a URL".into(),
+            kind: ItemKind::ShomagentPromptFile(FilePromptKind::WebUrl),
         },
         Item {
             label: "ask <opened file>".into(),
@@ -919,6 +1010,14 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 state.exit_confirm = false;
                 esc_armed = false;
             }
+            Key::Char('y') | Key::Char('Y') if state.web_clear_confirm => {
+                state.confirm_web_clear();
+                esc_armed = false;
+            }
+            Key::Char('n') | Key::Char('N') if state.web_clear_confirm => {
+                state.web_clear_confirm = false;
+                esc_armed = false;
+            }
             Key::Char('u') | Key::Char('U')
                 if state
                     .package_pick
@@ -993,6 +1092,12 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
+            Key::Char('8') if state.shomagent_sub.is_none() => {
+                esc_armed = false;
+                state.category_idx = 7;
+                state.item_idx = 0;
+                state.focus = Focus::Items;
+            }
             _ => {
                 esc_armed = false;
             }
@@ -1003,7 +1108,7 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
 fn draw(state: &MenuState) {
     let (rows, cols) = term::term_size();
     let width = cols.clamp(40, 72).min(cols);
-    let height = 16usize.min(rows.saturating_sub(2)).max(10);
+    let height = 16usize.min(rows.saturating_sub(2)).max(12);
     let left = ((cols.saturating_sub(width)) / 2).max(1);
     let top = ((rows.saturating_sub(height)) / 2).max(1);
 
@@ -1083,6 +1188,8 @@ fn draw(state: &MenuState) {
     let detail_y = top + 1 + body_rows;
     let detail = if state.exit_confirm {
         "Exit the shell? [y]es / [n]o / Esc".to_string()
+    } else if state.web_clear_confirm {
+        "Clear visit history? [y]es / [n]o / Esc".to_string()
     } else if let Some(name) = &state.saved_pick {
         format!("`{name}`  [r]un / [d]elete / Esc")
     } else if let Some((name, status)) = &state.package_pick {
@@ -1099,11 +1206,12 @@ fn draw(state: &MenuState) {
         }
     } else if let Some(ShomagentSub::PromptFile { kind, buf }) = &state.shomagent_sub {
         let tag = match kind {
-            FilePromptKind::ReadWrite => "readwrite",
-            FilePromptKind::DreamSeed => "dream seed",
-            FilePromptKind::RefineIdea => "refine idea",
+            FilePromptKind::ReadWrite => "readwrite file",
+            FilePromptKind::DreamSeed => "dream seed file",
+            FilePromptKind::RefineIdea => "refine idea file",
+            FilePromptKind::WebUrl => "web url",
         };
-        format!("{tag} file: {buf}█  Enter · Esc")
+        format!("{tag}: {buf}█  Enter · Esc")
     } else if let Some(ShomagentSub::PickMember { kind }) = &state.shomagent_sub {
         match kind {
             MemberVerb::Stop => "pick an agent to stop / detach · Esc back".to_string(),
@@ -1223,6 +1331,8 @@ mod tests {
             allow_root_mode: true,
             pending_learn: false,
             packages_path: PathBuf::from("/engram/user/.packages.json"),
+            web_history_path: PathBuf::from("/engram/user/.web_history.json"),
+            web_history: vec![],
             shomagent_members: vec![],
         }
     }
@@ -1272,6 +1382,7 @@ mod tests {
             vec![
                 "list agents".to_string(),
                 "readwrite <file>".to_string(),
+                "web <url>".to_string(),
                 "ask <opened file>".to_string(),
                 "talk <opened file>".to_string(),
                 "dream seed <file>".to_string(),
@@ -1319,7 +1430,7 @@ mod tests {
     fn shomagent_dream_seed_prompts_for_filename() {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 4; // dream seed <file>
+        s.item_idx = 5; // dream seed <file>
         assert_eq!(s.activate(), None);
         for c in "ideas.md".chars() {
             s.filename_push(c);
@@ -1336,7 +1447,7 @@ mod tests {
     fn shomagent_dream_seed_empty_filename_stays_open() {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 4;
+        s.item_idx = 5;
         assert_eq!(s.activate(), None);
         assert_eq!(s.confirm_filename(), None);
         assert!(matches!(
@@ -1352,7 +1463,7 @@ mod tests {
     fn shomagent_refine_idea_prompts_for_filename() {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 5; // refine idea <file>
+        s.item_idx = 6; // refine idea <file>
         assert_eq!(s.activate(), None);
         for c in "idea.md".chars() {
             s.filename_push(c);
@@ -1380,7 +1491,7 @@ mod tests {
             },
         ]));
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 2; // ask
+        s.item_idx = 3; // ask
         assert_eq!(s.activate(), None);
         assert!(matches!(
             s.shomagent_sub,
@@ -1408,7 +1519,7 @@ mod tests {
             path: "doc.md".into(),
         }]));
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 3; // talk
+        s.item_idx = 4; // talk
         assert_eq!(s.activate(), None);
         s.item_idx = 0;
         assert_eq!(
@@ -1421,7 +1532,7 @@ mod tests {
     fn shomagent_ask_empty_roster_is_info_only() {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 2;
+        s.item_idx = 3;
         assert_eq!(s.activate(), None);
         assert_eq!(s.items()[0].label, "(none)");
         s.item_idx = 0;
@@ -1437,7 +1548,7 @@ mod tests {
             path: "a.md".into(),
         }]));
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 2;
+        s.item_idx = 3;
         assert_eq!(s.activate(), None);
         assert!(s.shomagent_sub.is_some());
         assert_eq!(s.escape(), None);
@@ -1462,7 +1573,7 @@ mod tests {
             },
         ]));
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 6; // stop / end
+        s.item_idx = 7; // stop / end
         assert_eq!(s.activate(), None);
         assert!(matches!(
             s.shomagent_sub,
@@ -1486,7 +1597,7 @@ mod tests {
     fn shomagent_stop_empty_roster_is_info_only() {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
-        s.item_idx = 6;
+        s.item_idx = 7;
         assert_eq!(s.activate(), None);
         assert_eq!(s.items()[0].label, "(none)");
         assert!(s.items()[0].detail.contains("nothing to stop"));
@@ -1603,6 +1714,43 @@ mod tests {
             s.confirm_package(),
             Some(MenuAction::InsertLine("apk add htop".into()))
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn web_category_lists_history_and_clears() {
+        let dir = std::env::temp_dir().join(format!("menu-web-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".web_history.json");
+        crate::web_history::record(&path, "https://news.ycombinator.com", "HN").unwrap();
+        let mut c = ctx();
+        c.web_history_path = path.clone();
+        c.web_history = crate::web_history::load(&path);
+        let mut s = MenuState::new(&c);
+        s.category_idx = Category::Web.index();
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert_eq!(labels[0], "open browser");
+        assert_eq!(labels[1], "clear history");
+        assert!(labels[2].contains("news.ycombinator.com"));
+        assert_eq!(
+            s.activate(),
+            Some(MenuAction::RunMeta(":web".into()))
+        );
+        s.item_idx = 2;
+        assert_eq!(
+            s.activate(),
+            Some(MenuAction::RunMeta(
+                ":web https://news.ycombinator.com".into()
+            ))
+        );
+        s.item_idx = 1;
+        assert_eq!(s.activate(), None);
+        assert!(s.web_clear_confirm);
+        s.confirm_web_clear();
+        assert!(s.web_history.is_empty());
+        assert!(crate::web_history::load(&path).is_empty());
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert!(labels.iter().any(|l| l.contains("no sites yet")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

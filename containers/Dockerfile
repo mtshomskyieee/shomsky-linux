@@ -104,6 +104,7 @@ RUN apk add --no-cache \
       bash \
       bats \
       ca-certificates \
+      chromium \
       curl \
       libgcc \
       libstdc++ \

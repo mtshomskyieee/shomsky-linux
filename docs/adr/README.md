@@ -19,6 +19,7 @@ AI-assisted contribution rules.
 | [0008](0008-learn-userland-verb.md) | Learn — userland crystallize verb | Accepted |
 | [0009](0009-quickyn-yes-no.md) | quickyn yes/no CLI | Accepted |
 | [0010](0010-build-version.md) | Build version | Accepted |
+| [0011](0011-shomagent-web.md) | shomagent web (headless browser) | Accepted |
 
 How-to docs (modes, MCP usage, models, licensing inventory) stay under
 [`docs/`](../).

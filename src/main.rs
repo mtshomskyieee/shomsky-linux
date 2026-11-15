@@ -1,4 +1,6 @@
 mod chat_tui;
+mod web_history;
+mod web_tui;
 mod completer;
 mod config;
 mod halluc_fs;

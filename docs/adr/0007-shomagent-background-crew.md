@@ -30,8 +30,9 @@ reuses the same format).
 Supervision is in-process (spawn/reap/restart policy), not s6/runit yet.
 Control plane is a Unix socket at `/run/shomagent/ctl.sock`.
 
-CLI surface: `shomagent watch|spawn|read|readwrite|write|ask|talk|pause|resume|stop`
+CLI surface: `shomagent watch|spawn|read|readwrite|write|ask|talk|web|click|type|pause|resume|stop`
 and bare `shomagent` for roster. REPL meta: `:shomagent` / `:agents`.
+Web members: [ADR-0011](0011-shomagent-web.md).
 
 Document members:
 
