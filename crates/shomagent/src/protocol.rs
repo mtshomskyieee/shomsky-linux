@@ -92,6 +92,30 @@ pub enum Request {
     RefineEnd {
         id: u32,
     },
+    /// Attach a live headless-browser member for a URL.
+    Web {
+        url: String,
+        #[serde(default)]
+        tell_me: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Click a link or button by visible text on a web member.
+    Click {
+        id: u32,
+        text: String,
+    },
+    /// Type into a labeled field on a web member (does not submit).
+    Type {
+        id: u32,
+        label: String,
+        text: String,
+    },
+    /// Load a new URL in an existing web member.
+    Navigate {
+        id: u32,
+        url: String,
+    },
     Ping,
 }
 

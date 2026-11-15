@@ -234,10 +234,14 @@ fn stub_reply(messages: &[ChatMessage]) -> String {
         return r#"{"none":true}"#.into();
     }
 
-    // Document ask/talk: pull matching lines from the Document: section.
+    // Document / page ask/talk: pull matching lines from Document: or Page:.
     // The body may sit in the system prompt (older tests) or in a fenced user message.
     let doc_owned = messages.iter().find_map(|m| {
-        let rest = m.content.split("Document:\n").nth(1)?;
+        let rest = m
+            .content
+            .split("Page:\n")
+            .nth(1)
+            .or_else(|| m.content.split("Document:\n").nth(1))?;
         let body = rest
             .split("\n<<<END DATA>>>")
             .next()

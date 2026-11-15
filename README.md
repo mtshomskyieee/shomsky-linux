@@ -98,27 +98,32 @@ In agent mode the name runs as a direct shell command (not chat).
 Background agents you can hold a conversation with. Long-running watches stay
 off your TTY; they only interrupt when a novelty filter decides the finding is
 new. Documents can be attached read-only or read/write and queried with `ask`.
-Full reference: [docs/shomagent.md](docs/shomagent.md).
+Live pages can be opened with `web` and acted on by visible text (`click` /
+`type`). Full reference: [docs/shomagent.md](docs/shomagent.md).
 
 `shomagentd` starts with the container. Members are listed by id (`#1`, `#2`, …).
-**You must create a member before `ask` / `talk` / `write`.**
+**You must create a member before `ask` / `talk` / `write` / `click` / `type`.**
 
 ### Command reference
 
 | Command | Purpose |
 |---------|---------|
-| `shomagent` / `shomagent roster` | List members (`▶` running, `⏸` paused, `◇` read, `◆` readwrite) |
+| `shomagent` / `shomagent roster` | List members (`▶` running, `⏸` paused, `◇` read, `◆` readwrite, `◎` web) |
 | `shomagent watch "<cmd>" --tell-me "…"` | Run a command; watch its stream for the brief |
 | `shomagent spawn "<cmd>" …` | Same as `watch` |
 | `shomagent read <path>` | Attach a **read-only** document member |
 | `shomagent readwrite <path>` | Attach a **read/write** document member |
 | `shomagent write <id> "<text>"` | Append text to a **readwrite** document |
 | `shomagent write <id> --replace "<text>"` | Replace the whole file |
+| `shomagent web <url>` | Attach a live headless-browser page |
+| `shomagent web <url> --browser` | Same, but stay in the foreground until `quit` |
+| `shomagent click <id> "<text>"` | Click a link or button by its visible text |
+| `shomagent type <id> <label> <text>` | Type into a labeled field (does not submit) |
 | `shomagent ask <id> "<question>"` | One-shot question (answer prints as `#N > …`) |
 | `shomagent talk <id>` | Interactive chat (`:q` to leave) |
 | `shomagent pause \| resume \| stop <id>` | Control a process member; `stop` on a doc detaches (file kept) |
 
-Flags on `watch` / `spawn` / `read` / `readwrite`: `--name`, `--tell-me`.
+Flags on `watch` / `spawn` / `read` / `readwrite` / `web`: `--name`, `--tell-me`.
 `watch` / `spawn` also support `--persist` (writes `./shomagent_crew.d/<name>.toml`).
 
 In `engram-shell`: `:shomagent` / `:agents` for roster peek.
@@ -142,6 +147,37 @@ shomagent ask 1 "where is paris"
 shomagent read details.md
 shomagent ask 2 "summarize the key points"
 # shomagent write 2 "…"  → error (read-only)
+```
+
+### Example: browse Hacker News
+
+Open a URL in headless Chromium, ask about the page, then follow a story by
+clicking its title (use the exact link text from the page or from `ask`):
+
+```bash
+# 1) Attach the front page
+shomagent web https://news.ycombinator.com
+# ⟡ shomagent#1 web (https://news.ycombinator.com)
+
+# 2) Ask what is on the page
+shomagent ask 1 "what are the top story titles?"
+# #1 > …titles from the page…
+
+# 3) Open a story by clicking its visible title text
+shomagent click 1 "Show HN: My cool project"
+# clicked Show HN: My cool project
+
+# 4) Ask about the article you landed on
+shomagent ask 1 "summarize this page in two sentences"
+# #1 > …
+
+shomagent stop 1   # closes the browser
+
+# Or stay in the foreground (page text on screen until quit):
+# shomagent web https://news.ycombinator.com --browser
+# web> what are the top stories?
+# web> click Show HN: My cool project
+# web> quit
 ```
 
 ### Example: watch a process

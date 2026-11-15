@@ -22,6 +22,12 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `dream [path]` | Generative dream journal (default `dream.md`; `quit` to leave) |
 | `dream seed [path]` | Same, but pause for a user-written seed before the first beat |
 | `refine idea [path]` | Reason, then rewrite an idea file from a standing task (default `idea.md`; `quit` to leave) |
+| `web <url>` | Attach a live headless-browser page (ask/talk/click/type) |
+| `web <url> --browser` | Same, but stay in the foreground until `quit` |
+| `navigate <id> <url>` | Load a new URL in an existing web member |
+| `:web [url]` (shell) | Split TUI: page left, chat right, url + chat inputs |
+| `click <id> "<text>"` | Click a link or button by visible text |
+| `type <id> <label> <text>` | Type into a labeled field (does not submit) |
 | `pause` / `resume` / `stop <id>` | Lifecycle |
 
 ## Quick use
@@ -144,6 +150,42 @@ shomagent ask 2 "summarize this"
 ```
 
 `read` is ask and talk only. `readwrite` also accepts `write` (append) and `write --replace`.
+
+### Web
+
+Open a URL in headless Chromium. The page stays live for ask, talk, click, and
+type. Only `http` and `https`. Roster glyph is `◎`.
+
+```bash
+shomagent web https://example.com
+# ⟡ shomagent#1 web (https://example.com)
+
+shomagent ask 1 "what is this page"
+# #1 > …
+
+shomagent click 1 "Learn more"
+shomagent type 1 Search "hello"
+# or: shomagent type 1 Search -- hello world
+
+shomagent stop 1   # closes the browser
+
+shomagent navigate 1 https://news.ycombinator.com
+```
+
+Inside `engram-shell`, `:web` opens a split TUI (page on the left, conversation
+on the right, `url>` and `chat>` on the bottom). Tab switches inputs. Up/Down
+and PgUp/PgDn scroll the pane for the focused input. `:menu` → **Web** lists
+sites saved in `/engram/user/.web_history.json` and can clear that history.
+
+Foreground session (page text on screen until quit):
+
+```bash
+shomagent web https://example.com --browser
+# ask a question, or: click <text> | type <label> -- <text> | quit
+```
+
+CI and smoke tests set `SHOMAGENT_STUB_WEB=1` so no Chromium binary is required.
+Missing Chromium on a real attach fails with `apk add chromium`.
 
 ### Dream
 

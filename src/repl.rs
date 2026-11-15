@@ -278,6 +278,8 @@ impl Repl {
             allow_root_mode: self.cfg.allow_root_mode,
             pending_learn: self.pending_promote.is_some(),
             packages_path: self.cfg.packages_path.clone(),
+            web_history_path: crate::web_history::history_path(),
+            web_history: crate::web_history::load(&crate::web_history::history_path()),
             shomagent_members,
         }
     }
@@ -665,6 +667,15 @@ impl Repl {
             },
             ":chat" => {
                 crate::chat_tui::run(&self.cfg, self.cwd.clone()).await;
+            },
+            ":web" => {
+                let rest = line.trim_start_matches(":web").trim();
+                let initial = if rest.is_empty() {
+                    None
+                } else {
+                    Some(rest.to_string())
+                };
+                crate::web_tui::run(initial).await;
             },
             other => eprintln!("unknown meta-command '{other}' (try :help)"),
         }
@@ -1484,6 +1495,7 @@ Meta-commands:
   :shomagent         Roster background agents (:agents); :shomagent talk N peeks
   :quickyn           Split-screen yes/no TUI (question + file left; check/X right)
   :chat              Framed chat with the current model (ctx size, compactify, save)
+  :web [url]         Split text browser (page left, chat right; url + chat inputs)
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 
@@ -1495,12 +1507,16 @@ quickyn (agent mode / PATH):
 chat:
   :chat              Immersive framed chat; Esc exits; saves saved_chat_<stamp>.md
 
+web:
+  :web [url]         Text browser TUI; Tab switches url/chat; Up/Down scrolls the focused pane
+  menu → Web         Open browser, revisit sites, clear history
+
 
 
 Feature menu (TTY):
-  :menu | :m         Slip into Modes / Learn / Packages / shomagent / Help / System
+  :menu | :m         Slip into Modes / Learn / Packages / shomagent / Web / Help / System
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
-  menu → shomagent   list · readwrite/dream seed/refine idea <file> · ask/talk <doc> · stop/end <agent>
+  menu → shomagent   list · readwrite/web/dream seed/refine · ask/talk · stop/end <agent>
 
 Learn (agent mode):
   , <intent>         Plan → confirm → run a real shell command from intent

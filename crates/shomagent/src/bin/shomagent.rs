@@ -102,6 +102,37 @@ enum Commands {
         /// Idea file path (default idea.md)
         path: Option<String>,
     },
+    /// Attach a live headless-browser member
+    Web {
+        /// http(s) URL to open
+        url: String,
+        #[arg(long = "tell-me", default_value = "")]
+        tell_me: String,
+        #[arg(long)]
+        name: Option<String>,
+        /// Stay in the foreground: show page text, questions, click/type until quit
+        #[arg(long)]
+        browser: bool,
+    },
+    /// Click a link or button by visible text on a web member
+    Click {
+        id: u32,
+        /// Visible label (remaining words joined)
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+    },
+    /// Type into a labeled field on a web member (does not submit)
+    Type {
+        id: u32,
+        /// Field label, then text — use `--` between multi-word label and value
+        #[arg(required = true, num_args = 1..)]
+        args: Vec<String>,
+    },
+    /// Load a new URL in an existing web member
+    Navigate {
+        id: u32,
+        url: String,
+    },
     /// Pause a member
     Pause { id: u32 },
     /// Resume a paused member
@@ -215,10 +246,78 @@ async fn main() -> Result<()> {
             let path = path.unwrap_or_else(|| "idea.md".into());
             refine_loop(path).await
         }
+        Some(Commands::Web {
+            url,
+            tell_me,
+            name,
+            browser,
+        }) => {
+            if browser {
+                web_browser_loop(url, tell_me, name).await
+            } else {
+                doc_attach(Request::Web {
+                    url,
+                    tell_me,
+                    name,
+                })
+                .await
+            }
+        }
+        Some(Commands::Click { id, text }) => {
+            let text = text.join(" ");
+            if text.trim().is_empty() {
+                bail!("usage: shomagent click <id> <visible text>");
+            }
+            match rpc(&Request::Click { id, text }).await? {
+                Response::Ok { message, .. } => {
+                    if let Some(m) = message {
+                        println!("{m}");
+                    }
+                    Ok(())
+                }
+                Response::Err { message } => bail!("{message}"),
+            }
+        }
+        Some(Commands::Type { id, args }) => {
+            let (label, text) = parse_type_args(&args)?;
+            match rpc(&Request::Type { id, label, text }).await? {
+                Response::Ok { message, .. } => {
+                    if let Some(m) = message {
+                        println!("{m}");
+                    }
+                    Ok(())
+                }
+                Response::Err { message } => bail!("{message}"),
+            }
+        }
+        Some(Commands::Navigate { id, url }) => match rpc(&Request::Navigate { id, url }).await? {
+            Response::Ok { message, .. } => {
+                if let Some(m) = message {
+                    println!("{m}");
+                }
+                Ok(())
+            }
+            Response::Err { message } => bail!("{message}"),
+        },
         Some(Commands::Pause { id }) => simple(Request::Pause { id }).await,
         Some(Commands::Resume { id }) => simple(Request::Resume { id }).await,
         Some(Commands::Stop { id }) => simple(Request::Stop { id }).await,
     }
+}
+
+fn parse_type_args(args: &[String]) -> Result<(String, String)> {
+    if let Some(idx) = args.iter().position(|a| a == "--") {
+        let label = args[..idx].join(" ");
+        let text = args[idx + 1..].join(" ");
+        if label.trim().is_empty() || text.is_empty() {
+            bail!("usage: shomagent type <id> <label> -- <text>");
+        }
+        return Ok((label, text));
+    }
+    if args.len() < 2 {
+        bail!("usage: shomagent type <id> <label> <text…>");
+    }
+    Ok((args[0].clone(), args[1..].join(" ")))
 }
 
 async fn doc_attach(req: Request) -> Result<()> {
@@ -260,6 +359,7 @@ async fn print_roster() -> Result<()> {
                     "readwrite" => "◆",
                     "dream" => "~",
                     "refine" => "✦",
+                    "web" => "◎",
                     _ => "■",
                 };
                 let runtime = format_runtime(m.runtime_secs);
@@ -711,6 +811,158 @@ fn attached_id(resp: Response, what: &str) -> Result<u32> {
         Response::Err { message } => bail!("{message}"),
         _ => bail!("{what} attach returned no member id"),
     }
+}
+
+async fn fetch_page_text(id: u32) -> Result<String> {
+    match rpc(&Request::Context { id }).await? {
+        Response::Ok {
+            context: Some(ctx), ..
+        } => Ok(ctx.ring_excerpt),
+        Response::Err { message } => bail!("{message}"),
+        _ => bail!("no page context for #{id}"),
+    }
+}
+
+fn print_page(snapshot: &str) {
+    println!("── page ──");
+    println!("{}", snapshot.trim_end());
+    println!("──────────");
+}
+
+/// Foreground web session: show page text; questions, click, type until quit.
+async fn web_browser_loop(url: String, tell_me: String, name: Option<String>) -> Result<()> {
+    let id = attached_id(
+        rpc(&Request::Web {
+            url: url.clone(),
+            tell_me,
+            name,
+        })
+        .await?,
+        "web",
+    )?;
+
+    println!("shomagent web — {url}");
+    println!("ask a question, or: click <text> | type <label> -- <text> | quit");
+    match fetch_page_text(id).await {
+        Ok(page) => print_page(&page),
+        Err(e) => eprintln!("page: {e}"),
+    }
+
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    loop {
+        print!("web> ");
+        stdout.flush()?;
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line)? == 0 {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if is_quit(line) {
+            break;
+        }
+
+        let lower = line.to_ascii_lowercase();
+        if lower == "click" || lower.starts_with("click ") {
+            let text = if lower.starts_with("click ") {
+                line["click ".len()..].trim()
+            } else {
+                ""
+            };
+            if text.is_empty() {
+                eprintln!("usage: click <visible text>");
+                continue;
+            }
+            match rpc(&Request::Click {
+                id,
+                text: text.to_string(),
+            })
+            .await?
+            {
+                Response::Ok {
+                    message,
+                    reply: snapshot,
+                    ..
+                } => {
+                    if let Some(m) = message {
+                        println!("{m}");
+                    }
+                    if let Some(page) = snapshot {
+                        print_page(&page);
+                    } else if let Ok(page) = fetch_page_text(id).await {
+                        print_page(&page);
+                    }
+                }
+                Response::Err { message } => eprintln!("error: {message}"),
+            }
+            continue;
+        }
+
+        if lower.starts_with("type ") {
+            let rest = line["type ".len()..].trim();
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            let (label, text) = if let Some(idx) = parts.iter().position(|p| *p == "--") {
+                let label = parts[..idx].join(" ");
+                let text = parts[idx + 1..].join(" ");
+                (label, text)
+            } else if parts.len() >= 2 {
+                (parts[0].to_string(), parts[1..].join(" "))
+            } else {
+                eprintln!("usage: type <label> -- <text>");
+                continue;
+            };
+            if label.is_empty() || text.is_empty() {
+                eprintln!("usage: type <label> -- <text>");
+                continue;
+            }
+            match rpc(&Request::Type { id, label, text }).await? {
+                Response::Ok {
+                    message,
+                    reply: snapshot,
+                    ..
+                } => {
+                    if let Some(m) = message {
+                        println!("{m}");
+                    }
+                    if let Some(page) = snapshot {
+                        print_page(&page);
+                    } else if let Ok(page) = fetch_page_text(id).await {
+                        print_page(&page);
+                    }
+                }
+                Response::Err { message } => eprintln!("error: {message}"),
+            }
+            continue;
+        }
+
+        match rpc(&Request::Talk {
+            id,
+            message: line.to_string(),
+        })
+        .await?
+        {
+            Response::Ok {
+                reply: Some(r),
+                context_usage,
+                ..
+            } => {
+                println!("#{id} > {r}");
+                print_context_usage(context_usage.as_ref());
+                if let Ok(page) = fetch_page_text(id).await {
+                    print_page(&page);
+                }
+            }
+            Response::Err { message } => eprintln!("error: {message}"),
+            _ => eprintln!("(no reply)"),
+        }
+    }
+
+    let _ = rpc(&Request::Stop { id }).await;
+    println!("quit — browser closed");
+    Ok(())
 }
 
 fn show_wait_prompt(tty: bool, label: &str) {

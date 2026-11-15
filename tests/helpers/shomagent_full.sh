@@ -30,6 +30,7 @@ WORKDIR="$(mktemp -d /tmp/shomagent-work-XXXXXX)"
 RUN_DIR="$(mktemp -d /tmp/shomagent-run-XXXXXX)"
 export SHOMAGENT_RUN_DIR="$RUN_DIR"
 export SHOMAGENT_STUB_LLM=1
+export SHOMAGENT_STUB_WEB=1
 export SHOMAGENT_SYSTEM_CREW="$RUN_DIR/empty-crew"
 mkdir -p "$SHOMAGENT_SYSTEM_CREW"
 cd "$WORKDIR"
@@ -197,6 +198,60 @@ need "$(cat refine-loop.md)" "second pass task" "refine file has second task"
 
 roster="$("$SHOMAGENT" 2>&1)"
 need_not "$roster" "refine-new.md|refine-old.md|refine-loop.md" "refine members ended after quit"
+
+# --- web (stub browser) ---
+out="$("$SHOMAGENT" web https://example.com 2>&1)"
+need "$out" "shomagent#[0-9]+ web" "web attach"
+web_id="$(printf '%s' "$out" | sed -n 's/.*shomagent#\([0-9][0-9]*\) web.*/\1/p' | head -n1)"
+[ -n "$web_id" ] || bad "web attach id missing"
+roster="$("$SHOMAGENT" 2>&1)"
+need "$roster" "example.com" "roster shows web url"
+need "$roster" "◎" "roster web glyph"
+
+out="$("$SHOMAGENT" ask "$web_id" "what domain" 2>&1)"
+need "$out" "Example Domain|illustrative examples|domain" "ask web page"
+
+out="$("$SHOMAGENT" navigate "$web_id" "https://news.example/latest" 2>&1)"
+need "$out" "navigated|news.example" "navigate web member"
+out="$("$SHOMAGENT" ask "$web_id" "news.example latest" 2>&1)"
+need "$out" "news.example" "ask after navigate"
+
+out="$("$SHOMAGENT" click "$web_id" "Learn more" 2>&1)"
+need "$out" "clicked" "click Learn more"
+out="$("$SHOMAGENT" ask "$web_id" "stub page" 2>&1)"
+need "$out" "Stub page after clicking|Learn More|More information" "ask after click"
+
+expect_fail "click unknown label" \
+  "$SHOMAGENT" click "$web_id" "No Such Button"
+
+out="$("$SHOMAGENT" type "$web_id" Search hello 2>&1)"
+need "$out" "typed" "type into Search"
+out="$("$SHOMAGENT" ask "$web_id" "Search field" 2>&1)"
+need "$out" "hello|Search" "ask shows typed value"
+
+expect_fail "type unknown field" \
+  "$SHOMAGENT" type "$web_id" "NoSuchField" nope
+
+# click/type rejected on a document member
+out="$("$SHOMAGENT" read web-reject.md 2>&1)"
+need "$out" "shomagent#" "read for web reject"
+doc_id="$(printf '%s' "$out" | sed -n 's/.*shomagent#\([0-9][0-9]*\) read.*/\1/p' | head -n1)"
+expect_fail "click rejected on read member" \
+  "$SHOMAGENT" click "$doc_id" "Learn more"
+expect_fail "type rejected on read member" \
+  "$SHOMAGENT" type "$doc_id" Search hi
+"$SHOMAGENT" stop "$doc_id" >/dev/null 2>&1 || true
+
+"$SHOMAGENT" stop "$web_id" >/dev/null 2>&1 || true
+roster="$("$SHOMAGENT" 2>&1)"
+need_not "$roster" "example.com" "web member gone after stop"
+
+# foreground --browser: question, click, quit
+browser_out="$(printf '%s\n' 'what is the title' 'click Learn more' 'quit' | "$SHOMAGENT" web https://example.com --browser 2>&1 || true)"
+need "$browser_out" "Example Domain|page|web" "browser session shows page"
+need "$browser_out" "clicked|Learn more|quit" "browser click and quit"
+roster="$("$SHOMAGENT" 2>&1)"
+need_not "$roster" "example.com" "browser quit detached member"
 
 echo
 echo "shomagent full suite: ${PASS} passed, ${FAIL} failed"
