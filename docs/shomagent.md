@@ -25,6 +25,7 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 | `web <url>` | Attach a live headless-browser page (ask/talk/click/type) |
 | `web <url> --browser` | Same, but stay in the foreground until `quit` |
 | `navigate <id> <url>` | Load a new URL in an existing web member |
+| `refresh <id>` | Re-read the live page without navigating |
 | `:web [url]` (shell) | Split TUI: page left, chat right, url + chat inputs |
 | `click <id> "<text>"` | Click a link or button by visible text |
 | `type <id> <label> <text>` | Type into a labeled field (does not submit) |
@@ -173,15 +174,31 @@ shomagent navigate 1 https://news.ycombinator.com
 ```
 
 Inside `engram-shell`, `:web` opens a split TUI (page on the left, conversation
-on the right, `url>` and `chat>` on the bottom). Tab switches inputs. Up/Down
-and PgUp/PgDn scroll the pane for the focused input. `:menu` → **Web** lists
-sites saved in `/engram/user/.web_history.json` and can clear that history.
+on the right, `url>` and `chat>` on the bottom). The chat side shows the same
+context meter as `shomagent talk` (`ctx used/buffer tok · est %`). A spinner
+with elapsed time stays on screen while a page loads or a reply is in flight.
+Tab switches inputs. Up/Down and PgUp/PgDn scroll the pane for the focused
+input. The left pane paints at load time, then keeps re-reading the live DOM
+until the visible text settles, so script that runs after `readyState` shows
+up on its own. **Ctrl-R** re-reads immediately (scroll stays). Enter on the
+url reloads from the network.
+
+Links are listed at the bottom of the page pane as a numbered **Links and
+buttons** section (body text alone does not mark hyperlinks). In `chat>`:
+
+- `click 3` / `click #3` / `click <visible text>` — follow a link or press a button
+- `type <label> -- <text>` — fill a field (does not submit)
+- `clear` or **Ctrl-L** — drop the chat transcript and talk history for this page
+
+Loading a new URL or clicking a link clears chat context automatically so the
+next question only sees the current page (not prior sites). `:menu` → **Web**
+lists sites saved in `/engram/user/.web_history.json` and can clear that history.
 
 Foreground session (page text on screen until quit):
 
 ```bash
 shomagent web https://example.com --browser
-# ask a question, or: click <text> | type <label> -- <text> | quit
+# ask a question, or: click <text|#N> | type <label> -- <text> | quit
 ```
 
 CI and smoke tests set `SHOMAGENT_STUB_WEB=1` so no Chromium binary is required.

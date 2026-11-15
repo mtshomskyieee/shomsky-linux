@@ -60,24 +60,24 @@ impl PageSnapshot {
         out.push('\n');
         out.push_str(self.body.trim());
         out.push_str("\n\n");
-        out.push_str("Links and buttons:\n");
+        out.push_str("Links and buttons (chat> click N  or  click <text>):\n");
         if self.links.is_empty() {
             out.push_str("(none)\n");
         } else {
-            for l in &self.links {
-                out.push_str(&format!("- {l}\n"));
+            for (i, l) in self.links.iter().enumerate() {
+                out.push_str(&format!("{}. {l}\n", i + 1));
             }
         }
         out.push('\n');
-        out.push_str("Fields:\n");
+        out.push_str("Fields (chat> type <label> -- <text>):\n");
         if self.fields.is_empty() {
             out.push_str("(none)\n");
         } else {
-            for (label, value) in &self.fields {
+            for (i, (label, value)) in self.fields.iter().enumerate() {
                 if value.is_empty() {
-                    out.push_str(&format!("- {label} (empty)\n"));
+                    out.push_str(&format!("{}. {label} (empty)\n", i + 1));
                 } else {
-                    out.push_str(&format!("- {label} ({value})\n"));
+                    out.push_str(&format!("{}. {label} ({value})\n", i + 1));
                 }
             }
         }
@@ -246,10 +246,21 @@ impl StubPage {
 }
 
 /// Exact match wins; otherwise a single case-insensitive substring match.
+/// `N` or `#N` selects the 1-based index from the numbered Links/Fields list.
 pub fn match_label(needle: &str, haystack: &[String]) -> Result<usize> {
     let needle = needle.trim();
     if needle.is_empty() {
         bail!("empty match text");
+    }
+    let index_str = needle.strip_prefix('#').unwrap_or(needle);
+    if let Ok(n) = index_str.parse::<usize>() {
+        if n >= 1 && n <= haystack.len() {
+            return Ok(n - 1);
+        }
+        bail!(
+            "no link/field #{n}; available 1..{}",
+            haystack.len().max(0)
+        );
     }
     let exact: Vec<usize> = haystack
         .iter()
@@ -285,7 +296,8 @@ pub fn match_label(needle: &str, haystack: &[String]) -> Result<usize> {
             } else {
                 haystack
                     .iter()
-                    .map(|s| format!("{s:?}"))
+                    .enumerate()
+                    .map(|(i, s)| format!("{}. {s:?}", i + 1))
                     .collect::<Vec<_>>()
                     .join(", ")
             }
@@ -295,7 +307,7 @@ pub fn match_label(needle: &str, haystack: &[String]) -> Result<usize> {
             "ambiguous match for {needle:?}; matches: {}",
             partial
                 .iter()
-                .map(|&i| format!("{:?}", haystack[i]))
+                .map(|&i| format!("{}. {:?}", i + 1, haystack[i]))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -609,7 +621,9 @@ impl ChromiumSession {
 
     async fn click(&mut self, text: &str) -> Result<()> {
         let snap = self.snapshot().await?;
-        let _idx = match_label(text, &snap.links)?;
+        let idx = match_label(text, &snap.links)?;
+        // Always click by resolved label so `click 3` / `click #3` work.
+        let label = &snap.links[idx];
         let script = format!(
             r#"
 (() => {{
@@ -634,7 +648,7 @@ impl ChromiumSession {
   return {{ ok: true }};
 }})()
 "#,
-            needle = serde_json::to_string(text).unwrap()
+            needle = serde_json::to_string(label).unwrap()
         );
         let result = self
             .cdp(
@@ -984,7 +998,18 @@ mod tests {
         let labels = vec!["Learn more".into(), "Search".into()];
         assert_eq!(match_label("Learn more", &labels).unwrap(), 0);
         assert_eq!(match_label("learn", &labels).unwrap(), 0);
+        assert_eq!(match_label("1", &labels).unwrap(), 0);
+        assert_eq!(match_label("#2", &labels).unwrap(), 1);
+        assert!(match_label("3", &labels).is_err());
         assert!(match_label("missing", &labels).is_err());
+    }
+
+    #[test]
+    fn snapshot_format_numbers_links() {
+        let p = StubPage::example("https://example.com");
+        let text = p.snapshot().format();
+        assert!(text.contains("1. Learn more"), "{text}");
+        assert!(text.contains("click N"), "{text}");
     }
 
     #[test]

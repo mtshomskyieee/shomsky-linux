@@ -766,12 +766,33 @@ impl Daemon {
             Request::Talk { .. } => Response::Err {
                 message: "internal: Talk must be dispatched unlocked".into(),
             },
+            Request::ClearTalk { id } => {
+                if !self.members.contains_key(&id) {
+                    return Response::Err {
+                        message: format!("unknown member #{id}"),
+                    };
+                }
+                if let Some(m) = self.members.get_mut(&id) {
+                    m.talk_history.clear();
+                    m.talk_history_dropped = 0;
+                }
+                let context_usage = self.talk_begin(id, "").ok().map(|begun| begun.usage);
+                Response::Ok {
+                    message: Some(format!("#{id} talk history cleared")),
+                    member: self.members.get(&id).map(status_of),
+                    roster: vec![],
+                    context: None,
+                    reply: None,
+                    context_usage,
+                }
+            }
             // Web attach / click / type need await (see handle_client).
             Request::Web { .. }
             | Request::Click { .. }
             | Request::Type { .. }
-            | Request::Navigate { .. } => Response::Err {
-                message: "internal: Web/Click/Type/Navigate must be dispatched unlocked".into(),
+            | Request::Navigate { .. }
+            | Request::Refresh { .. } => Response::Err {
+                message: "internal: Web/Click/Type/Navigate/Refresh must be dispatched unlocked".into(),
             },
             Request::Dream { path, name } => match self.attach_dream(&path, name.as_deref()) {
                 Ok(member) => Response::Ok {
@@ -1138,6 +1159,9 @@ impl Daemon {
         };
         if let Some(m) = self.members.get_mut(&id) {
             store_web_snapshot(m, &snap);
+            // New page content — drop prior Q&A so talk does not stack old sites.
+            m.talk_history.clear();
+            m.talk_history_dropped = 0;
         }
         Ok((format!("clicked {text}"), snap.format()))
     }
@@ -1186,8 +1210,37 @@ impl Daemon {
         };
         if let Some(m) = self.members.get_mut(&id) {
             store_web_snapshot(m, &snap);
+            // Fresh URL — drop prior Q&A so talk does not stack old page chats.
+            m.talk_history.clear();
+            m.talk_history_dropped = 0;
         }
         Ok((format!("navigated {}", snap.url), snap.format()))
+    }
+
+    /// Re-read the current DOM without navigating. Picks up script that ran
+    /// after the last snapshot.
+    async fn reread_web(&mut self, id: u32) -> Result<(String, String)> {
+        let m = self
+            .members
+            .get(&id)
+            .ok_or_else(|| anyhow!("unknown member #{id}"))?;
+        if !m.role.is_web() {
+            bail!("#{id} is not a web member — attach with: shomagent web <url>");
+        }
+        if m.state == MemberState::Paused {
+            bail!("#{id} is paused — resume before refreshing");
+        }
+        let snap = {
+            let session = self
+                .web_sessions
+                .get_mut(&id)
+                .ok_or_else(|| anyhow!("#{id} has no browser session"))?;
+            session.refresh().await?
+        };
+        if let Some(m) = self.members.get_mut(&id) {
+            store_web_snapshot(m, &snap);
+        }
+        Ok((format!("refreshed {}", snap.url), snap.format()))
     }
 
     fn attach_dream(&mut self, path: &str, name: Option<&str>) -> Result<MemberStatus> {
@@ -3218,6 +3271,22 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                 Request::Navigate { id, url } => {
                     let mut d = daemon.lock().await;
                     match d.navigate_web(id, &url).await {
+                        Ok((message, snapshot)) => Response::Ok {
+                            message: Some(message),
+                            member: d.members.get(&id).map(status_of),
+                            roster: vec![],
+                            context: None,
+                            reply: Some(snapshot),
+                            context_usage: None,
+                        },
+                        Err(e) => Response::Err {
+                            message: e.to_string(),
+                        },
+                    }
+                }
+                Request::Refresh { id } => {
+                    let mut d = daemon.lock().await;
+                    match d.reread_web(id).await {
                         Ok((message, snapshot)) => Response::Ok {
                             message: Some(message),
                             member: d.members.get(&id).map(status_of),

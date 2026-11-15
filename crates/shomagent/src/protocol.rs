@@ -116,6 +116,14 @@ pub enum Request {
         id: u32,
         url: String,
     },
+    /// Re-read the live page (DOM as it is now, including script that already ran).
+    Refresh {
+        id: u32,
+    },
+    /// Drop stored talk Q&A for a member (page snapshot stays).
+    ClearTalk {
+        id: u32,
+    },
     Ping,
 }
 

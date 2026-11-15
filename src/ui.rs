@@ -35,12 +35,12 @@ pub const SPLASH_ART: &str = r#"
   /\    \    |  _  |  | |_| |  | |  | |    /\    \    | . \     | |
  /  \    \   |_| |_|   \___/   |_|  |_|   /  \    \   |_|\_\    |_|
 /    \    \shomagent web <url> -browser  /    \    \   -==  L I N U X  ==-
-|    |    || -MODES-                     |    |    ||  -=  LLM + Shell  =-
+|    |    || -MODES- (agent, root, ... ) |    |    ||  -=  LLM + Shell  =-
 |    |    || :mode agent = LLM assist    |    |    ||  -=  2 cool esses =-
 \         /  :mode hallucination =       \         /   :menu      :help
  \       /          LLM dreams it's a CLI \       /    :splash    :sys
-   \   /     :mode root = shell only        \   /   :quickyn :chat :web
-     v                    no LLM              v        
+   \   /     :mode root = shell only        \   /      :quickyn   :chat
+     v                    no LLM              v        :web   
 "#;
 
 /// Whether we should paint splash / colors on this TTY.

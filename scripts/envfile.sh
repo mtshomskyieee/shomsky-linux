@@ -42,3 +42,13 @@ set_env_key() {
     printf '%s=%s\n' "$key" "$quoted" >> "$file"
   fi
 }
+
+# Drop KEY= from a dotenv file (no-op if missing).
+remove_env_key() {
+  local key="$1" file="$2" tmp
+  [[ -f "$file" ]] || return 0
+  grep -q "^${key}=" "$file" || return 0
+  tmp="$(mktemp)"
+  awk -v k="$key" 'index($0, k "=") != 1 { print }' "$file" > "$tmp"
+  mv "$tmp" "$file"
+}

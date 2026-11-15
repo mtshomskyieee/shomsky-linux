@@ -211,6 +211,9 @@ need "$roster" "◎" "roster web glyph"
 out="$("$SHOMAGENT" ask "$web_id" "what domain" 2>&1)"
 need "$out" "Example Domain|illustrative examples|domain" "ask web page"
 
+out="$("$SHOMAGENT" refresh "$web_id" 2>&1)"
+need "$out" "refreshed|example.com" "refresh web snapshot"
+
 out="$("$SHOMAGENT" navigate "$web_id" "https://news.example/latest" 2>&1)"
 need "$out" "navigated|news.example" "navigate web member"
 out="$("$SHOMAGENT" ask "$web_id" "news.example latest" 2>&1)"

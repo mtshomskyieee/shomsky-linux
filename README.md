@@ -163,7 +163,7 @@ shomagent web https://news.ycombinator.com
 shomagent ask 1 "what are the top story titles?"
 # #1 > …titles from the page…
 
-# 3) Open a story by clicking its visible title text
+# 3) Open a story by clicking its visible title (or use the numbered list: click 3)
 shomagent click 1 "Show HN: My cool project"
 # clicked Show HN: My cool project
 
@@ -176,8 +176,11 @@ shomagent stop 1   # closes the browser
 # Or stay in the foreground (page text on screen until quit):
 # shomagent web https://news.ycombinator.com --browser
 # web> what are the top stories?
-# web> click Show HN: My cool project
+# web> click 3
 # web> quit
+#
+# Inside engram-shell, :web is the same idea: scroll to "Links and buttons",
+# then chat> click N. New urls / clicks clear chat context automatically.
 ```
 
 ### Example: watch a process

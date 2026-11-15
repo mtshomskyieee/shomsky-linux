@@ -133,6 +133,8 @@ enum Commands {
         id: u32,
         url: String,
     },
+    /// Re-read the live page without navigating
+    Refresh { id: u32 },
     /// Pause a member
     Pause { id: u32 },
     /// Resume a paused member
@@ -290,6 +292,15 @@ async fn main() -> Result<()> {
                 Response::Err { message } => bail!("{message}"),
             }
         }
+        Some(Commands::Refresh { id }) => match rpc(&Request::Refresh { id }).await? {
+            Response::Ok { message, .. } => {
+                if let Some(m) = message {
+                    println!("{m}");
+                }
+                Ok(())
+            }
+            Response::Err { message } => bail!("{message}"),
+        },
         Some(Commands::Navigate { id, url }) => match rpc(&Request::Navigate { id, url }).await? {
             Response::Ok { message, .. } => {
                 if let Some(m) = message {

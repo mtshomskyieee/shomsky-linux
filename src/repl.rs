@@ -1508,7 +1508,11 @@ chat:
   :chat              Immersive framed chat; Esc exits; saves saved_chat_<stamp>.md
 
 web:
-  :web [url]         Text browser TUI; Tab switches url/chat; Up/Down scrolls the focused pane
+  :web [url]         Text browser TUI; chat side shows ctx used/buffer; spinner while loading or thinking
+                     Paints at load, then again until script output settles. Ctrl-R re-reads now
+                     Scroll to Links and buttons (numbered). chat> click N  or  click <text>
+                     chat> type <label> -- <text>   fills a field. Ctrl-L / clear  drops chat context
+                     Loading a new url or clicking a link clears chat context automatically
   menu → Web         Open browser, revisit sites, clear history
 
 
@@ -1571,17 +1575,20 @@ Tool styles:
 Logs:
   Server logs go to /engram/mistralrs.log by default.
   :logs [N]   show last N lines
-  Set MISTRALRS_LOG_TO_TTY=1 to stream logs to the terminal instead.
 
-Spinner (TTY only; silent under pipes / --once / --script):
+Spinner / cancel (TTY only; silent under pipes / --once / --script):
   Esc                  Cancel thinking or the tool/shell command in progress.
                        The shell prints 'esc — cancelled …' and returns to the prompt.
+
+Launch parameters (env vars passed into the shell at start — not typed at the prompt):
+  Host helper:  ./dynamic_config.sh   (writes .env; restart the shell to apply)
+  Example:  ENGRAM_MATRIX_SECS=10 ./agent_sh.sh
+  Restart the shell to apply changes. :splash replays the intro with these settings.
   ENGRAM_SPINNER=auto|always|off   Status line while waiting on LLM/tools
   ENGRAM_LLM_READY_TRIES=N         Startup model wait budget in seconds (default 600)
   NO_COLOR=1                       Disable splash / prompt colors
-
-Intro animation (TTY only; matrix rain before the splash):
-  ENGRAM_MATRIX=auto|always|off    Play the digital-rain intro
+  MISTRALRS_LOG_TO_TTY=1           Stream mistralrs logs to the terminal
+  ENGRAM_MATRIX=auto|always|off    Play the digital-rain intro (TTY)
   ENGRAM_MATRIX_SECS=N             Intro duration, 0-10 (default 2; 0 = skip)
   ENGRAM_MATRIX_GLYPHS=ascii       Use ASCII instead of halfwidth katakana
   Any keypress skips the intro.
