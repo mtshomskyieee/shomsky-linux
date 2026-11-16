@@ -165,13 +165,14 @@ impl TuiState {
 
     pub fn chat_lines(&self, width: usize) -> Vec<String> {
         if self.turns.is_empty() {
-            return vec![
-                "Type click <n> to follow a numbered link".into(),
-                "from Links and buttons on the left,".into(),
-                "or ask a question about this page.".into(),
-                String::new(),
-                "Also: type <label> -- <text> · clear / ^L".into(),
-            ];
+            return wrap_lines(
+                "Type click <n> to follow a numbered link\n\
+                 from Links and buttons on the left,\n\
+                 or ask a question about this page.\n\
+                 \n\
+                 Also: type <label> -- <text> · clear / ^L",
+                width,
+            );
         }
         let mut lines = Vec::new();
         for t in &self.turns {
@@ -351,18 +352,22 @@ impl TuiState {
     }
 
     pub fn submit_url(&mut self) -> Result<String, &'static str> {
-        let url = self.url.trim().to_string();
-        if url.is_empty() {
-            self.status = Some("url is empty".into());
-            return Err("empty");
+        match normalize_web_url(&self.url) {
+            Ok(url) => {
+                self.url = url.clone();
+                self.url_cursor = self.url.chars().count();
+                self.set_busy(Busy::Page);
+                Ok(url)
+            }
+            Err("empty") => {
+                self.status = Some("url is empty".into());
+                Err("empty")
+            }
+            Err(_) => {
+                self.status = Some("only http and https".into());
+                Err("scheme")
+            }
         }
-        let lower = url.to_ascii_lowercase();
-        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-            self.status = Some("only http and https".into());
-            return Err("scheme");
-        }
-        self.set_busy(Busy::Page);
-        Ok(url)
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -509,23 +514,115 @@ fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
+/// Word-wrap `text` into lines of exactly `width` columns.
+///
+/// The panes scroll up and down only, so anything that does not fit continues
+/// on the next line. Tabs and other whitespace are word breaks (table cells
+/// from the page snapshot must not become terminal tab stops). A single word
+/// longer than `width` is clipped onto successive lines. Every returned line
+/// is padded with spaces, so drawing it cannot move the cursor past the pane.
 fn wrap_lines(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut out = Vec::new();
     for line in text.lines() {
-        if line.is_empty() {
-            out.push(String::new());
+        if line.split_whitespace().next().is_none() {
+            out.push(" ".repeat(width));
             continue;
         }
-        let chars: Vec<char> = line.chars().collect();
-        for chunk in chars.chunks(width) {
-            out.push(chunk.iter().collect());
+        let mut current = String::new();
+        for word in line.split_whitespace() {
+            push_word(&mut out, &mut current, word, width);
+        }
+        if !current.is_empty() {
+            out.push(pad_visible(&current, width));
         }
     }
     if out.is_empty() {
-        out.push(String::new());
+        out.push(" ".repeat(width));
     }
     out
+}
+
+/// Append `word` to `current`, wrapping onto a new line when it does not fit.
+fn push_word(out: &mut Vec<String>, current: &mut String, word: &str, width: usize) {
+    let mut rest: Vec<char> = word.chars().collect();
+    while !rest.is_empty() {
+        let cur_len = current.chars().count();
+        if current.is_empty() {
+            if rest.len() <= width {
+                current.extend(rest.iter().copied());
+                return;
+            }
+            let head: String = rest.drain(..width).collect();
+            out.push(head);
+            continue;
+        }
+        if cur_len + 1 + rest.len() <= width {
+            current.push(' ');
+            current.extend(rest.iter().copied());
+            return;
+        }
+        out.push(pad_visible(current, width));
+        current.clear();
+    }
+}
+
+/// A `:web` URL must be http(s). A bare host (no scheme typed) is sent as `https://…`.
+fn normalize_web_url(raw: &str) -> Result<String, &'static str> {
+    let url = raw.trim();
+    if url.is_empty() {
+        return Err("empty");
+    }
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        return Ok(url.to_string());
+    }
+    if has_non_http_scheme(url) {
+        return Err("scheme");
+    }
+    if let Some(rest) = url.strip_prefix("//") {
+        return Ok(format!("https://{rest}"));
+    }
+    Ok(format!("https://{url}"))
+}
+
+/// `ftp://…` and `javascript:…` are explicit schemes. `host:8080` is a port, not a scheme.
+fn has_non_http_scheme(url: &str) -> bool {
+    let Some(idx) = url.find(':') else {
+        return false;
+    };
+    let scheme = &url[..idx];
+    let Some(first) = scheme.chars().next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
+        return false;
+    }
+    let rest = &url[idx + 1..];
+    if rest.starts_with("//") {
+        return true;
+    }
+    let port = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let is_port = !port.is_empty() && port.chars().all(|c| c.is_ascii_digit());
+    !is_port
+}
+
+/// Field text, URL to open, and an error to show when the typed scheme is not http(s).
+fn prepare_initial_url(
+    initial: Option<String>,
+) -> (Option<String>, Option<String>, Option<&'static str>) {
+    let Some(raw) = initial else {
+        return (None, None, None);
+    };
+    match normalize_web_url(&raw) {
+        Ok(url) => (Some(url.clone()), Some(url), None),
+        Err("empty") => (None, None, Some("url is empty")),
+        Err(_) => (Some(raw), None, Some("only http and https")),
+    }
 }
 
 pub async fn run(initial_url: Option<String>) {
@@ -544,12 +641,16 @@ pub async fn run(initial_url: Option<String>) {
         let _ = out.flush();
     }
 
-    let mut state = TuiState::new(web_history::history_path(), initial_url.clone());
+    let (display_url, open_url, url_status) = prepare_initial_url(initial_url);
+    let mut state = TuiState::new(web_history::history_path(), display_url);
+    if let Some(msg) = url_status {
+        state.status = Some(msg.into());
+    }
     let mut pending: Option<tokio::task::JoinHandle<JobResult>> = None;
     let mut settle: Option<tokio::task::JoinHandle<JobResult>> = None;
     let mut settle_stable: u8 = 0;
     let mut settle_ticks: u8 = 0;
-    if let Some(url) = initial_url {
+    if let Some(url) = open_url {
         state.set_busy(Busy::Page);
         pending = Some(spawn_open(url));
     }
@@ -935,26 +1036,51 @@ fn spawn_clear_talk(id: u32) -> tokio::task::JoinHandle<JobResult> {
     })
 }
 
-fn pane_sizes() -> (usize, usize, usize) {
-    let (rows, cols) = term::term_size();
-    let cols = cols.clamp(40, term::MAX_COLS);
-    let rows = rows.clamp(10, term::MAX_ROWS);
-    let body = rows.saturating_sub(4).max(3);
-    let left = (cols / 2).max(16);
-    let page_w = left.saturating_sub(2).max(8);
-    let chat_w = cols.saturating_sub(left).saturating_sub(2).max(8);
-    (body, page_w, chat_w)
+struct PaneLayout {
+    cols: usize,
+    body: usize,
+    /// Columns for the left header and the `url>` field (no side border).
+    left: usize,
+    /// Columns for the right header and the `chat>` field.
+    right: usize,
+    /// Page cell between the two `│` borders. Exactly `left - 2`.
+    page_w: usize,
+    /// Chat cell after the split. Exactly `right - 2`.
+    chat_w: usize,
 }
 
-fn draw(state: &TuiState) {
+fn pane_layout() -> PaneLayout {
     let (rows, cols) = term::term_size();
     let cols = cols.clamp(40, term::MAX_COLS);
     let rows = rows.clamp(10, term::MAX_ROWS);
     let body = rows.saturating_sub(4).max(3);
     let left = (cols / 2).max(16);
     let right = cols.saturating_sub(left);
-    let page_w = left.saturating_sub(2).max(8);
-    let chat_w = right.saturating_sub(2).max(8);
+    let page_w = left.saturating_sub(2).max(1);
+    let chat_w = right.saturating_sub(2).max(1);
+    PaneLayout {
+        cols,
+        body,
+        left,
+        right,
+        page_w,
+        chat_w,
+    }
+}
+
+fn pane_sizes() -> (usize, usize, usize) {
+    let lay = pane_layout();
+    (lay.body, lay.page_w, lay.chat_w)
+}
+
+fn draw(state: &TuiState) {
+    let lay = pane_layout();
+    let cols = lay.cols;
+    let body = lay.body;
+    let left = lay.left;
+    let right = lay.right;
+    let page_w = lay.page_w;
+    let chat_w = lay.chat_w;
 
     let color = ui::color_enabled();
     let reset = "\x1b[0m";
@@ -1010,8 +1136,8 @@ fn draw(state: &TuiState) {
         let _ = write!(
             out,
             "\x1b[{row};1H{cyan}│{reset}{}{cyan}│{reset}{}",
-            pad_visible(&left_cell, left.saturating_sub(2)),
-            pad_visible(&right_cell, right.saturating_sub(1))
+            pad_visible(&left_cell, page_w),
+            pad_visible(&right_cell, chat_w)
         );
     }
 
@@ -1052,6 +1178,8 @@ fn rule_with_label(label: &str, width: usize) -> String {
     format!("{shown}{}", "─".repeat(n))
 }
 
+/// Clip or pad `s` to exactly `width` columns. A tab is a space so it cannot
+/// jump the cursor past the pane.
 fn pad_visible(s: &str, width: usize) -> String {
     let mut out = String::new();
     let mut n = 0;
@@ -1059,7 +1187,7 @@ fn pad_visible(s: &str, width: usize) -> String {
         if n >= width {
             break;
         }
-        out.push(c);
+        out.push(if c == '\t' { ' ' } else { c });
         n += 1;
     }
     while n < width {
@@ -1165,6 +1293,53 @@ mod tests {
         assert_eq!(s.page_scroll, max);
         s.scroll_focused(-10_000, 5, 20, 20);
         assert_eq!(s.page_scroll, 0);
+    }
+
+    #[test]
+    fn bare_host_is_sent_as_https() {
+        let mut s = state();
+        s.url = "example.com/docs".into();
+        assert_eq!(s.submit_url().unwrap(), "https://example.com/docs");
+        assert_eq!(s.url, "https://example.com/docs");
+        assert!(s.busy.is_some());
+
+        let mut s = state();
+        s.url = "localhost:8080".into();
+        assert_eq!(s.submit_url().unwrap(), "https://localhost:8080");
+
+        let mut s = state();
+        s.url = "//cdn.example/a".into();
+        assert_eq!(s.submit_url().unwrap(), "https://cdn.example/a");
+
+        let mut s = state();
+        s.url = "HTTP://example.com".into();
+        assert_eq!(s.submit_url().unwrap(), "HTTP://example.com");
+    }
+
+    #[test]
+    fn explicit_non_http_scheme_is_rejected() {
+        let mut s = state();
+        s.url = "ftp://files.example".into();
+        assert!(s.submit_url().is_err());
+        assert_eq!(s.status.as_deref(), Some("only http and https"));
+        assert!(s.busy.is_none());
+
+        let mut s = state();
+        s.url = "javascript:alert(1)".into();
+        assert!(s.submit_url().is_err());
+    }
+
+    #[test]
+    fn initial_url_without_scheme_opens_as_https() {
+        let (display, open, status) = prepare_initial_url(Some("news.ycombinator.com".into()));
+        assert_eq!(display.as_deref(), Some("https://news.ycombinator.com"));
+        assert_eq!(open.as_deref(), Some("https://news.ycombinator.com"));
+        assert!(status.is_none());
+
+        let (display, open, status) = prepare_initial_url(Some("ftp://files.example".into()));
+        assert_eq!(display.as_deref(), Some("ftp://files.example"));
+        assert!(open.is_none());
+        assert_eq!(status, Some("only http and https"));
     }
 
     #[test]
@@ -1357,5 +1532,72 @@ mod tests {
         let line = s.wait_line().unwrap();
         assert!(line.contains("scripts"), "{line}");
         assert!(line.contains("3s"), "{line}");
+    }
+
+    fn assert_width(lines: &[String], width: usize) {
+        for line in lines {
+            assert_eq!(line.chars().count(), width, "{line:?}");
+            assert!(!line.contains('\t'), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn wrap_breaks_on_words_and_respects_width() {
+        let narrow = wrap_lines("Show HN: a long title here", 10);
+        assert_width(&narrow, 10);
+        assert_eq!(
+            narrow
+                .iter()
+                .map(|l| l.trim_end())
+                .collect::<Vec<_>>(),
+            vec!["Show HN: a", "long title", "here"]
+        );
+
+        let wide = wrap_lines("Show HN: a long title here", 20);
+        assert_width(&wide, 20);
+        assert_eq!(wide[0].trim_end(), "Show HN: a long");
+        assert!(wide.len() < narrow.len());
+    }
+
+    #[test]
+    fn wrap_treats_tabs_as_spaces() {
+        let lines = wrap_lines("1.\tShow HN: title", 12);
+        assert_width(&lines, 12);
+        assert_eq!(
+            lines.iter().map(|l| l.trim_end()).collect::<Vec<_>>(),
+            vec!["1. Show HN:", "title"]
+        );
+    }
+
+    #[test]
+    fn wrap_clips_one_overlong_word_onto_the_next_line() {
+        let lines = wrap_lines("Supercalifragilistic", 6);
+        assert_width(&lines, 6);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| l.trim_end())
+                .collect::<Vec<_>>(),
+            vec!["Superc", "alifra", "gilist", "ic"]
+        );
+    }
+
+    #[test]
+    fn wrap_pads_short_lines_and_keeps_blank_lines() {
+        let short = wrap_lines("hi", 5);
+        assert_eq!(short, vec!["hi   ".to_string()]);
+
+        let blank = wrap_lines("hello\n\nworld", 8);
+        assert_width(&blank, 8);
+        assert_eq!(blank.len(), 3);
+        assert_eq!(blank[0].trim_end(), "hello");
+        assert_eq!(blank[1].trim(), "");
+        assert_eq!(blank[2].trim_end(), "world");
+    }
+
+    #[test]
+    fn pad_visible_replaces_tabs_and_clips() {
+        assert_eq!(pad_visible("ab\tcd", 8), "ab cd   ");
+        assert_eq!(pad_visible("abcdef", 4), "abcd");
     }
 }
