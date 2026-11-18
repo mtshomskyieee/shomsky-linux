@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/engram-cmdfreq", "crates/shomagent", "crates/shomsky", "crates/quickyn"]
+members = [".", "crates/engram-cmdfreq", "crates/shomagent", "crates/shomsky", "crates/quickyn", "crates/shomloop"]
 resolver = "2"
 
 [package]
@@ -20,6 +20,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 engram-cmdfreq = { path = "crates/engram-cmdfreq" }
 quickyn = { path = "crates/quickyn" }
+shomloop = { path = "crates/shomloop" }
 shomagent = { path = "crates/shomagent" }
 shomsky = { path = "crates/shomsky" }
 futures-util = "0.3"

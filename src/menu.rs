@@ -63,18 +63,20 @@ pub enum Category {
     Packages,
     Shomagent,
     Web,
+    Shomloop,
     Help,
     System,
 }
 
 impl Category {
-    pub const ALL: [Category; 8] = [
+    pub const ALL: [Category; 9] = [
         Category::Modes,
         Category::Learn,
         Category::SavCmd,
         Category::Packages,
         Category::Shomagent,
         Category::Web,
+        Category::Shomloop,
         Category::Help,
         Category::System,
     ];
@@ -87,6 +89,7 @@ impl Category {
             Category::Packages => "Packages",
             Category::Shomagent => "shomagent",
             Category::Web => "Web",
+            Category::Shomloop => "shomloop",
             Category::Help => "Help",
             Category::System => "System",
         }
@@ -145,6 +148,8 @@ pub struct MenuState {
     package_pick: Option<(String, PackageStatus)>,
     /// Nested shomagent filename / member picker.
     shomagent_sub: Option<ShomagentSub>,
+    /// Planned run waiting for edit / enable / disable / delete / logs.
+    loop_pick: Option<LoopPick>,
     web_clear_confirm: bool,
     web_history_path: PathBuf,
     web_history: Vec<crate::web_history::Visit>,
@@ -188,7 +193,34 @@ enum ItemKind {
     ClearWebHistory,
     /// Open `:web` already pointed at a saved URL.
     OpenWeb(String),
+    /// A planned shomloop run. Enter asks how to manage it.
+    Loop(LoopRef),
     InfoOnly,
+}
+
+/// One planned run shown in the shomloop section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoopRef {
+    id: u32,
+    enabled: bool,
+    frequency: String,
+}
+
+/// Same fields as [`LoopRef`], held while the manage overlay is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoopPick {
+    id: u32,
+    enabled: bool,
+    frequency: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopVerb {
+    Edit,
+    Disable,
+    Enable,
+    Delete,
+    Logs,
 }
 
 impl MenuState {
@@ -201,6 +233,7 @@ impl MenuState {
             saved_pick: None,
             package_pick: None,
             shomagent_sub: None,
+            loop_pick: None,
             web_clear_confirm: false,
             web_history_path: ctx.web_history_path.clone(),
             web_history: ctx.web_history.clone(),
@@ -221,6 +254,7 @@ impl MenuState {
             || self.web_clear_confirm
             || self.saved_pick.is_some()
             || self.package_pick.is_some()
+            || self.loop_pick.is_some()
             || matches!(self.shomagent_sub, Some(ShomagentSub::PromptFile { .. }))
     }
 
@@ -312,6 +346,10 @@ impl MenuState {
             self.package_pick = None;
             return;
         }
+        if self.loop_pick.is_some() {
+            self.loop_pick = None;
+            return;
+        }
         if self.shomagent_sub.is_some() {
             self.clear_shomagent_sub();
             return;
@@ -345,6 +383,10 @@ impl MenuState {
         }
         if self.package_pick.is_some() {
             self.package_pick = None;
+            return;
+        }
+        if self.loop_pick.is_some() {
+            self.loop_pick = None;
             return;
         }
         if self.shomagent_sub.is_some() {
@@ -381,6 +423,10 @@ impl MenuState {
             self.package_pick = None;
             return None;
         }
+        if self.loop_pick.is_some() {
+            self.loop_pick = None;
+            return None;
+        }
         if self.shomagent_sub.is_some() {
             self.clear_shomagent_sub();
             return None;
@@ -406,6 +452,9 @@ impl MenuState {
         }
         if self.package_pick.is_some() {
             return self.confirm_package();
+        }
+        if self.loop_pick.is_some() {
+            return None;
         }
         if matches!(self.shomagent_sub, Some(ShomagentSub::PromptFile { .. })) {
             return self.confirm_filename();
@@ -458,6 +507,14 @@ impl MenuState {
                 None
             }
             ItemKind::OpenWeb(url) => Some(MenuAction::RunMeta(format!(":web {url}"))),
+            ItemKind::Loop(loop_ref) => {
+                self.loop_pick = Some(LoopPick {
+                    id: loop_ref.id,
+                    enabled: loop_ref.enabled,
+                    frequency: loop_ref.frequency.clone(),
+                });
+                None
+            }
             ItemKind::InfoOnly => None,
         }
     }
@@ -534,6 +591,24 @@ impl MenuState {
         Some(MenuAction::InsertLine(cmd))
     }
 
+    /// Overlay action for the picked planned run. Edit keeps a trailing space
+    /// so the REPL prefills the line; the other verbs run immediately.
+    fn confirm_loop(&mut self, verb: LoopVerb) -> Option<MenuAction> {
+        let Some(pick) = self.loop_pick.take() else {
+            return None;
+        };
+        let line = match verb {
+            LoopVerb::Edit => {
+                format!("shomloop edit {} {} ", pick.id, quote_freq(&pick.frequency))
+            }
+            LoopVerb::Disable => format!("shomloop disable {}", pick.id),
+            LoopVerb::Enable => format!("shomloop enable {}", pick.id),
+            LoopVerb::Delete => format!("shomloop delete {}", pick.id),
+            LoopVerb::Logs => format!("shomloop logs {}", pick.id),
+        };
+        Some(MenuAction::InsertLine(line))
+    }
+
     fn confirm_web_clear(&mut self) {
         let _ = crate::web_history::clear(&self.web_history_path);
         self.web_history.clear();
@@ -598,6 +673,7 @@ fn items_for(
         Category::Packages => package_items(packages_path),
         Category::Shomagent => shomagent_root_items(),
         Category::Web => web_items(web_history),
+        Category::Shomloop => shomloop_items(),
         Category::Help => vec![
             Item {
                 label: "full help".into(),
@@ -606,7 +682,7 @@ fn items_for(
             },
             Item {
                 label: "this menu".into(),
-                detail: ":menu / :m — modes, learn, packages, agents, system".into(),
+                detail: ":menu / :m — modes, learn, packages, agents, shomloop, system".into(),
                 kind: ItemKind::InfoOnly,
             },
         ],
@@ -686,6 +762,67 @@ fn items_for(
             },
         ],
     }
+}
+
+fn shomloop_items() -> Vec<Item> {
+    let mut v = vec![
+        Item {
+            label: "new loop".into(),
+            detail: "Prefill shomloop — type a frequency and a command".into(),
+            kind: ItemKind::InsertLine("shomloop ".into()),
+        },
+        Item {
+            label: "logs".into(),
+            detail: "Show every log under /tmp/shomloop".into(),
+            kind: ItemKind::InsertLine("shomloop logs".into()),
+        },
+    ];
+    match shomloop::list_runs() {
+        Ok(runs) if runs.is_empty() => {
+            v.push(Item {
+                label: "(no planned runs)".into(),
+                detail: "shomloop \"daily at 5pm\" <command>".into(),
+                kind: ItemKind::InfoOnly,
+            });
+        }
+        Ok(runs) => {
+            for run in runs {
+                let state = if run.enabled { "on " } else { "off" };
+                v.push(Item {
+                    label: format!("{state} #{}  {}", run.id, run.frequency),
+                    detail: format!(
+                        "{}  — Enter: edit / disable / enable / delete / logs",
+                        run.command
+                    ),
+                    kind: ItemKind::Loop(LoopRef {
+                        id: run.id,
+                        enabled: run.enabled,
+                        frequency: run.frequency,
+                    }),
+                });
+            }
+        }
+        Err(e) => {
+            v.push(Item {
+                label: "(could not read planned runs)".into(),
+                detail: e.to_string(),
+                kind: ItemKind::InfoOnly,
+            });
+        }
+    }
+    v
+}
+
+fn quote_freq(freq: &str) -> String {
+    let mut out = String::from("\"");
+    for c in freq.chars() {
+        if c == '\\' || c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 fn web_items(history: &[crate::web_history::Visit]) -> Vec<Item> {
@@ -979,6 +1116,22 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 esc_armed = false;
                 state.toggle_pane();
             }
+            Key::Char(c)
+                if state.loop_pick.is_some()
+                    && matches!(c, 'e' | 'E' | 'd' | 'D' | 'n' | 'N' | 'x' | 'X' | 'l' | 'L') =>
+            {
+                esc_armed = false;
+                let verb = match c.to_ascii_lowercase() {
+                    'e' => LoopVerb::Edit,
+                    'd' => LoopVerb::Disable,
+                    'n' => LoopVerb::Enable,
+                    'x' => LoopVerb::Delete,
+                    _ => LoopVerb::Logs,
+                };
+                if let Some(a) = state.confirm_loop(verb) {
+                    return a;
+                }
+            }
             Key::Enter => {
                 esc_armed = false;
                 if let Some(a) = state.activate() {
@@ -1100,6 +1253,12 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
+            Key::Char('9') if state.shomagent_sub.is_none() => {
+                esc_armed = false;
+                state.category_idx = 8;
+                state.item_idx = 0;
+                state.focus = Focus::Items;
+            }
             _ => {
                 esc_armed = false;
             }
@@ -1110,7 +1269,7 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
 fn draw(state: &MenuState) {
     let (rows, cols) = term::term_size();
     let width = cols.clamp(40, 72).min(cols);
-    let height = 16usize.min(rows.saturating_sub(2)).max(12);
+    let height = 16usize.min(rows.saturating_sub(2)).max(13);
     let left = ((cols.saturating_sub(width)) / 2).max(1);
     let top = ((rows.saturating_sub(height)) / 2).max(1);
 
@@ -1194,6 +1353,12 @@ fn draw(state: &MenuState) {
         "Clear visit history? [y]es / [n]o / Esc".to_string()
     } else if let Some(name) = &state.saved_pick {
         format!("`{name}`  [r]un / [d]elete / Esc")
+    } else if let Some(pick) = &state.loop_pick {
+        let state_word = if pick.enabled { "on" } else { "off" };
+        format!(
+            "#{} {state_word} {}  [e]dit [d]isable [n] enable [x] delete [l]ogs",
+            pick.id, pick.frequency
+        )
     } else if let Some((name, status)) = &state.package_pick {
         match status {
             PackageStatus::Installed if crate::packages::is_essential(name) => {
@@ -1371,6 +1536,8 @@ mod tests {
     fn shomagent_category_is_listed() {
         assert!(Category::ALL.contains(&Category::Shomagent));
         assert_eq!(Category::Shomagent.label(), "shomagent");
+        assert!(Category::ALL.contains(&Category::Shomloop));
+        assert_eq!(Category::Shomloop.label(), "shomloop");
         let s = MenuState::new(&ctx());
         // Jump to category and confirm root actions exist.
         let mut s = s;
@@ -1397,6 +1564,83 @@ mod tests {
         s.category_idx = Category::Shomagent.index();
         s.item_idx = 0;
         assert_eq!(s.activate(), Some(MenuAction::RunMeta(":shomagent".into())));
+    }
+
+    #[test]
+    fn shomloop_new_loop_prefills() {
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Shomloop.index();
+        s.item_idx = 0;
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert_eq!(labels[0], "new loop");
+        assert_eq!(labels[1], "logs");
+        assert_eq!(
+            s.activate(),
+            Some(MenuAction::InsertLine("shomloop ".into()))
+        );
+    }
+
+    #[test]
+    fn shomloop_overlay_actions() {
+        let mut s = MenuState::new(&ctx());
+        s.loop_pick = Some(LoopPick {
+            id: 3,
+            enabled: true,
+            frequency: "daily at 5pm".into(),
+        });
+        assert_eq!(
+            s.confirm_loop(LoopVerb::Edit),
+            Some(MenuAction::InsertLine(
+                "shomloop edit 3 \"daily at 5pm\" ".into()
+            ))
+        );
+        s.loop_pick = Some(LoopPick {
+            id: 3,
+            enabled: true,
+            frequency: "hourly".into(),
+        });
+        assert_eq!(
+            s.confirm_loop(LoopVerb::Disable),
+            Some(MenuAction::InsertLine("shomloop disable 3".into()))
+        );
+        s.loop_pick = Some(LoopPick {
+            id: 3,
+            enabled: false,
+            frequency: "hourly".into(),
+        });
+        assert_eq!(
+            s.confirm_loop(LoopVerb::Enable),
+            Some(MenuAction::InsertLine("shomloop enable 3".into()))
+        );
+        s.loop_pick = Some(LoopPick {
+            id: 3,
+            enabled: true,
+            frequency: "hourly".into(),
+        });
+        assert_eq!(
+            s.confirm_loop(LoopVerb::Delete),
+            Some(MenuAction::InsertLine("shomloop delete 3".into()))
+        );
+        s.loop_pick = Some(LoopPick {
+            id: 3,
+            enabled: true,
+            frequency: "hourly".into(),
+        });
+        assert_eq!(
+            s.confirm_loop(LoopVerb::Logs),
+            Some(MenuAction::InsertLine("shomloop logs 3".into()))
+        );
+        s.loop_pick = Some(LoopPick {
+            id: 3,
+            enabled: true,
+            frequency: "say \"hi\"".into(),
+        });
+        assert_eq!(
+            s.confirm_loop(LoopVerb::Edit),
+            Some(MenuAction::InsertLine(
+                "shomloop edit 3 \"say \\\"hi\\\"\" ".into()
+            ))
+        );
     }
 
     #[test]

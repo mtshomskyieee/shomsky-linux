@@ -82,14 +82,15 @@ COPY assets/emerge ./assets/emerge
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     mkdir -p /out \
- && cargo build --release -p engram-shell -p engram-cmdfreq -p shomagent -p shomsky -p quickyn \
+ && cargo build --release -p engram-shell -p engram-cmdfreq -p shomagent -p shomsky -p quickyn -p shomloop \
  && cp target/release/engram-shell /out/engram-shell \
  && cp target/release/engram-cmdfreq /out/engram-cmdfreq \
  && cp target/release/shomagent /out/shomagent \
  && cp target/release/shomagentd /out/shomagentd \
  && cp target/release/shomsky /out/shomsky \
  && cp target/release/quickyn /out/quickyn \
- && strip /out/engram-shell /out/engram-cmdfreq /out/shomagent /out/shomagentd /out/shomsky /out/quickyn
+ && cp target/release/shomloop /out/shomloop \
+ && strip /out/engram-shell /out/engram-cmdfreq /out/shomagent /out/shomagentd /out/shomsky /out/quickyn /out/shomloop
 
 # ---------------------------------------------------------------------------
 # Runtime
@@ -128,6 +129,7 @@ COPY --from=workspace /out/shomagent /usr/local/bin/shomagent
 COPY --from=workspace /out/shomagentd /usr/local/bin/shomagentd
 COPY --from=workspace /out/shomsky /usr/local/bin/shomsky
 COPY --from=workspace /out/quickyn /usr/local/bin/quickyn
+COPY --from=workspace /out/shomloop /usr/local/bin/shomloop
 COPY --from=mistral /out/mistralrs /usr/local/bin/mistralrs
 COPY containers/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY containers/shomsky-tests.sh /usr/local/bin/shomsky-tests
@@ -138,6 +140,7 @@ RUN chmod 755 /usr/local/bin/engram-shell \
               /usr/local/bin/shomagentd \
               /usr/local/bin/shomsky \
               /usr/local/bin/quickyn \
+              /usr/local/bin/shomloop \
               /usr/local/bin/mistralrs \
               /usr/local/bin/entrypoint.sh \
               /usr/local/bin/shomsky-tests \

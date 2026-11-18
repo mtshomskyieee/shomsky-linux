@@ -18,12 +18,13 @@ COPY crates ./crates
 COPY assets/emerge ./assets/emerge
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo build --release -p engram-shell -p engram-cmdfreq -p shomsky \
+    cargo build --release -p engram-shell -p engram-cmdfreq -p shomsky -p shomloop \
  && mkdir -p /out \
  && cp target/release/engram-shell /out/engram-shell \
  && cp target/release/engram-cmdfreq /out/engram-cmdfreq \
  && cp target/release/shomsky /out/shomsky \
- && strip /out/engram-shell /out/engram-cmdfreq /out/shomsky
+ && cp target/release/shomloop /out/shomloop \
+ && strip /out/engram-shell /out/engram-cmdfreq /out/shomsky /out/shomloop
 
 FROM alpine:${ALPINE_VERSION} AS runtime
 RUN apk add --no-cache busybox bash bats ca-certificates curl libgcc libstdc++ openssl \
@@ -37,11 +38,13 @@ COPY third_party/docker-alpine /usr/share/doc/shomsky/third_party/docker-alpine
 COPY --from=builder /out/engram-shell /usr/local/bin/engram-shell
 COPY --from=builder /out/engram-cmdfreq /usr/local/bin/engram-cmdfreq
 COPY --from=builder /out/shomsky /usr/local/bin/shomsky
+COPY --from=builder /out/shomloop /usr/local/bin/shomloop
 COPY containers/prebuilt/mistralrs /usr/local/bin/mistralrs
 COPY containers/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY containers/shomsky-tests.sh /usr/local/bin/shomsky-tests
 RUN chmod 755 /usr/local/bin/engram-shell /usr/local/bin/engram-cmdfreq \
               /usr/local/bin/shomsky \
+              /usr/local/bin/shomloop \
               /usr/local/bin/mistralrs \
               /usr/local/bin/entrypoint.sh /usr/local/bin/shomsky-tests \
  && mkdir -p /engram/models /engram/skills /engram/user /opt/shomsky \

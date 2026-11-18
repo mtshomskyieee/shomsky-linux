@@ -1545,7 +1545,7 @@ fn truncate_args(s: &str, limit: usize) -> String {
 const HELP_TEXT: &str = "\
 Meta-commands:
   :help              Show this help
-  :menu | :m         Feature navigation hub (Modes / Learn / Packages / shomagent / …)
+  :menu | :m         Feature navigation hub (Modes / Learn / Packages / shomagent / shomloop / …)
   :sys | :uname      System identity (version, mode, model alias, model name, tools, llm) — also: uname
   :splash            Replay the startup splash (TTY; matrix intro if enabled)
   :mode [name]       Show or set mode (agent|hallucination|root)
@@ -1587,9 +1587,22 @@ emerge:
                      ENGRAM_EMERGE=off disables the command (also 0|false|no)
 
 Feature menu (TTY):
-  :menu | :m         Slip into Modes / Learn / Packages / shomagent / Web / Help / System
+  :menu | :m         Slip into Modes / Learn / Packages / shomagent / Web / shomloop / Help / System
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
   menu → shomagent   list · readwrite/web/dream seed/refine · ask/talk · stop/end <agent>
+  menu → shomloop    new loop · logs · Enter on a run: [e]dit [d]isable [n] enable [x] delete [l]ogs
+
+shomloop (agent mode / PATH):
+  shomloop \"freq\" cmd Record a planned run and install a crontab line
+  shomloop list         List ~/.loop/planned_runs.csv
+  shomloop logs [id]    Show /tmp/shomloop logs
+  shomloop enable N     Turn run N back on
+  shomloop disable N    Keep the row, omit it from crontab
+  shomloop delete N     Remove the row and its crontab line
+  shomloop edit N \"freq\" cmd
+  Frequencies: hourly, daily [at 5pm], weekly [on monday] [at 5pm],
+               monthly [at 5pm], every N minutes|hours, or five-field cron
+  Startup runs `shomloop restore` so crond is rebuilt from the CSV
 
 Learn (agent mode):
   , <intent>         Plan → confirm → run a real shell command from intent

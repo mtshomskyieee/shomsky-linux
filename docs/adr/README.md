@@ -21,6 +21,7 @@ AI-assisted contribution rules.
 | [0010](0010-build-version.md) | Build version | Accepted |
 | [0011](0011-shomagent-web.md) | shomagent web (headless browser) | Accepted |
 | [0012](0012-emerge-web-terminal.md) | :emerge web terminal | Accepted |
+| [0013](0013-shomloop.md) | shomloop scheduled commands | Accepted |
 
 How-to docs (modes, MCP usage, models, licensing inventory) stay under
 [`docs/`](../).

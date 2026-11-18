@@ -166,6 +166,7 @@ pub fn looks_like_shell_command(line: &str) -> bool {
         "shomagent",
         "shomsky",
         "quickyn",
+        "shomloop",
     ];
     CMDS.contains(&cmd)
 }
@@ -202,6 +203,14 @@ mod tests {
     fn quickyn_runs_as_direct_shell() {
         assert!(looks_like_shell_command("quickyn \"is it ready\""));
         assert!(looks_like_shell_command("quickyn is-it-ready notes.md"));
+    }
+
+    #[test]
+    fn shomloop_runs_as_direct_shell() {
+        assert!(looks_like_shell_command("shomloop list"));
+        assert!(looks_like_shell_command(
+            "shomloop \"daily at 5pm\" echo hello"
+        ));
     }
 
     #[test]

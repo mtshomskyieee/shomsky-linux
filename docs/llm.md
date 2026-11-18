@@ -61,6 +61,7 @@ Workspace ([ADR-0002](adr/0002-rust-language-and-style.md)):
 | `shomagent` | `crates/shomagent/` | `shomagentd` + `shomagent` CLI |
 | `shomsky` | `crates/shomsky/` | learn registry and `shomsky publish` |
 | `quickyn` | `crates/quickyn/` | yes/no + confidence CLI |
+| `shomloop` | `crates/shomloop/` | scheduled commands, crontab, planned-run CSV |
 
 `engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`, `quickyn_tui.rs`, `chat_tui.rs`, `emerge.rs`.
 
@@ -88,7 +89,7 @@ Tests: unit tests live next to the module. Behavior and golden paths live in `te
 | `/etc/shomsky/shomagent_crew.d/` | System crew drop-ins. `./shomagent_crew.d/` overrides the same `name`. |
 | `/run/shomagent/` | Control socket and notify lane. |
 | `/usr/local/bin/engram-shell` | The shell. |
-| `/usr/local/bin/{shomagent,shomagentd,shomsky,quickyn,engram-cmdfreq,mistralrs}` | Crew, publish, yes/no, MCP, inference. |
+| `/usr/local/bin/{shomagent,shomagentd,shomsky,quickyn,shomloop,engram-cmdfreq,mistralrs}` | Crew, publish, yes/no, schedules, MCP, inference. |
 
 ## Modes
 
@@ -137,6 +138,19 @@ A line starting with `,` or `??` is intent, handled before direct-shell and LLM 
 
 Files over 1000 characters warn on stderr (call still runs). `QUICKYN_STUB_LLM=1` for CI. Agent mode treats `quickyn` as a direct shell command.
 
+## shomloop
+
+[shomloop.md](shomloop.md), [ADR-0013](adr/0013-shomloop.md). First-party binary beside `quickyn`. Schedule phrases become crontab lines. The ledger is `~/.loop/planned_runs.csv` (root's home in the default container).
+
+| Command | Behavior |
+|---------|----------|
+| `shomloop "<frequency>" <command>` | Append a row and rewrite crontab |
+| `shomloop list` | Print planned runs |
+| `shomloop logs [id]` | Print `/tmp/shomloop` logs |
+| `shomloop enable\|disable\|delete\|edit` | Update the row and rewrite crontab |
+
+`shomloop restore` runs from the entrypoint: rewrite the marked crontab block and start `crond`. Unknown phrases are errors. Agent mode treats `shomloop` as a direct shell command.
+
 ## chat
 
 [chat.md](chat.md). Immersive framed conversation with the current model (`:chat`). New session: no REPL history, no tools. Title shows estimated token size and percent of the window (`ENGRAM_CONTEXT_TOKENS`, default 32768). `c` compactifies the dialogue into one summary turn and recalculates the counters. Esc exits. Saves `saved_chat_<YYYYMMDDTHHMMSSZ>.md` in the shell cwd (skipped in hallucination mode). `ENGRAM_CHAT_STUB=1` for CI.
@@ -178,7 +192,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 | `learn` | on demand via `load_skill` |
 | `ignore_llm_for_these_commands` | on demand; the shell also reads it as the TUI bypass list |
 
-`:menu` / `:m` on a color TTY: Modes, Learn, Packages, shomagent, Help, System. Under shomagent: list agents, type a filename for `readwrite` / `dream seed` / `refine idea`, or pick an opened document for `ask` / `talk`. `:help` is the same map as text. Both stay available from the ready line.
+`:menu` / `:m` on a color TTY: Modes, Learn, Packages, shomagent, Web, shomloop, Help, System. Under shomagent: list agents, type a filename for `readwrite` / `dream seed` / `refine idea`, or pick an opened document for `ask` / `talk`. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. `:help` is the same map as text. Both stay available from the ready line.
 
 ## If you are changing the repository
 
@@ -186,7 +200,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 2. Keep the musl/CPU image buildable. Do not add a glibc-only dependency to the flagship path.
 3. Keep tool execution and mode checks in the shell.
 4. Cover non-LLM behavior in `tests/cases/` or `--self-test`. Run `docker compose run --rm tests` (or `./tests/run.sh`).
-5. Use `cargo test -p shomagent -p shomsky -p quickyn` for those crates.
+5. Use `cargo test -p shomagent -p shomsky -p quickyn -p shomloop` for those crates.
 6. Write an ADR when the change moves a cross-cutting boundary (sandbox, MCP transport, CI gates, license posture), adds or removes an integration, or would surprise someone who only read the code. Skip ADRs for routine bugfixes and doc clarifications that do not change a decision.
 7. How-to docs stay detailed. ADRs stay short: Status, Date, Context, Decision, Consequences, optional Steering.
 8. Do not commit weights, tokens, or `.env`.
@@ -223,6 +237,7 @@ You are the agent in Shomsky Linux, an Alpine container, talking to a person at 
 | Background agents | [adr/0007](adr/0007-shomagent-background-crew.md), [shomagent.md](shomagent.md) |
 | Learn / publish | [adr/0008](adr/0008-learn-userland-verb.md), [learn.md](learn.md) |
 | Yes/no CLI | [adr/0009](adr/0009-quickyn-yes-no.md), [quickyn.md](quickyn.md) |
+| Scheduled commands | [adr/0013](adr/0013-shomloop.md), [shomloop.md](shomloop.md) |
 | Framed chat | [chat.md](chat.md) |
 | Modes, menu, tool protocol | [shell-modes.md](shell-modes.md) |
 | `:emerge` web terminal | [adr/0012](adr/0012-emerge-web-terminal.md), [shell-modes.md](shell-modes.md) |

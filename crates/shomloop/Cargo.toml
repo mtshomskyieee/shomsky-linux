@@ -1,0 +1,20 @@
+[package]
+name = "shomloop"
+version = "0.1.0"
+edition = "2021"
+description = "Schedule shell commands with a user crontab and a planned-run ledger"
+license = "MIT"
+rust-version = "1.74"
+
+[[bin]]
+name = "shomloop"
+path = "src/bin/shomloop.rs"
+
+[lib]
+name = "shomloop"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+csv = "1.3"

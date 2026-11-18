@@ -26,6 +26,8 @@ must follow [ADR-0000](0000-what-is-an-adr.md) and
     + `shomsky` CLI (see [ADR-0008](0008-learn-userland-verb.md))
   - member crate **`quickyn`** (`crates/quickyn/`) — yes/no + confidence CLI
     (see [ADR-0009](0009-quickyn-yes-no.md))
+  - member crate **`shomloop`** (`crates/shomloop/`) — scheduled commands and
+    crontab restore (see [ADR-0013](0013-shomloop.md))
 - Prefer MIT / Apache-2.0 dependencies consistent with the distro stack.
 
 ### Runtime and libraries

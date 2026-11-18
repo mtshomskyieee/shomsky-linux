@@ -93,6 +93,7 @@ On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
 | Learn | Prefill `, ` or `?? `; save when a promote is pending |
 | Packages | Ledger of successful `apk add` / `apk del`; Enter → [u]ninstall / [r]einstall |
 | shomagent | list agents; `readwrite` / `dream seed` / `refine idea` (type a filename); `ask` / `talk` (pick a document); `stop` / end (pick any agent) |
+| shomloop | planned runs; new loop; logs; Enter → edit / disable / enable / delete |
 | Help | Run `:help` |
 | System | `:emerge`, `:sys`, `:splash`, `:quickyn`, `:chat`, `:model`, `:skills`, `:top`, `:packages`, `:clear`, exit |
 
