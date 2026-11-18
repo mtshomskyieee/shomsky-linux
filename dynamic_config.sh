@@ -91,7 +91,7 @@ echo "  (These are not REPL commands — do not type them inside engram-shell.)"
 echo
 echo "  Current:"
 echo "    ENGRAM_MATRIX=$(show_val ENGRAM_MATRIX auto)"
-echo "    ENGRAM_MATRIX_SECS=$(show_val ENGRAM_MATRIX_SECS 2)"
+echo "    ENGRAM_MATRIX_SECS=$(show_val ENGRAM_MATRIX_SECS 5)"
 echo "    ENGRAM_MATRIX_GLYPHS=$(show_val ENGRAM_MATRIX_GLYPHS '(katakana)')"
 echo "    ENGRAM_SPINNER=$(show_val ENGRAM_SPINNER auto)"
 echo "    ENGRAM_LLM_READY_TRIES=$(show_val ENGRAM_LLM_READY_TRIES 600)"
@@ -103,7 +103,7 @@ matrix="$(ask_choice ENGRAM_MATRIX "Matrix intro" "$(show_val ENGRAM_MATRIX auto
 echo "  → ENGRAM_MATRIX=${matrix}"
 
 while true; do
-  secs_cur="$(show_val ENGRAM_MATRIX_SECS 2)"
+  secs_cur="$(show_val ENGRAM_MATRIX_SECS 5)"
   secs="$(ask ENGRAM_MATRIX_SECS "Matrix duration seconds (0-10; 0=skip)" "$secs_cur")"
   if [[ "$secs" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     # Clamp like the shell: 0–10

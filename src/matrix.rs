@@ -9,7 +9,7 @@
 //! Draws nothing unless stdout is a color-capable terminal, so `--once`,
 //! `--script`, pipes and `NO_COLOR=1` are unaffected. Override with
 //! `ENGRAM_MATRIX=0|off|false|no` (force off) or `always|1|on|true|yes`
-//! (force on); `ENGRAM_MATRIX_SECS` sets the duration (default 2, max 10).
+//! (force on); `ENGRAM_MATRIX_SECS` sets the duration (default 5, max 10).
 //!
 //! Everything is hand-written ANSI — no TUI crate, and no libc: terminal size,
 //! raw mode and the cursor-position query all go through BusyBox `stty` and
@@ -22,7 +22,7 @@ use crate::term::{self, RawGuard};
 use crate::ui;
 
 const TICK: Duration = Duration::from_millis(50);
-const DEFAULT_SECS: f32 = 2.0;
+const DEFAULT_SECS: f32 = 5.0;
 const MAX_SECS: f32 = 10.0;
 
 /// Halfwidth katakana + digits — the iconic look, single-width cells.

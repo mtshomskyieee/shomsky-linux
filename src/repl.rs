@@ -1589,7 +1589,7 @@ Launch parameters (env vars passed into the shell at start — not typed at the 
   NO_COLOR=1                       Disable splash / prompt colors
   MISTRALRS_LOG_TO_TTY=1           Stream mistralrs logs to the terminal
   ENGRAM_MATRIX=auto|always|off    Play the digital-rain intro (TTY)
-  ENGRAM_MATRIX_SECS=N             Intro duration, 0-10 (default 2; 0 = skip)
+  ENGRAM_MATRIX_SECS=N             Intro duration, 0-10 (default 5; 0 = skip)
   ENGRAM_MATRIX_GLYPHS=ascii       Use ASCII instead of halfwidth katakana
   Any keypress skips the intro.
 ";

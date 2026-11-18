@@ -188,7 +188,7 @@ exactly the splash. It is off wherever the splash is off (pipes,
 | Variable | Values |
 |----------|--------|
 | `ENGRAM_MATRIX` | `auto` (default), `always`, `off` / `0` / `false` |
-| `ENGRAM_MATRIX_SECS` | Duration in seconds, `0`–`10` (default `2`; `0` skips) |
+| `ENGRAM_MATRIX_SECS` | Duration in seconds, `0`–`10` (default `5`; `0` skips) |
 | `ENGRAM_MATRIX_GLYPHS` | `ascii` to avoid halfwidth katakana |
 
 ## Quieting mistral.rs logs

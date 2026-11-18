@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::term;
 
 const TICK: Duration = Duration::from_millis(50);
-const DEFAULT_SECS: f32 = 2.0;
+const DEFAULT_SECS: f32 = 5.0;
 const MAX_SECS: f32 = 10.0;
 
 const GLYPHS_KANA: &str = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789";
