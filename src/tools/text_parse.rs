@@ -57,8 +57,7 @@ pub fn strip_tool_markup(text: &str) -> String {
             }
             // Drop leftover bare JSON tool objects
             if let Ok(v) = serde_json::from_str::<Value>(t) {
-                if v
-                    .get("name")
+                if v.get("name")
                     .and_then(|n| n.as_str())
                     .is_some_and(|n| is_allowed_with(n, &[]))
                 {
@@ -81,7 +80,9 @@ fn xml_re() -> &'static Regex {
 
 fn tool_line_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?m)^[ \t]*TOOL[ \t]+(\S+)[ \t]*(.*)$").expect("TOOL line regex"))
+    RE.get_or_init(|| {
+        Regex::new(r"(?m)^[ \t]*TOOL[ \t]+(\S+)[ \t]*(.*)$").expect("TOOL line regex")
+    })
 }
 
 fn extract_xml_tool_calls(text: &str, extra: &[String]) -> Vec<ToolCall> {
@@ -197,10 +198,7 @@ fn parse_simple_kvs(s: &str, map: &mut serde_json::Map<String, Value>) {
     for part in s.split_whitespace() {
         if let Some((k, v)) = part.split_once('=') {
             if !k.is_empty() {
-                map.insert(
-                    k.to_string(),
-                    Value::String(strip_wrapping_quotes(v)),
-                );
+                map.insert(k.to_string(), Value::String(strip_wrapping_quotes(v)));
             }
         }
     }

@@ -35,10 +35,7 @@ pub fn term_size() -> (usize, usize) {
         let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
         (env("LINES").unwrap_or(24), env("COLUMNS").unwrap_or(80))
     });
-    (
-        rows.clamp(1, MAX_ROWS),
-        cols.clamp(1, MAX_COLS),
-    )
+    (rows.clamp(1, MAX_ROWS), cols.clamp(1, MAX_COLS))
 }
 
 /// Puts the terminal in non-blocking raw mode and always restores it on drop.

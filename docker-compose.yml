@@ -49,6 +49,9 @@ services:
       - ${SHOMSKY_USER_DIR:-./engram/user}:/engram/user
       # Hallucination session JSON (bind mount — visible on the host)
       - ${SHOMSKY_HALLUC_HISTORY:-./.hallucination_shell_history}:/engram/.hallucination_shell_history
+    # :emerge — host browser at http://localhost:1337, loopback only.
+    ports:
+      - "127.0.0.1:1337:1337"
     mem_limit: ${SHOMSKY_MEM_LIMIT:-8g}
     shm_size: ${SHOMSKY_SHM_SIZE:-1gb}
     restart: "no"

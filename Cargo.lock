@@ -278,6 +278,8 @@ dependencies = [
  "clap",
  "engram-cmdfreq",
  "futures-util",
+ "libc",
+ "nix",
  "quickyn",
  "regex",
  "reqwest",
@@ -289,6 +291,7 @@ dependencies = [
  "shomsky",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "toml",
  "uuid",
 ]

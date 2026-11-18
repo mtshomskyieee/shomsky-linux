@@ -65,8 +65,8 @@ impl PackageStore {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         if text.trim().is_empty() {
             return Ok(Self::default());
         }
@@ -75,8 +75,7 @@ impl PackageStore {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         let text = serde_json::to_string_pretty(self)?;
         let tmp = path.with_extension("json.tmp");
@@ -145,11 +144,8 @@ impl PackageStore {
 
     /// Installed first, then removed; each group by name.
     pub fn list_sorted(&self) -> Vec<(&str, &PackageEntry)> {
-        let mut items: Vec<(&str, &PackageEntry)> = self
-            .packages
-            .iter()
-            .map(|(k, v)| (k.as_str(), v))
-            .collect();
+        let mut items: Vec<(&str, &PackageEntry)> =
+            self.packages.iter().map(|(k, v)| (k.as_str(), v)).collect();
         items.sort_by(|a, b| {
             status_rank(a.1.status)
                 .cmp(&status_rank(b.1.status))
@@ -557,7 +553,15 @@ fn is_install_filler(lower: &str) -> bool {
 fn is_package_token(tok: &str) -> bool {
     let lower = tok.to_ascii_lowercase();
     const NOT_PKG: &[&str] = &[
-        "it", "them", "this", "that", "these", "those", "something", "one", "please",
+        "it",
+        "them",
+        "this",
+        "that",
+        "these",
+        "those",
+        "something",
+        "one",
+        "please",
     ];
     if NOT_PKG.contains(&lower.as_str()) {
         return false;
@@ -643,10 +647,7 @@ pub fn format_list(store: &PackageStore) -> String {
             .to_string();
     }
     let mut lines = Vec::new();
-    lines.push(format!(
-        "{:<20} {:<10} {}",
-        "PACKAGE", "STATUS", "UPDATED"
-    ));
+    lines.push(format!("{:<20} {:<10} {}", "PACKAGE", "STATUS", "UPDATED"));
     for (name, entry) in items {
         lines.push(format!(
             "{:<20} {:<10} {}",
@@ -716,7 +717,10 @@ mod tests {
         assert!(prompt.contains("BusyBox"));
         assert_eq!(parse_shominstall("install git"), None);
         assert_eq!(parse_shominstall("apk add git"), None);
-        assert_eq!(parse_shominstall("shominstall"), Some(Shominstall { packages: vec![] }));
+        assert_eq!(
+            parse_shominstall("shominstall"),
+            Some(Shominstall { packages: vec![] })
+        );
         assert_eq!(
             package_install_command("shominstall git curl"),
             Some("apk add git curl".into())
@@ -789,7 +793,10 @@ mod tests {
         assert_eq!(package_install_command("install -m 755 src dest"), None);
         assert_eq!(package_install_command("install -d /tmp/foo"), None);
         assert_eq!(package_install_command("install src dest"), None);
-        assert_eq!(package_install_command("install ./git /usr/local/bin/git"), None);
+        assert_eq!(
+            package_install_command("install ./git /usr/local/bin/git"),
+            None
+        );
         assert_eq!(package_install_command("install git /usr/bin/git"), None);
         assert_eq!(package_install_command("install"), None);
         assert_eq!(package_install_command("apk add git"), None);
@@ -806,7 +813,10 @@ mod tests {
     #[test]
     fn parse_version_pin() {
         let m = parse_apk_mutations("apk add neovim=0.9.5-r0");
-        assert_eq!(m, vec![(PackageStatus::Installed, "neovim=0.9.5-r0".into())]);
+        assert_eq!(
+            m,
+            vec![(PackageStatus::Installed, "neovim=0.9.5-r0".into())]
+        );
         let mut store = PackageStore::default();
         store.record_install("neovim=0.9.5-r0");
         assert!(store.packages.contains_key("neovim"));
@@ -820,10 +830,7 @@ mod tests {
         store.record_remove("htop");
         store.save(&path).unwrap();
         let loaded = PackageStore::load(&path).unwrap();
-        assert_eq!(
-            loaded.packages["neovim"].status,
-            PackageStatus::Installed
-        );
+        assert_eq!(loaded.packages["neovim"].status, PackageStatus::Installed);
         assert_eq!(loaded.packages["htop"].status, PackageStatus::Removed);
         let _ = fs::remove_file(&path);
     }
@@ -833,10 +840,7 @@ mod tests {
         let path = tmp_path("cmd");
         record_from_command(&path, "apk add neovim");
         let loaded = PackageStore::load(&path).unwrap();
-        assert_eq!(
-            loaded.packages["neovim"].status,
-            PackageStatus::Installed
-        );
+        assert_eq!(loaded.packages["neovim"].status, PackageStatus::Installed);
         record_from_command(&path, "apk del neovim");
         let loaded = PackageStore::load(&path).unwrap();
         assert_eq!(loaded.packages["neovim"].status, PackageStatus::Removed);

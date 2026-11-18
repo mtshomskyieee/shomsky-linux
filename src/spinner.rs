@@ -198,10 +198,7 @@ fn format_elapsed(d: Duration) -> String {
 
 fn draw_spinner(label: &str, frame: usize, elapsed: Duration, hint: &str) {
     let glyph = FRAMES[frame % FRAMES.len()];
-    let msg = format!(
-        "[{glyph}] {label}... {}{hint}",
-        format_elapsed(elapsed)
-    );
+    let msg = format!("[{glyph}] {label}... {}{hint}", format_elapsed(elapsed));
     paint_line(&msg);
 }
 
@@ -274,10 +271,7 @@ impl EscWatch {
             Err(_) => 0,
         };
         if n == 0 {
-            if self
-                .pending_since
-                .is_some_and(|t| t.elapsed() >= ESC_GRACE)
-            {
+            if self.pending_since.is_some_and(|t| t.elapsed() >= ESC_GRACE) {
                 self.pending_since = None;
                 return Some(CancelKey::Esc);
             }

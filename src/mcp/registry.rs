@@ -135,9 +135,9 @@ impl McpRegistry {
         match self.call_tool_once(server, tool, args).await {
             Ok(out) => Ok(out),
             Err(e) if is_transport_dead(&e) => {
-                self.reconnect(server)
-                    .await
-                    .with_context(|| format!("mcp server '{server}' died ({e:#}); reconnect failed"))?;
+                self.reconnect(server).await.with_context(|| {
+                    format!("mcp server '{server}' died ({e:#}); reconnect failed")
+                })?;
                 eprintln!("mcp: reconnected '{server}'");
                 self.record_warned.store(false, Ordering::Relaxed);
                 self.call_tool_once(server, tool, args).await
@@ -220,9 +220,7 @@ impl McpRegistry {
             Ok(_) => true,
             Err(e) => {
                 if !self.record_warned.swap(true, Ordering::Relaxed) {
-                    eprintln!(
-                        "warning: cmdfreq MCP unavailable ({e:#}); using local store"
-                    );
+                    eprintln!("warning: cmdfreq MCP unavailable ({e:#}); using local store");
                 }
                 false
             }

@@ -8,6 +8,7 @@
 - [ADR-0008: Learn userland verb](adr/0008-learn-userland-verb.md)
 - [ADR-0009: quickyn yes/no CLI](adr/0009-quickyn-yes-no.md)
 - [ADR-0010: Build version](adr/0010-build-version.md)
+- [ADR-0012: :emerge web terminal](adr/0012-emerge-web-terminal.md)
 - [Shell modes](shell-modes.md)
 - [Engram (skills)](engram.md)
 - [Learn](learn.md) — `,` / `??` intent → promote to `~/bin` → `shomsky publish`

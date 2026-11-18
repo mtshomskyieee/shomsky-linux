@@ -1,8 +1,7 @@
 mod chat_tui;
-mod web_history;
-mod web_tui;
 mod completer;
 mod config;
+mod emerge;
 mod halluc_fs;
 mod halluc_session;
 mod learn;
@@ -19,6 +18,8 @@ mod spinner;
 mod term;
 mod tools;
 mod ui;
+mod web_history;
+mod web_tui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -69,6 +70,10 @@ struct Cli {
     /// Used by the container entrypoint; does not start the LLM.
     #[arg(long)]
     reinstall_missing: bool,
+
+    /// Resume a session handed off by `:emerge`. Internal.
+    #[arg(long, hide = true, value_name = "PATH")]
+    emerge_resume: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -101,6 +106,10 @@ async fn main() -> Result<()> {
     let mut cfg = cfg;
     cfg.apply_cmdfreq_env();
     let mut repl = Repl::new(cfg, skills)?;
+    if let Some(path) = &cli.emerge_resume {
+        let snap = emerge::load_snapshot(path)?;
+        repl.apply_emerge_snapshot(snap)?;
+    }
 
     if let Some(path) = cli.script {
         repl.run_script(&path).await?;
@@ -116,12 +125,12 @@ async fn main() -> Result<()> {
 }
 
 mod self_test {
-    use anyhow::{bail, Result};
     use crate::config::Config;
     use crate::llm::ToolCall;
     use crate::modes::Mode;
     use crate::skills::SkillStore;
     use crate::tools::{self, execute_tool};
+    use anyhow::{bail, Result};
     use std::path::Path;
 
     fn fake_call(name: &str, args: serde_json::Value) -> ToolCall {
@@ -241,7 +250,10 @@ mod self_test {
 
         // agent shell_exec real
         let out = execute_tool(
-            &fake_call("shell_exec", serde_json::json!({"command": "echo shomsky-ok"})),
+            &fake_call(
+                "shell_exec",
+                serde_json::json!({"command": "echo shomsky-ok"}),
+            ),
             Mode::Agent,
             cfg,
             skills,
@@ -275,9 +287,7 @@ mod self_test {
         println!("  ok  tool schemas ({})", schemas.len());
 
         // text-pattern extraction (small-model path)
-        let parsed = tools::extract_tool_calls(
-            "Sure.\nTOOL read_file path=/etc/os-release\n",
-        );
+        let parsed = tools::extract_tool_calls("Sure.\nTOOL read_file path=/etc/os-release\n");
         if parsed.len() != 1 || parsed[0].function.name != "read_file" {
             bail!("text TOOL line parse failed: {parsed:?}");
         }

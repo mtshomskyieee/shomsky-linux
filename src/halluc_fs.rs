@@ -75,12 +75,7 @@ impl HallucFs {
             if self.files.is_empty() {
                 return Some(String::new());
             }
-            let mut out = self
-                .files
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n");
+            let mut out = self.files.keys().cloned().collect::<Vec<_>>().join("\n");
             out.push('\n');
             return Some(out);
         }

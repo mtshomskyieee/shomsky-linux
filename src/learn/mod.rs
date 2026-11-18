@@ -64,7 +64,11 @@ pub async fn run_intent(
     };
 
     let home = mode.home_dir();
-    let result = with_spinner("running", shell_exec(&cfg.busybox_ash, &command, cwd, &home)).await?;
+    let result = with_spinner(
+        "running",
+        shell_exec(&cfg.busybox_ash, &command, cwd, &home),
+    )
+    .await?;
     tools::adopt_cwd(cwd, result.cwd.clone());
     if result.success {
         crate::packages::record_from_command(&cfg.packages_path, &command);
@@ -180,9 +184,9 @@ fn edit_command_line(command: &str) -> Result<String> {
     let mut rl = rustyline::DefaultEditor::new()?;
     match rl.readline_with_initial("  ⟡ ", (&initial, "")) {
         Ok(line) => Ok(line),
-        Err(rustyline::error::ReadlineError::Interrupted | rustyline::error::ReadlineError::Eof) => {
-            Ok(String::new())
-        }
+        Err(
+            rustyline::error::ReadlineError::Interrupted | rustyline::error::ReadlineError::Eof,
+        ) => Ok(String::new()),
         Err(e) => Err(e.into()),
     }
 }

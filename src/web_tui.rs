@@ -116,10 +116,7 @@ impl TuiState {
     /// `[-] loading 4s` / `[-] thinking 4s` / `[-] scripts 4s`, or nothing when idle.
     pub fn wait_line(&self) -> Option<String> {
         let (label, elapsed) = if let Some(kind) = self.busy {
-            let elapsed = self
-                .busy_since
-                .map(|t| t.elapsed())
-                .unwrap_or_default();
+            let elapsed = self.busy_since.map(|t| t.elapsed()).unwrap_or_default();
             let label = match kind {
                 Busy::Page => "loading",
                 Busy::Chat => "thinking",
@@ -327,10 +324,7 @@ impl TuiState {
     }
 
     pub fn push_reply(&mut self, text: String, usage: Option<ContextUsage>) {
-        self.turns.push(Turn {
-            user: false,
-            text,
-        });
+        self.turns.push(Turn { user: false, text });
         if let Some(usage) = usage {
             self.context = Some(usage);
         }
@@ -484,11 +478,7 @@ pub struct SettleStep {
 /// `changed` is true when this read differs from the pane. Two identical reads
 /// stop the watch; a changing page keeps it going until [`SETTLE_MAX_TICKS`].
 pub fn next_settle(changed: bool, stable: u8, ticks: u8) -> SettleStep {
-    let stable = if changed {
-        0
-    } else {
-        stable.saturating_add(1)
-    };
+    let stable = if changed { 0 } else { stable.saturating_add(1) };
     let ticks = ticks.saturating_add(1);
     let keep_going = stable < SETTLE_STABLE_NEED && ticks < SETTLE_MAX_TICKS;
     SettleStep {
@@ -666,13 +656,27 @@ pub async fn run(initial_url: Option<String>) {
             if job.is_finished() {
                 let job = pending.take().unwrap();
                 match job.await {
-                    Ok(JobResult::Page { id, snapshot, usage }) => {
+                    Ok(JobResult::Page {
+                        id,
+                        snapshot,
+                        usage,
+                    }) => {
                         state.apply_page(id, &snapshot, usage);
-                        arm_settle(&mut state, &mut settle, &mut settle_stable, &mut settle_ticks);
+                        arm_settle(
+                            &mut state,
+                            &mut settle,
+                            &mut settle_stable,
+                            &mut settle_ticks,
+                        );
                     }
                     Ok(JobResult::Refreshed { snapshot, usage }) => {
                         state.replace_page(&snapshot, usage);
-                        arm_settle(&mut state, &mut settle, &mut settle_stable, &mut settle_ticks);
+                        arm_settle(
+                            &mut state,
+                            &mut settle,
+                            &mut settle_stable,
+                            &mut settle_ticks,
+                        );
                     }
                     Ok(JobResult::Settled { .. }) => {}
                     Ok(JobResult::Reply { text, usage }) => state.push_reply(text, usage),
@@ -689,10 +693,13 @@ pub async fn run(initial_url: Option<String>) {
                 if job.is_finished() {
                     let job = settle.take().unwrap();
                     match job.await {
-                        Ok(JobResult::Settled { gen, snapshot, usage })
-                            if gen == state.nav_gen =>
-                        {
-                            let step = next_settle(snapshot != state.page, settle_stable, settle_ticks);
+                        Ok(JobResult::Settled {
+                            gen,
+                            snapshot,
+                            usage,
+                        }) if gen == state.nav_gen => {
+                            let step =
+                                next_settle(snapshot != state.page, settle_stable, settle_ticks);
                             settle_stable = step.stable;
                             settle_ticks = step.ticks;
                             if step.apply {
@@ -760,9 +767,7 @@ pub async fn run(initial_url: Option<String>) {
                             pending = Some(match action {
                                 ChatAction::Talk(q) => spawn_talk(id, q),
                                 ChatAction::Click(text) => spawn_click(id, text),
-                                ChatAction::Type { label, text } => {
-                                    spawn_type(id, label, text)
-                                }
+                                ChatAction::Type { label, text } => spawn_type(id, label, text),
                                 ChatAction::Clear => spawn_clear_talk(id),
                             });
                         }
@@ -778,9 +783,7 @@ pub async fn run(initial_url: Option<String>) {
             Some(Key::PageUp) => {
                 state.scroll_focused(-(body_h as isize).max(1), body_h, page_w, chat_w)
             }
-            Some(Key::PageDown) => {
-                state.scroll_focused(body_h as isize, body_h, page_w, chat_w)
-            }
+            Some(Key::PageDown) => state.scroll_focused(body_h as isize, body_h, page_w, chat_w),
             _ => {}
         }
     }
@@ -1286,7 +1289,10 @@ mod tests {
     #[test]
     fn page_scroll_clamps() {
         let mut s = state();
-        s.page = (0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        s.page = (0..40)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         s.focus = Focus::Url;
         s.scroll_focused(1000, 5, 20, 20);
         let max = s.page_lines(20).len().saturating_sub(5);
@@ -1377,10 +1383,7 @@ mod tests {
     fn context_label_tracks_talk_usage() {
         let mut s = state();
         assert_eq!(s.context_label(), "ctx —");
-        s.push_reply(
-            "headlines".into(),
-            Some(ContextUsage::from_counts(50, 200)),
-        );
+        s.push_reply("headlines".into(), Some(ContextUsage::from_counts(50, 200)));
         assert_eq!(s.context_label(), "ctx 50/200 tok · est 25%");
         assert!(s.busy.is_none());
     }
@@ -1400,7 +1403,10 @@ mod tests {
         let thinking = s.wait_line().unwrap();
         assert!(thinking.contains("thinking"));
         assert!(thinking.contains("1m15s"), "{thinking}");
-        assert_ne!(spinner_glyph(Duration::from_millis(0)), spinner_glyph(Duration::from_millis(120)));
+        assert_ne!(
+            spinner_glyph(Duration::from_millis(0)),
+            spinner_glyph(Duration::from_millis(120))
+        );
     }
 
     #[test]
@@ -1546,10 +1552,7 @@ mod tests {
         let narrow = wrap_lines("Show HN: a long title here", 10);
         assert_width(&narrow, 10);
         assert_eq!(
-            narrow
-                .iter()
-                .map(|l| l.trim_end())
-                .collect::<Vec<_>>(),
+            narrow.iter().map(|l| l.trim_end()).collect::<Vec<_>>(),
             vec!["Show HN: a", "long title", "here"]
         );
 
@@ -1574,10 +1577,7 @@ mod tests {
         let lines = wrap_lines("Supercalifragilistic", 6);
         assert_width(&lines, 6);
         assert_eq!(
-            lines
-                .iter()
-                .map(|l| l.trim_end())
-                .collect::<Vec<_>>(),
+            lines.iter().map(|l| l.trim_end()).collect::<Vec<_>>(),
             vec!["Superc", "alifra", "gilist", "ic"]
         );
     }

@@ -26,10 +26,8 @@ pub async fn shell_exec_interactive(
         });
     }
 
-    let cwd_file = std::env::temp_dir().join(format!(
-        "engram-cwd-{}",
-        uuid::Uuid::new_v4().as_simple()
-    ));
+    let cwd_file =
+        std::env::temp_dir().join(format!("engram-cwd-{}", uuid::Uuid::new_v4().as_simple()));
     let wrapped = format!(
         "trap 'st=$?; pwd > {}; exit $st' EXIT\n{}",
         shell_single_quote(&cwd_file.to_string_lossy()),
@@ -58,26 +56,20 @@ pub async fn shell_exec_interactive(
     // Leave a blank line so the TUI does not collide with the prompt.
     let _ = writeln!(std::io::stderr());
 
-    let status = cmd
-        .status()
-        .await
-        .with_context(|| {
-            if busybox.exists() {
-                format!("interactive exec via {}", busybox.display())
-            } else {
-                "interactive exec via sh".into()
-            }
-        })?;
+    let status = cmd.status().await.with_context(|| {
+        if busybox.exists() {
+            format!("interactive exec via {}", busybox.display())
+        } else {
+            "interactive exec via sh".into()
+        }
+    })?;
 
     let new_cwd = read_captured_cwd(&cwd_file, cwd).await;
     let _ = tokio::fs::remove_file(&cwd_file).await;
 
     let mut out = String::new();
     if !status.success() {
-        out.push_str(&format!(
-            "[exit {}]",
-            status.code().unwrap_or(-1)
-        ));
+        out.push_str(&format!("[exit {}]", status.code().unwrap_or(-1)));
     }
     Ok(ShellResult {
         output: out,

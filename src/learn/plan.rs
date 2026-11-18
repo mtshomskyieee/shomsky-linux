@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{ChatMessage, LlmClient};
 use crate::learn::learn_stub;
+use crate::llm::{ChatMessage, LlmClient};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
@@ -27,10 +27,7 @@ pub async fn plan_command(llm: &LlmClient, intent: &str) -> Result<Plan> {
         return Ok(stub_plan(intent));
     }
 
-    let messages = vec![
-        ChatMessage::system(PLAN_SYSTEM),
-        ChatMessage::user(intent),
-    ];
+    let messages = vec![ChatMessage::system(PLAN_SYSTEM), ChatMessage::user(intent)];
     let raw = llm
         .chat_text_max(&messages, 512)
         .await
@@ -75,8 +72,7 @@ fn stub_plan(intent: &str) -> Plan {
     let lower = intent.to_ascii_lowercase();
     if lower.contains("largest") || lower.contains("biggest") || lower.contains("fat") {
         Plan {
-            command: "find . -type f -printf '%s\\t%p\\n' 2>/dev/null | sort -rn | head -5"
-                .into(),
+            command: "find . -type f -printf '%s\\t%p\\n' 2>/dev/null | sort -rn | head -5".into(),
             rationale: "list largest files".into(),
         }
     } else if lower.contains("hello") || lower.contains("echo") {
@@ -214,9 +210,7 @@ pub(crate) fn repair_invalid_json_escapes(s: &str) -> String {
                 }
                 b'u' => {
                     let hex_ok = i + 5 < bytes.len()
-                        && bytes[i + 2..=i + 5]
-                            .iter()
-                            .all(|b| b.is_ascii_hexdigit());
+                        && bytes[i + 2..=i + 5].iter().all(|b| b.is_ascii_hexdigit());
                     if hex_ok {
                         out.push_str(&s[i..i + 6]);
                         i += 6;
@@ -296,9 +290,7 @@ fn longest_repeat_run(s: &str) -> Option<(usize, usize, usize)> {
             }
             if count >= 3 {
                 let score = count * len;
-                let better = best
-                    .map(|(_, bl, bc)| score > bc * bl)
-                    .unwrap_or(true);
+                let better = best.map(|(_, bl, bc)| score > bc * bl).unwrap_or(true);
                 if better {
                     best = Some((i, len, count));
                 }

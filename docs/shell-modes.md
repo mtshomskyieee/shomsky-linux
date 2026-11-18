@@ -94,7 +94,7 @@ On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
 | Packages | Ledger of successful `apk add` / `apk del`; Enter → [u]ninstall / [r]einstall |
 | shomagent | list agents; `readwrite` / `dream seed` / `refine idea` (type a filename); `ask` / `talk` (pick a document); `stop` / end (pick any agent) |
 | Help | Run `:help` |
-| System | `:sys`, `:splash`, `:quickyn`, `:chat`, `:model`, `:skills`, `:top`, `:packages`, `:clear`, exit |
+| System | `:emerge`, `:sys`, `:splash`, `:quickyn`, `:chat`, `:model`, `:skills`, `:top`, `:packages`, `:clear`, exit |
 
 Arrow keys / `hjkl` / Tab navigate; Enter selects; Esc backs up a level; Esc Esc
 (or `q`) leaves the menu. Under pipes, `--once`, and `--script` the overlay is
@@ -107,6 +107,20 @@ docker run -e ENGRAM_MODE=hallucination …
 # or
 engram-shell --mode root
 ```
+
+## Emerge
+
+`:emerge` pauses the container prompt and serves the rest of this session as a
+terminal page at <http://localhost:1337>. The page is a live PTY: keystrokes
+go to a child `engram-shell` that resumes the current mode, working directory,
+conversation, and (in hallucination mode) the virtual filesystem.
+
+Ctrl-C on the container TTY stops the page and returns to the prompt. A second
+`:emerge` while the page is up prints the URL and does not start another
+server. Under `--script`, pipes, and `--once` the command refuses.
+
+The interactive launcher publishes **127.0.0.1:1337** only. `ENGRAM_EMERGE_PORT`
+changes the container port. This listen is only for emerge; MCP stays stdio.
 
 ## Tool styles
 

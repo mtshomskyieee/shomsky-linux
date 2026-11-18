@@ -42,10 +42,10 @@ impl SkillStore {
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
-            let text = fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            let skill = parse_skill(&path, &text)
-                .with_context(|| format!("parsing {}", path.display()))?;
+            let text =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            let skill =
+                parse_skill(&path, &text).with_context(|| format!("parsing {}", path.display()))?;
             if skill.meta.name == IGNORE_LLM_SKILL
                 || path.file_stem().and_then(|s| s.to_str()) == Some(IGNORE_LLM_SKILL)
             {
@@ -113,7 +113,11 @@ impl SkillStore {
                  These commands are run on the real TTY by the shell and must not \
                  be invoked via shell_exec: ",
             );
-            let mut names: Vec<&str> = self.ignore_llm_commands.iter().map(|s| s.as_str()).collect();
+            let mut names: Vec<&str> = self
+                .ignore_llm_commands
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
             names.sort_unstable();
             out.push_str(&names.join(", "));
             out.push_str(".\n\n");
@@ -210,7 +214,8 @@ mod tests {
 
     #[test]
     fn parses_frontmatter() {
-        let text = "---\nname: shell\ndescription: Basic shell\nalways_load: true\n---\n\n# Hello\n";
+        let text =
+            "---\nname: shell\ndescription: Basic shell\nalways_load: true\n---\n\n# Hello\n";
         let skill = parse_skill(Path::new("shell.md"), text).unwrap();
         assert_eq!(skill.meta.name, "shell");
         assert!(skill.meta.always_load);

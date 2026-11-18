@@ -77,6 +77,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY VERSION ./VERSION
 COPY src ./src
 COPY crates ./crates
+# :emerge page (include_str! from src/emerge.rs)
+COPY assets/emerge ./assets/emerge
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     mkdir -p /out \

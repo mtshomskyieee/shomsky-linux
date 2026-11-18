@@ -18,6 +18,7 @@ Run it (use `tiny` if you want a small model for a first smoke test):
 ```bash
 mkdir -p engram/user .hallucination_shell_history
 docker run -it --rm \
+  -p 127.0.0.1:1337:1337 \
   -v shomsky-models:/engram/models \
   -v "$PWD/engram/user:/engram/user" \
   -v "$PWD/.hallucination_shell_history:/engram/.hallucination_shell_history" \
@@ -28,7 +29,9 @@ docker run -it --rm \
 
 First run downloads a GGUF into the `shomsky-models` volume, starts
 [mistral.rs](https://github.com/EricLBuehler/mistral.rs), then drops you into
-`engram-shell`. Exit with `:exit` or Ctrl+D.
+`engram-shell`. Exit with `:exit` or Ctrl+D. `:emerge` pauses that
+prompt and serves the rest of the session at <http://localhost:1337>
+(Ctrl-C on this terminal returns).
 
 Package page: https://github.com/mtshomskyieee/shomsky-linux/pkgs/container/shomsky-linux
 
@@ -76,6 +79,10 @@ COMPOSE_MENU=false SHOMSKY_MODEL=tiny docker compose up --menu=false
 | `root` | Bypass the LLM; lines go straight to BusyBox ash with persistent cwd (config-gated) |
 
 Switch at the prompt with `:mode agent|hallucination|root`.
+
+`:emerge` hands the continuing session to a browser terminal on
+`localhost:1337`. The container TTY waits until Ctrl-C. Launchers publish
+that port on `127.0.0.1` only.
 
 ## quickyn
 
