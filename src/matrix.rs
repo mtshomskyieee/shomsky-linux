@@ -46,14 +46,21 @@ pub fn enabled() -> bool {
 /// Duration in seconds; 0 disables the animation entirely.
 fn duration_secs() -> f32 {
     match std::env::var("ENGRAM_MATRIX_SECS") {
-        Ok(v) => v.trim().parse::<f32>().unwrap_or(DEFAULT_SECS).clamp(0.0, MAX_SECS),
+        Ok(v) => v
+            .trim()
+            .parse::<f32>()
+            .unwrap_or(DEFAULT_SECS)
+            .clamp(0.0, MAX_SECS),
         Err(_) => DEFAULT_SECS,
     }
 }
 
 fn glyphs() -> Vec<char> {
-    let ascii = matches!(std::env::var("ENGRAM_MATRIX_GLYPHS"), Ok(v) if v.eq_ignore_ascii_case("ascii"));
-    if ascii { GLYPHS_ASCII } else { GLYPHS_KANA }.chars().collect()
+    let ascii =
+        matches!(std::env::var("ENGRAM_MATRIX_GLYPHS"), Ok(v) if v.eq_ignore_ascii_case("ascii"));
+    if ascii { GLYPHS_ASCII } else { GLYPHS_KANA }
+        .chars()
+        .collect()
 }
 
 // ---------------------------------------------------------------- rng
@@ -329,7 +336,9 @@ fn new_column(rows: usize, alphabet: &[char], rng: &mut Rng, initial: bool) -> C
         speed: 0.5 + rng.unit() * 1.2,
         len,
         delay: if initial { rng.below(12) } else { rng.below(6) },
-        glyphs: (0..rows.max(1)).map(|_| alphabet[rng.below(alphabet.len())]).collect(),
+        glyphs: (0..rows.max(1))
+            .map(|_| alphabet[rng.below(alphabet.len())])
+            .collect(),
     }
 }
 
@@ -437,7 +446,10 @@ mod tests {
     #[test]
     fn logo_mask_truncates_to_terminal_width() {
         let cells = logo_cells(art_rows().len(), 40);
-        assert!(!cells.is_empty(), "80-column terminals still get the real art");
+        assert!(
+            !cells.is_empty(),
+            "80-column terminals still get the real art"
+        );
         assert!(cells.iter().all(|&(_, c, _)| c < 40));
     }
 

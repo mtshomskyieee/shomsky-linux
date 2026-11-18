@@ -160,15 +160,16 @@ impl TuiState {
             lines.push("  ···".into());
         }
         if self.thinking == Thinking::Compactify {
-            lines.push(format!("  {}", compactify_wait_line(self.thinking_elapsed())));
+            lines.push(format!(
+                "  {}",
+                compactify_wait_line(self.thinking_elapsed())
+            ));
         }
         lines
     }
 
     pub fn thinking_elapsed(&self) -> Duration {
-        self.thinking_since
-            .map(|t| t.elapsed())
-            .unwrap_or_default()
+        self.thinking_since.map(|t| t.elapsed()).unwrap_or_default()
     }
 
     pub fn set_thinking(&mut self, kind: Thinking) {
@@ -440,7 +441,9 @@ fn datetimestamp_slug() -> String {
     {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == 'T' || c == 'Z')
+            if !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == 'T' || c == 'Z')
             {
                 return s;
             }
@@ -573,16 +576,16 @@ pub async fn run(cfg: &Config, cwd: PathBuf) {
             },
             Some(Key::Up) => state.scroll_up(1, lay.transcript_h, total),
             Some(Key::Down) => state.scroll_down(1, lay.transcript_h, total),
-            Some(Key::PageUp) => {
-                state.scroll_up(lay.transcript_h.saturating_sub(1).max(1), lay.transcript_h, total)
-            }
-            Some(Key::PageDown) => {
-                state.scroll_down(
-                    lay.transcript_h.saturating_sub(1).max(1),
-                    lay.transcript_h,
-                    total,
-                )
-            }
+            Some(Key::PageUp) => state.scroll_up(
+                lay.transcript_h.saturating_sub(1).max(1),
+                lay.transcript_h,
+                total,
+            ),
+            Some(Key::PageDown) => state.scroll_down(
+                lay.transcript_h.saturating_sub(1).max(1),
+                lay.transcript_h,
+                total,
+            ),
             Some(Key::Left) => state.cursor_left(),
             Some(Key::Right) => state.cursor_right(),
             Some(Key::Backspace) => state.backspace(),

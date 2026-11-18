@@ -45,7 +45,7 @@ pub const SPLASH_ART: &str = r#"
 
 /// Whether we should paint splash / colors on this TTY.
 pub fn splash_enabled() -> bool {
-    if no_color() { 
+    if no_color() {
         return false;
     }
     io::stdout().is_terminal()
@@ -75,7 +75,7 @@ pub fn mode_color(mode: Mode) -> &'static str {
         return "";
     }
     match mode {
-        Mode::Agent => "\x1b[36m",        // cyan
+        Mode::Agent => "\x1b[36m",         // cyan
         Mode::Hallucination => "\x1b[35m", // magenta
         Mode::Root => "\x1b[33m",          // yellow
     }
@@ -160,10 +160,7 @@ pub fn print_splash(cfg: &Config) {
     if !drawn {
         let _ = writeln!(out, "{accent}{SPLASH_ART}{r}");
     }
-    let _ = writeln!(
-        out,
-        "  {bold}Shomsky Linux{r}  {dim}{CHARTER}{r}"
-    );
+    let _ = writeln!(out, "  {bold}Shomsky Linux{r}  {dim}{CHARTER}{r}");
     let _ = writeln!(
         out,
         "  {dim}mode{r} {mode_c}{}{r}  {dim}·  :menu  ·  :help  ·  :splash  ·  :sys{r}",
@@ -219,10 +216,7 @@ pub fn print_sys(cfg: &Config, cwd: &std::path::Path) {
     if let Some(desc) = info.as_ref().filter(|i| !i.description.is_empty()) {
         println!("model_desc={}", desc.description);
     }
-    println!(
-        "llm={}  model_id={}",
-        cfg.llm_url, cfg.llm_model
-    );
+    println!("llm={}  model_id={}", cfg.llm_url, cfg.llm_model);
     println!(
         "host={}  path={}  context={}",
         cfg.hostname,
@@ -235,10 +229,7 @@ pub fn print_sys(cfg: &Config, cwd: &std::path::Path) {
 /// True when the line is a local identity query (`uname`, `uname -a`, …).
 pub fn is_sys_command(line: &str) -> bool {
     let t = line.trim();
-    t == "uname"
-        || t == "uname -a"
-        || t == "uname -all"
-        || t.starts_with("uname ")
+    t == "uname" || t == "uname -a" || t == "uname -all" || t.starts_with("uname ")
 }
 
 #[cfg(test)]
@@ -371,4 +362,3 @@ mod tests {
         }
     }
 }
-

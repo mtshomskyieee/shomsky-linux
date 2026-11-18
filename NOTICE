@@ -54,6 +54,14 @@ License: Apache-2.0
 https://github.com/huggingface/candle
 
 ========================================================================
+xterm.js
+========================================================================
+
+The `:emerge` page vendors xterm.js and xterm-addon-fit (MIT).
+Copyright (c) 2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+The copyright notice and permission notice are in assets/emerge/LICENSE.
+
+========================================================================
 Model weights
 ========================================================================
 

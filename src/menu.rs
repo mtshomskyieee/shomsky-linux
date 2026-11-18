@@ -127,13 +127,8 @@ enum MemberVerb {
 /// Nested shomagent flow: type a path, or pick a member.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ShomagentSub {
-    PromptFile {
-        kind: FilePromptKind,
-        buf: String,
-    },
-    PickMember {
-        kind: MemberVerb,
-    },
+    PromptFile { kind: FilePromptKind, buf: String },
+    PickMember { kind: MemberVerb },
 }
 
 /// Pure navigation state — unit-tested without a TTY.
@@ -175,13 +170,19 @@ enum ItemKind {
     /// A saved command. Enter asks to run or delete it.
     Saved(String),
     /// Ledger package. Enter asks to uninstall or reinstall.
-    TrackedPackage { name: String, status: PackageStatus },
+    TrackedPackage {
+        name: String,
+        status: PackageStatus,
+    },
     /// Prompt for a filename, then insert `shomagent … <file>`.
     ShomagentPromptFile(FilePromptKind),
     /// Enter member-picker submenu for ask/talk.
     ShomagentPickMember(MemberVerb),
     /// A concrete opened document chosen for ask/talk.
-    ShomagentMember { id: u32, verb: MemberVerb },
+    ShomagentMember {
+        id: u32,
+        verb: MemberVerb,
+    },
     ExitShell,
     /// Confirm, then wipe `.web_history.json`.
     ClearWebHistory,
@@ -220,10 +221,7 @@ impl MenuState {
             || self.web_clear_confirm
             || self.saved_pick.is_some()
             || self.package_pick.is_some()
-            || matches!(
-                self.shomagent_sub,
-                Some(ShomagentSub::PromptFile { .. })
-            )
+            || matches!(self.shomagent_sub, Some(ShomagentSub::PromptFile { .. }))
     }
 
     fn items(&self) -> Vec<Item> {
@@ -488,10 +486,7 @@ impl MenuState {
         let path = buf.trim();
         if path.is_empty() {
             // Keep prompting until the user types something or Esc.
-            self.shomagent_sub = Some(ShomagentSub::PromptFile {
-                kind,
-                buf,
-            });
+            self.shomagent_sub = Some(ShomagentSub::PromptFile { kind, buf });
             return None;
         }
         let line = match kind {
@@ -620,6 +615,19 @@ fn items_for(
                 label: ":sys".into(),
                 detail: "Identity (mode, model, tools, llm)".into(),
                 kind: ItemKind::RunMeta(":sys"),
+            },
+            Item {
+                label: ":emerge".into(),
+                detail: if crate::emerge::enabled() {
+                    "Serve this shell at http://localhost:1337".into()
+                } else {
+                    "Disabled (ENGRAM_EMERGE=off)".into()
+                },
+                kind: if crate::emerge::enabled() {
+                    ItemKind::RunMeta(":emerge")
+                } else {
+                    ItemKind::InfoOnly
+                },
             },
             Item {
                 label: ":splash".into(),
@@ -763,9 +771,7 @@ fn shomagent_root_items() -> Vec<Item> {
 
 fn member_pick_items(members: &[ShomagentMemberBrief], verb: MemberVerb) -> Vec<Item> {
     let pool: Vec<_> = match verb {
-        MemberVerb::Ask | MemberVerb::Talk => {
-            members.iter().filter(|m| m.is_document()).collect()
-        }
+        MemberVerb::Ask | MemberVerb::Talk => members.iter().filter(|m| m.is_document()).collect(),
         MemberVerb::Stop => members.iter().collect(),
     };
     if pool.is_empty() {
@@ -807,10 +813,7 @@ fn member_pick_items(members: &[ShomagentMemberBrief], verb: MemberVerb) -> Vec<
             Item {
                 label: format!("#{id} {glyph} {name}", id = m.id, name = m.name),
                 detail,
-                kind: ItemKind::ShomagentMember {
-                    id: m.id,
-                    verb,
-                },
+                kind: ItemKind::ShomagentMember { id: m.id, verb },
             }
         })
         .collect()
@@ -938,8 +941,7 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
     let mut esc_armed = false;
     loop {
         draw(state);
-        let typing_filename =
-            matches!(state.shomagent_sub, Some(ShomagentSub::PromptFile { .. }));
+        let typing_filename = matches!(state.shomagent_sub, Some(ShomagentSub::PromptFile { .. }));
         match read_key() {
             Key::Up if !typing_filename => {
                 esc_armed = false;
@@ -1354,10 +1356,7 @@ mod tests {
     fn activate_hallucination() {
         let mut s = MenuState::new(&ctx());
         s.move_down();
-        assert_eq!(
-            s.activate(),
-            Some(MenuAction::SetMode(Mode::Hallucination))
-        );
+        assert_eq!(s.activate(), Some(MenuAction::SetMode(Mode::Hallucination)));
     }
 
     #[test]
@@ -1397,10 +1396,7 @@ mod tests {
         let mut s = MenuState::new(&ctx());
         s.category_idx = Category::Shomagent.index();
         s.item_idx = 0;
-        assert_eq!(
-            s.activate(),
-            Some(MenuAction::RunMeta(":shomagent".into()))
-        );
+        assert_eq!(s.activate(), Some(MenuAction::RunMeta(":shomagent".into())));
     }
 
     #[test]
@@ -1421,7 +1417,9 @@ mod tests {
         }
         assert_eq!(
             s.confirm_filename(),
-            Some(MenuAction::InsertLine("shomagent readwrite notes.md".into()))
+            Some(MenuAction::InsertLine(
+                "shomagent readwrite notes.md".into()
+            ))
         );
         assert!(s.shomagent_sub.is_none());
     }
@@ -1439,7 +1437,9 @@ mod tests {
         s.filename_push('d');
         assert_eq!(
             s.confirm_filename(),
-            Some(MenuAction::InsertLine("shomagent dream seed ideas.md".into()))
+            Some(MenuAction::InsertLine(
+                "shomagent dream seed ideas.md".into()
+            ))
         );
     }
 
@@ -1470,7 +1470,9 @@ mod tests {
         }
         assert_eq!(
             s.confirm_filename(),
-            Some(MenuAction::InsertLine("shomagent refine idea idea.md".into()))
+            Some(MenuAction::InsertLine(
+                "shomagent refine idea idea.md".into()
+            ))
         );
     }
 
@@ -1654,10 +1656,7 @@ mod tests {
 
     #[test]
     fn packages_category_lists_empty() {
-        let dir = std::env::temp_dir().join(format!(
-            "engram-menu-pkgs-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("engram-menu-pkgs-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(".packages.json");
         let mut c = ctx();
@@ -1672,10 +1671,7 @@ mod tests {
 
     #[test]
     fn packages_category_confirms_uninstall() {
-        let dir = std::env::temp_dir().join(format!(
-            "engram-menu-pkgs2-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("engram-menu-pkgs2-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(".packages.json");
         crate::packages::record_from_command(&path, "apk add neovim");
@@ -1696,10 +1692,7 @@ mod tests {
 
     #[test]
     fn packages_category_confirms_reinstall() {
-        let dir = std::env::temp_dir().join(format!(
-            "engram-menu-pkgs3-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("engram-menu-pkgs3-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(".packages.json");
         crate::packages::record_from_command(&path, "apk add htop");
@@ -1732,10 +1725,7 @@ mod tests {
         assert_eq!(labels[0], "open browser");
         assert_eq!(labels[1], "clear history");
         assert!(labels[2].contains("news.ycombinator.com"));
-        assert_eq!(
-            s.activate(),
-            Some(MenuAction::RunMeta(":web".into()))
-        );
+        assert_eq!(s.activate(), Some(MenuAction::RunMeta(":web".into())));
         s.item_idx = 2;
         assert_eq!(
             s.activate(),
@@ -1757,10 +1747,7 @@ mod tests {
     #[test]
     fn sav_cmd_first_use_is_empty() {
         let _guard = crate::modes::engram_env_lock();
-        let home = std::env::temp_dir().join(format!(
-            "shomsky-menu-empty-{}",
-            std::process::id()
-        ));
+        let home = std::env::temp_dir().join(format!("shomsky-menu-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
         let prev = std::env::var_os("ENGRAM_USER_DIR");
@@ -1782,10 +1769,7 @@ mod tests {
     #[test]
     fn sav_cmd_runs_saved_command() {
         let _guard = crate::modes::engram_env_lock();
-        let home = std::env::temp_dir().join(format!(
-            "shomsky-menu-{}",
-            std::process::id()
-        ));
+        let home = std::env::temp_dir().join(format!("shomsky-menu-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let paths = shomsky::LearnPaths::new(&home);
         paths.ensure_dirs().unwrap();
@@ -1824,10 +1808,7 @@ mod tests {
     #[test]
     fn sav_cmd_delete_removes_command() {
         let _guard = crate::modes::engram_env_lock();
-        let home = std::env::temp_dir().join(format!(
-            "shomsky-menu-del-{}",
-            std::process::id()
-        ));
+        let home = std::env::temp_dir().join(format!("shomsky-menu-del-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let paths = shomsky::LearnPaths::new(&home);
         paths.ensure_dirs().unwrap();

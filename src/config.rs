@@ -123,10 +123,10 @@ impl Config {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let mut cfg: Config = toml::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let text =
+            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut cfg: Config =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
 
         if let Ok(alias) = std::env::var("SHOMSKY_MODEL") {
             if !alias.is_empty() {
@@ -157,7 +157,8 @@ impl Config {
             }
         }
         if let Ok(v) = std::env::var("ENGRAM_DIRECT_SHELL") {
-            cfg.direct_shell = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
+            cfg.direct_shell =
+                matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
         }
         if let Ok(p) = std::env::var("ENGRAM_CMDFREQ_PATH") {
             if !p.is_empty() {

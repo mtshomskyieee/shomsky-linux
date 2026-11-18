@@ -74,6 +74,9 @@ pub struct Repl {
     prefill: Option<String>,
     /// Complete line to run on the next loop iteration (no readline).
     pending_input: Option<String>,
+    /// Child of `:emerge`: keep the restored session instead of asking
+    /// hallucination resume/fresh.
+    emerge_resume: bool,
 }
 
 impl Repl {
@@ -93,7 +96,72 @@ impl Repl {
             pending_promote: None,
             prefill: None,
             pending_input: None,
+            emerge_resume: false,
         })
+    }
+
+    /// Continue a session that `:emerge` snapshotted into a browser PTY.
+    pub fn apply_emerge_snapshot(&mut self, snap: crate::emerge::Snapshot) -> Result<()> {
+        if let Ok(mode) = snap.mode.parse::<Mode>() {
+            self.cfg.mode = mode;
+        }
+        if let Ok(style) = snap.tool_style.parse::<ToolStyle>() {
+            self.cfg.tool_style = style;
+        }
+        if std::env::set_current_dir(&snap.cwd).is_ok() {
+            self.cwd = snap.cwd;
+        } else {
+            eprintln!(
+                "emerge: cannot enter {} — staying in {}",
+                snap.cwd.display(),
+                self.cwd.display()
+            );
+        }
+        if let Some(files) = snap.halluc_files {
+            self.halluc_fs = HallucFs::from_files(files);
+        }
+        self.halluc_session_path = snap.halluc_session_path;
+        let system = build_system_prompt(&self.cfg, &self.skills);
+        let mut rest: Vec<ChatMessage> = snap
+            .history
+            .into_iter()
+            .filter(|m| m.role != "system")
+            .collect();
+        self.history = vec![ChatMessage::system(system)];
+        self.history.append(&mut rest);
+        self.trim_history();
+        self.emerge_resume = true;
+        eprintln!("resumed {} session", self.cfg.mode);
+        Ok(())
+    }
+
+    fn emerge_snapshot(&self) -> crate::emerge::Snapshot {
+        crate::emerge::Snapshot {
+            version: 1,
+            mode: self.cfg.mode.as_str().to_string(),
+            tool_style: self.cfg.tool_style.as_str().to_string(),
+            cwd: self.cwd.clone(),
+            history: self.history.clone(),
+            halluc_files: if self.cfg.mode == Mode::Hallucination {
+                Some(self.halluc_fs.files().clone())
+            } else {
+                None
+            },
+            halluc_session_path: self.halluc_session_path.clone(),
+        }
+    }
+
+    async fn emerge(&self) -> Result<()> {
+        let port = crate::emerge::port_from_env();
+        if crate::emerge::already_listening(port) {
+            println!("already emerged — open http://localhost:{port}");
+            return Ok(());
+        }
+        let path = crate::emerge::snapshot_path();
+        crate::emerge::write_snapshot(&path, &self.emerge_snapshot())?;
+        let result = crate::emerge::handoff(&path, &self.cwd).await;
+        let _ = std::fs::remove_file(&path);
+        result
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -117,7 +185,7 @@ impl Repl {
             })),
         );
 
-        if self.cfg.mode == Mode::Hallucination {
+        if self.cfg.mode == Mode::Hallucination && !self.emerge_resume {
             self.enter_hallucination_session(&mut rl)?;
         }
 
@@ -194,14 +262,8 @@ impl Repl {
 
             // `,` / `??` intent → learn plan/confirm/execute.
             if let Some(intent) = learn::parse_intent_prefix(&line) {
-                match learn::run_intent(
-                    intent,
-                    &self.cfg,
-                    &self.llm,
-                    &mut self.cwd,
-                    self.cfg.mode,
-                )
-                .await
+                match learn::run_intent(intent, &self.cfg, &self.llm, &mut self.cwd, self.cfg.mode)
+                    .await
                 {
                     Ok(Some(pending)) => {
                         self.record_command(&pending.command).await;
@@ -305,11 +367,7 @@ impl Repl {
     }
 
     /// Apply a menu outcome. Returns true when the shell should exit.
-    async fn apply_menu_action(
-        &mut self,
-        action: MenuAction,
-        rl: &mut LineEditor,
-    ) -> Result<bool> {
+    async fn apply_menu_action(&mut self, action: MenuAction, rl: &mut LineEditor) -> Result<bool> {
         match action {
             MenuAction::Dismiss => Ok(false),
             MenuAction::SetMode(mode) => {
@@ -397,14 +455,8 @@ impl Repl {
         }
 
         if let Some(intent) = learn::parse_intent_prefix(prompt) {
-            match learn::run_intent(
-                intent,
-                &self.cfg,
-                &self.llm,
-                &mut self.cwd,
-                self.cfg.mode,
-            )
-            .await
+            match learn::run_intent(intent, &self.cfg, &self.llm, &mut self.cwd, self.cfg.mode)
+                .await
             {
                 Ok(Some(pending)) => {
                     self.record_command(&pending.command).await;
@@ -515,11 +567,7 @@ impl Repl {
     }
 
     /// Returns true if the shell should exit.
-    async fn handle_meta(
-        &mut self,
-        line: &str,
-        mut rl: Option<&mut LineEditor>,
-    ) -> Result<bool> {
+    async fn handle_meta(&mut self, line: &str, mut rl: Option<&mut LineEditor>) -> Result<bool> {
         let mut parts = line.split_whitespace();
         let cmd = parts.next().unwrap_or("");
         let arg = parts.next();
@@ -606,7 +654,7 @@ impl Repl {
                         skill.meta.description
                     );
                 }
-            },
+            }
             ":model" => {
                 println!("model alias: {}", self.cfg.model_alias);
                 if let Some(info) = crate::config::lookup_model_info(&self.cfg.model_alias) {
@@ -616,7 +664,8 @@ impl Repl {
                     if !info.description.is_empty() {
                         println!("model desc:  {}", info.description);
                     }
-                } else if let Some(name) = crate::config::active_model_filename(&self.cfg.model_alias)
+                } else if let Some(name) =
+                    crate::config::active_model_filename(&self.cfg.model_alias)
                 {
                     println!("model name:  {name}");
                 }
@@ -631,7 +680,7 @@ impl Repl {
                     "halluc history dir: {}",
                     halluc_session::history_dir().display()
                 );
-            },
+            }
             ":clear" => {
                 if self.cfg.mode == Mode::Hallucination {
                     self.start_hallucination_fresh()?;
@@ -640,7 +689,7 @@ impl Repl {
                     self.rebuild_system_prompt();
                     println!("conversation history cleared");
                 }
-            },
+            }
             ":logs" => {
                 let path = std::env::var("MISTRALRS_LOG")
                     .unwrap_or_else(|_| "/engram/mistralrs.log".into());
@@ -658,16 +707,16 @@ impl Repl {
                     }
                     Err(e) => eprintln!("cannot read {path}: {e}"),
                 }
-            },
+            }
             ":shomagent" | ":agents" => {
                 self.handle_shomagent_meta(arg, parts.next()).await;
-            },
+            }
             ":quickyn" => {
                 crate::quickyn_tui::run(self.cwd.clone()).await;
-            },
+            }
             ":chat" => {
                 crate::chat_tui::run(&self.cfg, self.cwd.clone()).await;
-            },
+            }
             ":web" => {
                 let rest = line.trim_start_matches(":web").trim();
                 let initial = if rest.is_empty() {
@@ -676,7 +725,16 @@ impl Repl {
                     Some(rest.to_string())
                 };
                 crate::web_tui::run(initial).await;
-            },
+            }
+            ":emerge" => {
+                if !crate::emerge::enabled() {
+                    println!("emerge: disabled (ENGRAM_EMERGE=off)");
+                } else if rl.is_none() {
+                    println!("emerge: interactive only — use :emerge at the prompt");
+                } else if let Err(e) = self.emerge().await {
+                    eprintln!("emerge: {e:#}");
+                }
+            }
             other => eprintln!("unknown meta-command '{other}' (try :help)"),
         }
         Ok(false)
@@ -699,37 +757,39 @@ impl Repl {
 
     async fn handle_shomagent_meta(&mut self, arg: Option<&str>, talk_id: Option<&str>) {
         match arg {
-            None | Some("roster") => match shomagent::daemon::rpc(&shomagent::protocol::Request::Roster).await {
-                Ok(shomagent::protocol::Response::Ok { roster, .. }) => {
-                    if roster.is_empty() {
-                        println!("(no shomagent members — try: shomagent watch \"…\")");
-                        return;
+            None | Some("roster") => {
+                match shomagent::daemon::rpc(&shomagent::protocol::Request::Roster).await {
+                    Ok(shomagent::protocol::Response::Ok { roster, .. }) => {
+                        if roster.is_empty() {
+                            println!("(no shomagent members — try: shomagent watch \"…\")");
+                            return;
+                        }
+                        for m in roster {
+                            let glyph = match m.state.as_str() {
+                                "running" => "▶",
+                                "paused" => "⏸",
+                                "read" => "◇",
+                                "readwrite" => "◆",
+                                "refine" => "✦",
+                                "dream" => "~",
+                                _ => "■",
+                            };
+                            println!(
+                                "  #{} {:12} {}  {} finding{}",
+                                m.id,
+                                m.name,
+                                glyph,
+                                m.findings,
+                                if m.findings == 1 { "" } else { "s" }
+                            );
+                        }
                     }
-                    for m in roster {
-                        let glyph = match m.state.as_str() {
-                            "running" => "▶",
-                            "paused" => "⏸",
-                            "read" => "◇",
-                            "readwrite" => "◆",
-                            "refine" => "✦",
-                            "dream" => "~",
-                            _ => "■",
-                        };
-                        println!(
-                            "  #{} {:12} {}  {} finding{}",
-                            m.id,
-                            m.name,
-                            glyph,
-                            m.findings,
-                            if m.findings == 1 { "" } else { "s" }
-                        );
+                    Ok(shomagent::protocol::Response::Err { message }) => {
+                        eprintln!("shomagent: {message}");
                     }
+                    Err(e) => eprintln!("shomagent: {e} (is shomagentd running?)"),
                 }
-                Ok(shomagent::protocol::Response::Err { message }) => {
-                    eprintln!("shomagent: {message}");
-                }
-                Err(e) => eprintln!("shomagent: {e} (is shomagentd running?)"),
-            },
+            }
             Some("talk") => {
                 let Some(id_s) = talk_id else {
                     eprintln!("usage: :shomagent talk <n>");
@@ -744,7 +804,12 @@ impl Repl {
                     Ok(shomagent::protocol::Response::Ok {
                         context: Some(ctx), ..
                     }) => {
-                        println!("#{} {} — {} finding(s)", ctx.id, ctx.name, ctx.findings.len());
+                        println!(
+                            "#{} {} — {} finding(s)",
+                            ctx.id,
+                            ctx.name,
+                            ctx.findings.len()
+                        );
                         if let Some(last) = ctx.findings.last() {
                             println!("{}", last.format_interrupt());
                         }
@@ -946,8 +1011,7 @@ impl Repl {
     async fn run_interactive_shell(&mut self, line: &str) -> Result<()> {
         let home = self.cfg.mode.home_dir();
         // No spinner — it would corrupt the TUI.
-        let out =
-            shell_exec_interactive(&self.cfg.busybox_ash, line, &self.cwd, &home).await?;
+        let out = shell_exec_interactive(&self.cfg.busybox_ash, line, &self.cwd, &home).await?;
         tools::adopt_cwd(&mut self.cwd, out.cwd);
         if !out.output.is_empty() {
             print!("{}", out.output);
@@ -1003,9 +1067,8 @@ impl Repl {
         self.record_command(line).await;
         // Keep conversation coherent for later chat turns.
         self.history.push(ChatMessage::user(line));
-        self.history.push(ChatMessage::assistant_text(format!(
-            "$ {line}\n{result}"
-        )));
+        self.history
+            .push(ChatMessage::assistant_text(format!("$ {line}\n{result}")));
         self.trim_history();
         Ok(())
     }
@@ -1110,35 +1173,32 @@ impl Repl {
             } else {
                 format!("thinking (round {})", round + 1)
             };
-            let response = match with_spinner_cancel(
-                &label,
-                self.llm.chat(&self.history, &schemas, false),
-            )
-            .await
-            {
-                Wait::Cancelled(key) => {
-                    if !committed {
-                        self.restore_turn(saved_history, saved_cwd);
+            let response =
+                match with_spinner_cancel(&label, self.llm.chat(&self.history, &schemas, false))
+                    .await
+                {
+                    Wait::Cancelled(key) => {
+                        if !committed {
+                            self.restore_turn(saved_history, saved_cwd);
+                        }
+                        Self::ack_cancel(key, "thinking");
+                        return Ok(());
                     }
-                    Self::ack_cancel(key, "thinking");
-                    return Ok(());
-                }
-                Wait::Done(Ok(r)) => r,
-                Wait::Done(Err(e)) => {
-                    eprintln!("llm error: {e:#}");
-                    self.history.pop();
-                    return Ok(());
-                }
-            };
+                    Wait::Done(Ok(r)) => r,
+                    Wait::Done(Err(e)) => {
+                        eprintln!("llm error: {e:#}");
+                        self.history.pop();
+                        return Ok(());
+                    }
+                };
 
             // 1) Native OpenAI tool_calls (agent only)
-            let mut calls: Vec<ToolCall> = if self.cfg.mode != Mode::Hallucination
-                && self.cfg.tool_style != ToolStyle::Text
-            {
-                response.tool_calls.clone()
-            } else {
-                vec![]
-            };
+            let mut calls: Vec<ToolCall> =
+                if self.cfg.mode != Mode::Hallucination && self.cfg.tool_style != ToolStyle::Text {
+                    response.tool_calls.clone()
+                } else {
+                    vec![]
+                };
 
             // 2) Text-pattern fallback (agent auto/text only)
             if calls.is_empty()
@@ -1162,15 +1222,16 @@ impl Repl {
                     }
                 }
 
-                let text_style = self.cfg.tool_style == ToolStyle::Text
-                    || response.tool_calls.is_empty();
+                let text_style =
+                    self.cfg.tool_style == ToolStyle::Text || response.tool_calls.is_empty();
                 if text_style {
                     // Text-pattern path: store as plain assistant text + synthetic tool results
-                    self.history.push(ChatMessage::assistant_text(if raw.is_empty() {
-                        format!("(calling {} tools)", calls.len())
-                    } else {
-                        raw
-                    }));
+                    self.history
+                        .push(ChatMessage::assistant_text(if raw.is_empty() {
+                            format!("(calling {} tools)", calls.len())
+                        } else {
+                            raw
+                        }));
                 } else {
                     self.history.push(ChatMessage::assistant_tools(
                         response.content.clone(),
@@ -1246,7 +1307,8 @@ impl Repl {
                 if cleaned.is_empty() {
                     if self.cfg.mode == Mode::Hallucination {
                         // Empty stdout is valid (redirects, empty ls, mkdir, …).
-                        self.history.push(ChatMessage::assistant_text(String::new()));
+                        self.history
+                            .push(ChatMessage::assistant_text(String::new()));
                     } else {
                         println!(
                             "(no useful response — try a clearer question, or a shell command)"
@@ -1258,7 +1320,8 @@ impl Repl {
                     self.history.push(ChatMessage::assistant_text(cleaned));
                 }
             } else if self.cfg.mode == Mode::Hallucination {
-                self.history.push(ChatMessage::assistant_text(String::new()));
+                self.history
+                    .push(ChatMessage::assistant_text(String::new()));
             } else {
                 println!("(no response)");
             }
@@ -1496,6 +1559,7 @@ Meta-commands:
   :quickyn           Split-screen yes/no TUI (question + file left; check/X right)
   :chat              Framed chat with the current model (ctx size, compactify, save)
   :web [url]         Split text browser (page left, chat right; url + chat inputs)
+  :emerge            Serve this session at http://localhost:1337 (Ctrl-C returns)
   :clear             Clear conversation history (hallucination: new session file)
   :exit | :quit      Leave the shell
 
@@ -1515,7 +1579,12 @@ web:
                      Loading a new url or clicking a link clears chat context automatically
   menu → Web         Open browser, revisit sites, clear history
 
-
+emerge:
+  :emerge            Pause this prompt and serve the continuing session as a
+                     terminal page at http://localhost:1337
+                     Ctrl-C on this terminal stops the page and returns here
+                     The host publish is 127.0.0.1:1337 (ENGRAM_EMERGE_PORT overrides)
+                     ENGRAM_EMERGE=off disables the command (also 0|false|no)
 
 Feature menu (TTY):
   :menu | :m         Slip into Modes / Learn / Packages / shomagent / Web / Help / System
@@ -1588,6 +1657,8 @@ Launch parameters (env vars passed into the shell at start — not typed at the 
   ENGRAM_LLM_READY_TRIES=N         Startup model wait budget in seconds (default 600)
   NO_COLOR=1                       Disable splash / prompt colors
   MISTRALRS_LOG_TO_TTY=1           Stream mistralrs logs to the terminal
+  ENGRAM_EMERGE=off                Disable :emerge (also 0|false|no). Default: on
+  ENGRAM_EMERGE_PORT=N             Container port for :emerge (default 1337)
   ENGRAM_MATRIX=auto|always|off    Play the digital-rain intro (TTY)
   ENGRAM_MATRIX_SECS=N             Intro duration, 0-10 (default 5; 0 = skip)
   ENGRAM_MATRIX_GLYPHS=ascii       Use ASCII instead of halfwidth katakana

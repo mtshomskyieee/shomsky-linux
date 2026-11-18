@@ -67,10 +67,8 @@ pub async fn shell_exec(
     cwd: &Path,
     home: &Path,
 ) -> Result<ShellResult> {
-    let cwd_file = std::env::temp_dir().join(format!(
-        "engram-cwd-{}",
-        uuid::Uuid::new_v4().as_simple()
-    ));
+    let cwd_file =
+        std::env::temp_dir().join(format!("engram-cwd-{}", uuid::Uuid::new_v4().as_simple()));
     let _cwd_file = CwdFile(cwd_file.clone());
     // EXIT trap always records pwd (survives `set -e`) and restores the
     // command's exit status. Parent REPL then adopts that directory.
@@ -132,10 +130,7 @@ pub async fn shell_exec(
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
-        out.push_str(&format!(
-            "[exit {}]",
-            output.status.code().unwrap_or(-1)
-        ));
+        out.push_str(&format!("[exit {}]", output.status.code().unwrap_or(-1)));
     }
     if out.is_empty() {
         out.push_str("(no output)");
@@ -198,14 +193,9 @@ mod tests {
         let home = unique_dir("home");
 
         let busybox = Path::new("/bin/busybox");
-        let r = shell_exec(
-            busybox,
-            &format!("cd {}", target.display()),
-            &base,
-            &home,
-        )
-        .await
-        .unwrap();
+        let r = shell_exec(busybox, &format!("cd {}", target.display()), &base, &home)
+            .await
+            .unwrap();
         assert_eq!(r.cwd, target);
 
         let r2 = shell_exec(busybox, "pwd", &r.cwd, &home).await.unwrap();
@@ -227,7 +217,9 @@ mod tests {
             .unwrap();
         assert_eq!(r.cwd, base);
         assert!(
-            r.output.contains("exit") || r.output.contains("can't cd") || r.output.contains("No such"),
+            r.output.contains("exit")
+                || r.output.contains("can't cd")
+                || r.output.contains("No such"),
             "expected failure output: {}",
             r.output
         );

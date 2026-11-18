@@ -70,7 +70,8 @@ pub fn save_session(path: &Path, messages: &[ChatMessage], fs: &HallucFs) -> Res
         fs::create_dir_all(parent)?;
     }
     let session = HallucSession::from_state(messages, fs);
-    let text = serde_json::to_string_pretty(&session).context("serializing hallucination session")?;
+    let text =
+        serde_json::to_string_pretty(&session).context("serializing hallucination session")?;
     fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
@@ -121,7 +122,9 @@ fn datetimestamp_slug() -> String {
     {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == 'T' || c == 'Z')
+            if !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == 'T' || c == 'Z')
             {
                 return s;
             }

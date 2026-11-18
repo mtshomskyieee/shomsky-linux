@@ -118,8 +118,7 @@ pub async fn execute_tool(
     mcp: Option<&McpRegistry>,
     cwd: &mut PathBuf,
 ) -> Result<String> {
-    let args: Value = serde_json::from_str(&call.function.arguments)
-        .unwrap_or_else(|_| json!({}));
+    let args: Value = serde_json::from_str(&call.function.arguments).unwrap_or_else(|_| json!({}));
 
     if McpRegistry::is_mcp_tool(&call.function.name) {
         let result = match mode {
@@ -151,8 +150,8 @@ pub async fn execute_tool(
                 Mode::Agent | Mode::Root => {
                     if is_ignore_llm_command(&command, skills.ignore_llm_commands()) {
                         // Do not capture TUI output into the LLM tool loop.
-                        let name = shell_interactive::primary_command_name(&command)
-                            .unwrap_or("command");
+                        let name =
+                            shell_interactive::primary_command_name(&command).unwrap_or("command");
                         format!(
                             "error: '{name}' is an interactive TUI command listed in \
                              ignore_llm_for_these_commands. Type it at the shell prompt \
@@ -163,10 +162,7 @@ pub async fn execute_tool(
                         let r = shell_exec(&cfg.busybox_ash, &command, cwd, &home).await?;
                         adopt_cwd(cwd, r.cwd);
                         if r.success {
-                            crate::packages::record_from_command(
-                                &cfg.packages_path,
-                                &command,
-                            );
+                            crate::packages::record_from_command(&cfg.packages_path, &command);
                         }
                         match rewritten {
                             Some(cmd) => format!("→ {cmd}\n{}", r.output),

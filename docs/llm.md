@@ -43,7 +43,7 @@ State these as facts when you design a change. Do not route around them.
 | Default inference is in-container mistral.rs. No first-party cloud Anthropic, OpenAI, or Ollama client as the product path. An alternate OpenAI-compatible URL is an operator extension. | ADR-0003 |
 | GGUF weights stay out of the image and the git tree. | ADR-0003, [licensing.md](licensing.md) |
 | Real execution is BusyBox ash. Mode policy stays in the shell. Unknown tool names are ignored, not executed. | ADR-0001 |
-| Extra tools are local stdio MCP children. Config has `command` / `args` / `env` and no `url`. A command containing `://` is refused. No TCP/UDP listen. Compose does not publish MCP ports. | ADR-0004 |
+| Extra tools are local stdio MCP children. Config has `command` / `args` / `env` and no `url`. A command containing `://` is refused. MCP does not listen and Compose does not publish MCP ports. The one shell listen is `:emerge` on TCP 1337, published as `127.0.0.1:1337` only. | ADR-0004, ADR-0012 |
 | Hallucination mode: real tools and MCP calls are quiet no-ops. No disk writes. | ADR-0001, ADR-0004 |
 | Learn installs under `$HOME/bin` only after BATS passes. `/usr/local/bin` is `shomsky publish` only. | ADR-0008 |
 | shomagent members exist only after an explicit attach. `read` cannot `write`. Findings share `/run/shomagent/notify`. Supervision is in-process, not s6/runit. | ADR-0007 |
@@ -62,7 +62,7 @@ Workspace ([ADR-0002](adr/0002-rust-language-and-style.md)):
 | `shomsky` | `crates/shomsky/` | learn registry and `shomsky publish` |
 | `quickyn` | `crates/quickyn/` | yes/no + confidence CLI |
 
-`engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`, `quickyn_tui.rs`, `chat_tui.rs`.
+`engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`, `quickyn_tui.rs`, `chat_tui.rs`, `emerge.rs`.
 
 Put new shell behavior in that map. Add a module or a workspace crate only when the boundary is real.
 
@@ -225,6 +225,7 @@ You are the agent in Shomsky Linux, an Alpine container, talking to a person at 
 | Yes/no CLI | [adr/0009](adr/0009-quickyn-yes-no.md), [quickyn.md](quickyn.md) |
 | Framed chat | [chat.md](chat.md) |
 | Modes, menu, tool protocol | [shell-modes.md](shell-modes.md) |
+| `:emerge` web terminal | [adr/0012](adr/0012-emerge-web-terminal.md), [shell-modes.md](shell-modes.md) |
 | `/engram` and skills | [engram.md](engram.md) |
 | Build, GHCR | [build-and-publish.md](build-and-publish.md) |
 | Human overview | [writeup.md](writeup.md), [README](../README.md) |

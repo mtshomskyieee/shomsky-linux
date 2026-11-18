@@ -5,8 +5,8 @@ use shomsky::{
     PromoteArtifacts,
 };
 
-use crate::llm::{ChatMessage, LlmClient};
 use crate::learn::learn_stub;
+use crate::llm::{ChatMessage, LlmClient};
 use crate::spinner::with_spinner;
 
 /// State kept after a successful learn run so `s` can promote.
@@ -81,8 +81,8 @@ pub async fn promote(
                     return Ok(false);
                 }
             };
-            let work2 =
-                std::env::temp_dir().join(format!("shomsky-promote-{name}-r2-{}", std::process::id()));
+            let work2 = std::env::temp_dir()
+                .join(format!("shomsky-promote-{name}-r2-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&work2);
             if let Err(e2) = try_bats_gate(&work2, name, &artifacts) {
                 let _ = std::fs::remove_dir_all(&work);
@@ -95,13 +95,7 @@ pub async fn promote(
     }
     let _ = std::fs::remove_dir_all(&work);
 
-    install_artifacts(
-        &paths,
-        name,
-        &pending.intent,
-        &pending.command,
-        &artifacts,
-    )?;
+    install_artifacts(&paths, name, &pending.intent, &pending.command, &artifacts)?;
 
     // Seed cmdfreq so tab-complete sees the new command immediately.
     seed_cmdfreq(name);
@@ -121,11 +115,7 @@ pub async fn promote(
     Ok(true)
 }
 
-fn try_bats_gate(
-    work: &std::path::Path,
-    name: &str,
-    artifacts: &PromoteArtifacts,
-) -> Result<()> {
+fn try_bats_gate(work: &std::path::Path, name: &str, artifacts: &PromoteArtifacts) -> Result<()> {
     let (_script, bats_path) = write_workdir(work, name, artifacts)?;
     run_bats(&bats_path)
 }
@@ -154,10 +144,7 @@ async fn fetch_artifacts(
         )
     };
 
-    let messages = vec![
-        ChatMessage::system(PROMOTE_SYSTEM),
-        ChatMessage::user(user),
-    ];
+    let messages = vec![ChatMessage::system(PROMOTE_SYSTEM), ChatMessage::user(user)];
     let raw = llm
         .chat_text_max(&messages, 4096)
         .await
@@ -272,9 +259,7 @@ fn fallback_script(name: &str, command: &str) -> String {
 }
 
 fn fallback_bats(name: &str) -> String {
-    format!(
-        "@test \"{name} help exits 0\" {{\n  run {name} --help\n  [ \"$status\" -eq 0 ]\n}}\n"
-    )
+    format!("@test \"{name} help exits 0\" {{\n  run {name} --help\n  [ \"$status\" -eq 0 ]\n}}\n")
 }
 
 fn deserialize_promote(json_str: &str) -> Result<PromoteJson> {
@@ -283,7 +268,9 @@ fn deserialize_promote(json_str: &str) -> Result<PromoteJson> {
         Err(e) => {
             // Models emit shell escapes such as `\;` inside script/bats strings.
             let repaired = super::plan::repair_invalid_json_escapes(json_str);
-            serde_json::from_str(&repaired).map_err(|_| e).context("deserialize promote")
+            serde_json::from_str(&repaired)
+                .map_err(|_| e)
+                .context("deserialize promote")
         }
     }
 }
@@ -333,7 +320,8 @@ mod tests {
         let raw = "{\n  \"script\": \"#!/bin/sh\\nfind -type d -exec du -b {} \\\\;\\n\",\n  \"man\": \".TH X 1\\n\",\n  \"bats\": \"@test \\\"t\\\" { true; }\\n\",\n  \"description\": \"sizes\"\n}";
         // The fixture above is already valid JSON (`\\;`). Build an invalid one.
         let invalid = raw.replace("\\\\;", "\\;");
-        let a = parse_promote_json(&invalid, "list-the-size", "find -type d -exec du -b {} \\;").unwrap();
+        let a = parse_promote_json(&invalid, "list-the-size", "find -type d -exec du -b {} \\;")
+            .unwrap();
         assert!(a.script.contains("\\;"), "{:?}", a.script);
     }
 
@@ -359,7 +347,11 @@ mod tests {
         assert!(a.script.contains(command), "{:?}", a.script);
         assert!(a.script.contains("--help"), "{:?}", a.script);
         assert!(a.bats.contains("@test"), "{:?}", a.bats);
-        assert!(a.bats.contains("run list-github-files --help"), "{:?}", a.bats);
+        assert!(
+            a.bats.contains("run list-github-files --help"),
+            "{:?}",
+            a.bats
+        );
         assert!(a.man.contains("LIST-GITHUB-FILES"));
     }
 

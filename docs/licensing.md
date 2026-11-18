@@ -68,6 +68,14 @@ Do not use the Alpine logo without permission from the Alpine Linux project.
 | Candle (Hugging Face) | Apache-2.0 |
 | engram-shell dependencies | see each crate (MIT / Apache-2.0 preferred) |
 
+## xterm.js (`:emerge` page)
+
+The browser terminal served by `:emerge` vendors
+[xterm.js](https://github.com/xtermjs/xterm.js) 5.3.0 and
+`xterm-addon-fit` 0.8.0. Both are **MIT**. The copyright notice and
+permission notice are kept at [assets/emerge/LICENSE](../assets/emerge/LICENSE)
+and recorded in [NOTICE](../NOTICE).
+
 ## Model weights
 
 GGUF weights are **never redistributed** in the image or git repository. They

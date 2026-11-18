@@ -7,9 +7,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use quickyn::{
-    decide, file_size_warning, should_warn_file_size, DecideError, Decision, Verdict,
-};
+use quickyn::{decide, file_size_warning, should_warn_file_size, DecideError, Decision, Verdict};
 
 use crate::term::{self, RawGuard};
 use crate::ui;
@@ -38,11 +36,7 @@ const CHECK_MEDIUM: &[&str] = &[
     r"   ###",
 ];
 
-const CHECK_SMALL: &[&str] = &[
-    r"   #",
-    r"# #",
-    r" #",
-];
+const CHECK_SMALL: &[&str] = &[r"   #", r"# #", r" #"];
 
 const X_LARGE: &[&str] = &[
     r"####        ####",
@@ -57,25 +51,11 @@ const X_LARGE: &[&str] = &[
     r"####        ####",
 ];
 
-const X_MEDIUM: &[&str] = &[
-    r"##    ##",
-    r" ##  ##",
-    r"  ####",
-    r" ##  ##",
-    r"##    ##",
-];
+const X_MEDIUM: &[&str] = &[r"##    ##", r" ##  ##", r"  ####", r" ##  ##", r"##    ##"];
 
-const X_SMALL: &[&str] = &[
-    r"# #",
-    r" #",
-    r"# #",
-];
+const X_SMALL: &[&str] = &[r"# #", r" #", r"# #"];
 
-const THINKING_GLYPH: &[&str] = &[
-    r" . . . ",
-    r". . . .",
-    r" . . . ",
-];
+const THINKING_GLYPH: &[&str] = &[r" . . . ", r". . . .", r" . . . "];
 
 /// Pick check / X art sized for the glyph pane height.
 pub fn glyph_lines(decision: Decision, pane_h: usize) -> &'static [&'static str] {
@@ -573,9 +553,8 @@ pub async fn run(cwd: PathBuf) {
                         } else {
                             state.set_thinking();
                             let fb = file_body;
-                            pending = Some(tokio::spawn(async move {
-                                decide(&q, fb.as_deref()).await
-                            }));
+                            pending =
+                                Some(tokio::spawn(async move { decide(&q, fb.as_deref()).await }));
                         }
                     }
                 }
@@ -728,16 +707,7 @@ fn draw(state: &TuiState) {
         let y = row + 2; // 1-based screen row under title
         let left_text = left_cell(state, row, body_rows, left_w, &inv, r, dim);
         let right_text = right_cell(
-            state,
-            row,
-            glyph_h,
-            status_h,
-            right_w,
-            green,
-            red,
-            dim,
-            bold,
-            r,
+            state, row, glyph_h, status_h, right_w, green, red, dim, bold, r,
         );
         let left = pad_visible(&left_text, left_w);
         let right = pad_visible(&right_text, right_w);
@@ -845,7 +815,9 @@ fn browser_cell(
         return String::new();
     }
     let idx = row - list_start;
-    let scroll = browser.selected.saturating_sub(body_rows.saturating_sub(list_start + 1));
+    let scroll = browser
+        .selected
+        .saturating_sub(body_rows.saturating_sub(list_start + 1));
     let i = idx + scroll;
     if let Some(e) = browser.entries.get(i) {
         let mark = if e.is_dir { "/" } else { " " };
@@ -1071,12 +1043,7 @@ mod tests {
             .iter()
             .map(|line| {
                 let line_pad = block_w - line.chars().count();
-                format!(
-                    "{}{}{}",
-                    " ".repeat(left_pad),
-                    line,
-                    " ".repeat(line_pad)
-                )
+                format!("{}{}{}", " ".repeat(left_pad), line, " ".repeat(line_pad))
             })
             .collect();
         // Every rendered line is exactly `width` or `width-1` (odd leftover) chars…
@@ -1199,7 +1166,11 @@ mod tests {
         let mut s = TuiState::new(dir.clone());
         s.attach_file(path.clone());
         assert!(s.file_warn.as_ref().unwrap().contains("1001"));
-        assert!(s.file_warn.as_ref().unwrap().contains("may not be a quick decision"));
+        assert!(s
+            .file_warn
+            .as_ref()
+            .unwrap()
+            .contains("may not be a quick decision"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

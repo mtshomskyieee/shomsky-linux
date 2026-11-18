@@ -127,6 +127,8 @@ trap cleanup EXIT
 
 status=0
 # Remaining args are the command inside the container.
+# :emerge listens on 1337 inside the container. Publish it on host loopback
+# only — `compose run` does not publish service ports unless asked.
 # shellcheck disable=SC2086
-docker compose run --name "$LIVE" ${compose_run_args} shomsky "$@" || status=$?
+docker compose run --name "$LIVE" -p 127.0.0.1:1337:1337 ${compose_run_args} shomsky "$@" || status=$?
 exit "$status"
