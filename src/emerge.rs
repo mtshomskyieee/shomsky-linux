@@ -53,6 +53,18 @@ pub struct Snapshot {
     pub halluc_session_path: Option<PathBuf>,
 }
 
+/// `ENGRAM_EMERGE=0|off|false|no` refuses `:emerge`. Unset (and any other
+/// value) leaves the page available.
+pub fn enabled() -> bool {
+    !matches!(
+        std::env::var("ENGRAM_EMERGE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "0" | "off" | "false" | "no"
+    )
+}
+
 pub fn port_from_env() -> u16 {
     std::env::var("ENGRAM_EMERGE_PORT")
         .ok()
@@ -139,6 +151,11 @@ pub async fn start(opts: ServeOpts) -> Result<Running> {
 
 /// Bind, print the URL, and block until Ctrl-C. Then stop the child.
 pub async fn handoff(snapshot: &Path, cwd: &Path) -> Result<()> {
+    if !enabled() {
+        println!("emerge: disabled (ENGRAM_EMERGE=off)");
+        let _ = io::stdout().flush();
+        return Ok(());
+    }
     let port = port_from_env();
     if already_listening(port) {
         println!("already emerged — open http://localhost:{port}");
@@ -665,6 +682,24 @@ fn block_on_sigint() -> Result<()> {
 mod tests {
     use super::*;
     use futures_util::StreamExt;
+
+    #[test]
+    fn off_switch_disables_emerge() {
+        let _guard = crate::modes::engram_env_lock();
+        let previous = std::env::var("ENGRAM_EMERGE").ok();
+        std::env::remove_var("ENGRAM_EMERGE");
+        assert!(enabled());
+        for value in ["off", "OFF", "0", "false", "no"] {
+            std::env::set_var("ENGRAM_EMERGE", value);
+            assert!(!enabled(), "{value} should disable emerge");
+        }
+        std::env::set_var("ENGRAM_EMERGE", "on");
+        assert!(enabled());
+        match previous {
+            Some(value) => std::env::set_var("ENGRAM_EMERGE", value),
+            None => std::env::remove_var("ENGRAM_EMERGE"),
+        }
+    }
 
     #[test]
     fn index_page_mounts_terminal() {

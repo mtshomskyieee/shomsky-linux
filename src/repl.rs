@@ -727,7 +727,9 @@ impl Repl {
                 crate::web_tui::run(initial).await;
             }
             ":emerge" => {
-                if rl.is_none() {
+                if !crate::emerge::enabled() {
+                    println!("emerge: disabled (ENGRAM_EMERGE=off)");
+                } else if rl.is_none() {
                     println!("emerge: interactive only — use :emerge at the prompt");
                 } else if let Err(e) = self.emerge().await {
                     eprintln!("emerge: {e:#}");
@@ -1582,6 +1584,7 @@ emerge:
                      terminal page at http://localhost:1337
                      Ctrl-C on this terminal stops the page and returns here
                      The host publish is 127.0.0.1:1337 (ENGRAM_EMERGE_PORT overrides)
+                     ENGRAM_EMERGE=off disables the command (also 0|false|no)
 
 Feature menu (TTY):
   :menu | :m         Slip into Modes / Learn / Packages / shomagent / Web / Help / System
@@ -1654,6 +1657,8 @@ Launch parameters (env vars passed into the shell at start — not typed at the 
   ENGRAM_LLM_READY_TRIES=N         Startup model wait budget in seconds (default 600)
   NO_COLOR=1                       Disable splash / prompt colors
   MISTRALRS_LOG_TO_TTY=1           Stream mistralrs logs to the terminal
+  ENGRAM_EMERGE=off                Disable :emerge (also 0|false|no). Default: on
+  ENGRAM_EMERGE_PORT=N             Container port for :emerge (default 1337)
   ENGRAM_MATRIX=auto|always|off    Play the digital-rain intro (TTY)
   ENGRAM_MATRIX_SECS=N             Intro duration, 0-10 (default 5; 0 = skip)
   ENGRAM_MATRIX_GLYPHS=ascii       Use ASCII instead of halfwidth katakana

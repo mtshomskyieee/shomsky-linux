@@ -618,8 +618,16 @@ fn items_for(
             },
             Item {
                 label: ":emerge".into(),
-                detail: "Serve this shell at http://localhost:1337".into(),
-                kind: ItemKind::RunMeta(":emerge"),
+                detail: if crate::emerge::enabled() {
+                    "Serve this shell at http://localhost:1337".into()
+                } else {
+                    "Disabled (ENGRAM_EMERGE=off)".into()
+                },
+                kind: if crate::emerge::enabled() {
+                    ItemKind::RunMeta(":emerge")
+                } else {
+                    ItemKind::InfoOnly
+                },
             },
             Item {
                 label: ":splash".into(),

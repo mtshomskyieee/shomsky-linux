@@ -16,7 +16,8 @@ port for the human, not a tool transport.
 ## Decision
 
 - `:emerge` is an interactive meta-command. Under `--script`, pipes, and
-  `--once` it refuses.
+  `--once` it refuses. `ENGRAM_EMERGE=off` (also `0`, `false`, `no`) disables
+  it; unset leaves it available.
 - The parent shell writes a snapshot (mode, tool style, working directory,
   conversation, and in hallucination mode the virtual filesystem) and binds
   `0.0.0.0:1337` inside the container (`ENGRAM_EMERGE_PORT` overrides).

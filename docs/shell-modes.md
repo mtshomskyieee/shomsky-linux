@@ -120,7 +120,8 @@ Ctrl-C on the container TTY stops the page and returns to the prompt. A second
 server. Under `--script`, pipes, and `--once` the command refuses.
 
 The interactive launcher publishes **127.0.0.1:1337** only. `ENGRAM_EMERGE_PORT`
-changes the container port. This listen is only for emerge; MCP stays stdio.
+changes the container port. `ENGRAM_EMERGE=off` (also `0`, `false`, `no`)
+disables the command. This listen is only for emerge; MCP stays stdio.
 
 ## Tool styles
 
