@@ -208,7 +208,7 @@ Skills are markdown with YAML frontmatter: name, description, always_load.
 - learn                              on demand via load_skill.
 - ignore_llm_for_these_commands      on demand. The shell also reads it as the TUI bypass list.
 
-:menu or :m on a color TTY covers Modes, Learn, Packages, shomagent, Web, shomloop, Help, and System. Under shomagent: list agents, type a filename for readwrite / dream seed / refine idea, or pick an opened document for ask / talk. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. :help is the same map as text. Both stay available from the ready line.
+:menu or :m on a color TTY covers Help, Learn, Modes, Packages, Scripts, shomagent, shomloop, System, and Web. Under shomagent: list agents, type a filename for readwrite / dream seed / refine idea, or pick an opened document for ask / talk. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. :help is the same map as text. Both stay available from the ready line.
 
 
 IF YOU ARE CHANGING THE REPOSITORY

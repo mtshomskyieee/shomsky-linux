@@ -192,7 +192,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 | `learn` | on demand via `load_skill` |
 | `ignore_llm_for_these_commands` | on demand; the shell also reads it as the TUI bypass list |
 
-`:menu` / `:m` on a color TTY: Modes, Learn, Packages, shomagent, Web, shomloop, Help, System. Under shomagent: list agents, type a filename for `readwrite` / `dream seed` / `refine idea`, or pick an opened document for `ask` / `talk`. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. `:help` is the same map as text. Both stay available from the ready line.
+`:menu` / `:m` on a color TTY: Help, Learn, Modes, Packages, Scripts, shomagent, shomloop, System, Web. Under shomagent: list agents, type a filename for `readwrite` / `dream seed` / `refine idea`, or pick an opened document for `ask` / `talk`. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. `:help` is the same map as text. Both stay available from the ready line.
 
 ## If you are changing the repository
 

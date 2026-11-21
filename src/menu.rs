@@ -57,41 +57,42 @@ pub struct MenuContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
-    Modes,
-    Learn,
-    SavCmd,
-    Packages,
-    Shomagent,
-    Web,
-    Shomloop,
     Help,
+    Learn,
+    Modes,
+    Packages,
+    Scripts,
+    Shomagent,
+    Shomloop,
     System,
+    Web,
 }
 
 impl Category {
+    /// Left column, alphabetical by label (case-insensitive).
     pub const ALL: [Category; 9] = [
-        Category::Modes,
-        Category::Learn,
-        Category::SavCmd,
-        Category::Packages,
-        Category::Shomagent,
-        Category::Web,
-        Category::Shomloop,
         Category::Help,
+        Category::Learn,
+        Category::Modes,
+        Category::Packages,
+        Category::Scripts,
+        Category::Shomagent,
+        Category::Shomloop,
         Category::System,
+        Category::Web,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Category::Modes => "Modes",
-            Category::Learn => "Learn",
-            Category::SavCmd => "sav-cmd",
-            Category::Packages => "Packages",
-            Category::Shomagent => "shomagent",
-            Category::Web => "Web",
-            Category::Shomloop => "shomloop",
             Category::Help => "Help",
+            Category::Learn => "Learn",
+            Category::Modes => "Modes",
+            Category::Packages => "Packages",
+            Category::Scripts => "Scripts",
+            Category::Shomagent => "shomagent",
+            Category::Shomloop => "shomloop",
             Category::System => "System",
+            Category::Web => "Web",
         }
     }
 
@@ -669,7 +670,7 @@ fn items_for(
             }
             v
         }
-        Category::SavCmd => saved_command_items(),
+        Category::Scripts => saved_command_items(),
         Category::Packages => package_items(packages_path),
         Category::Shomagent => shomagent_root_items(),
         Category::Web => web_items(web_history),
@@ -682,7 +683,7 @@ fn items_for(
             },
             Item {
                 label: "this menu".into(),
-                detail: ":menu / :m — modes, learn, packages, agents, shomloop, system".into(),
+                detail: ":menu / :m — Help, Learn, Modes, Packages, Scripts, …".into(),
                 kind: ItemKind::InfoOnly,
             },
         ],
@@ -1324,7 +1325,7 @@ fn draw(state: &MenuState) {
         buf.push_str(&cat_text);
         let _ = write!(buf, "{cyan}│{r}");
 
-        // Item column. Scroll so a long sav-cmd list keeps the selection visible.
+        // Item column. Scroll so a long Scripts list keeps the selection visible.
         let item_offset = state.item_idx.saturating_sub(body_rows.saturating_sub(1));
         let item_text = if let Some(item) = items.get(row + item_offset) {
             let selected = row + item_offset == state.item_idx;
@@ -1513,6 +1514,7 @@ mod tests {
     #[test]
     fn activate_sets_mode() {
         let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Modes.index();
         // Modes category, first item = agent
         assert_eq!(s.activate(), Some(MenuAction::SetMode(Mode::Agent)));
     }
@@ -1520,6 +1522,7 @@ mod tests {
     #[test]
     fn activate_hallucination() {
         let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Modes.index();
         s.move_down();
         assert_eq!(s.activate(), Some(MenuAction::SetMode(Mode::Hallucination)));
     }
@@ -1530,6 +1533,18 @@ mod tests {
         s.category_idx = Category::Learn.index();
         s.item_idx = 0;
         assert_eq!(s.activate(), Some(MenuAction::InsertLine(", ".into())));
+    }
+
+    #[test]
+    fn categories_are_alphabetical() {
+        assert_eq!(Category::Scripts.label(), "Scripts");
+        let labels: Vec<_> = Category::ALL
+            .iter()
+            .map(|c| c.label().to_ascii_lowercase())
+            .collect();
+        let mut sorted = labels.clone();
+        sorted.sort();
+        assert_eq!(labels, sorted);
     }
 
     #[test]
@@ -1997,7 +2012,7 @@ mod tests {
         let prev = std::env::var_os("ENGRAM_USER_DIR");
         std::env::set_var("ENGRAM_USER_DIR", &home);
         let mut s = MenuState::new(&ctx());
-        s.category_idx = Category::SavCmd.index();
+        s.category_idx = Category::Scripts.index();
         s.item_idx = 0;
         let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
         let action = s.activate();
@@ -2037,7 +2052,7 @@ mod tests {
         let prev = std::env::var_os("ENGRAM_USER_DIR");
         std::env::set_var("ENGRAM_USER_DIR", &home);
         let mut s = MenuState::new(&ctx());
-        s.category_idx = Category::SavCmd.index();
+        s.category_idx = Category::Scripts.index();
         s.item_idx = 0;
         assert_eq!(s.activate(), None);
         let action = s.confirm_saved(false);
@@ -2076,7 +2091,7 @@ mod tests {
         let prev = std::env::var_os("ENGRAM_USER_DIR");
         std::env::set_var("ENGRAM_USER_DIR", &home);
         let mut s = MenuState::new(&ctx());
-        s.category_idx = Category::SavCmd.index();
+        s.category_idx = Category::Scripts.index();
         s.item_idx = 0;
         assert_eq!(s.activate(), None);
         assert_eq!(s.confirm_saved(true), None);
