@@ -1,0 +1,799 @@
+SHOMSKY LINUX
+Operator manual for humans and language models
+File: llm.txt (repository root)
+
+This file says how to run the product. It is not an architecture decision.
+When it disagrees with an Accepted ADR, the ADR wins.
+Contributor and in-shell-agent map: docs/llm.txt (markdown twin docs/llm.md).
+Human overview: README.md. License inventory: docs/licensing.md. NOTICE.
+
+
+WHAT THIS IS
+
+Shomsky Linux is an Alpine-derived container. The linux shell is the Rust
+binary engram-shell. Inference is local mistral.rs on 127.0.0.1:1234
+(OpenAI-compatible HTTP, CPU). GGUF weights download once into a Docker
+volume. They are not in the image or the git tree.
+
+The container is the sandbox. Agent mode can run real BusyBox ash and write
+files inside the container and its bind mounts. The model proposes tools.
+It cannot change its own mode.
+
+
+1. START, STOP, RUN, BUILD
+
+Start from a published image (no local compile):
+
+    mkdir -p engram/user .hallucination_shell_history
+    docker pull ghcr.io/mtshomskyieee/shomsky-linux:latest
+    docker run -it --rm \
+      -p 127.0.0.1:1337:1337 \
+      -v shomsky-models:/engram/models \
+      -v "$PWD/engram/user:/engram/user" \
+      -v "$PWD/.hallucination_shell_history:/engram/.hallucination_shell_history" \
+      -w /engram/user \
+      -e SHOMSKY_MODEL=tiny \
+      ghcr.io/mtshomskyieee/shomsky-linux:latest
+
+Pin a release with ghcr.io/mtshomskyieee/shomsky-linux:0.1.0 (or the VERSION
+file's tag). Package page:
+https://github.com/mtshomskyieee/shomsky-linux/pkgs/container/shomsky-linux
+
+First start needs network (Hugging Face). Later starts reuse the
+shomsky-models volume. CPU cold start can take minutes. Exit the shell with
+:exit, :quit, or Ctrl+D. The entrypoint then stops shomagentd and mistralrs.
+
+Start from this repository (recommended):
+
+    ./start-shomsky-linux-shell.sh
+
+That script, in order:
+
+    1. Writes SHOMSKY_MODEL into .env via ./choose_llm.sh when .env has none.
+    2. On macOS, starts Colima when the colima command exists and is down.
+    3. Uses a local image, or pulls a registry reference (name contains /).
+       SHOMSKY_BUILD=1 compiles when the image is missing.
+       Default image name: shomskylinux:dev (override SHOMSKY_IMAGE).
+    4. Asks once whether /engram/user is your home directory or ./engram/user.
+       Later starts reuse .env. Ask again with:
+         ./start-shomsky-linux-shell.sh reask
+       Non-interactive starts with no saved choice use ./engram/user.
+    5. Asks agent (1) or hallucination (2), then execs ./agent_sh.sh or
+       ./halluc_sh.sh.
+
+Other launchers (real TTY, same container lifecycle):
+
+    ./agent_sh.sh              ENGRAM_MODE=agent
+    ./halluc_sh.sh             ENGRAM_MODE=hallucination
+    ./scripts/shell.sh         agent by default; passes --build to Compose
+
+Do not use bare `docker compose up` for the shell. Compose's helper menu
+(`w Enable Watch`) captures keystrokes, so you never get an engram-shell
+prompt. If you insist:
+
+    COMPOSE_MENU=false SHOMSKY_MODEL=tiny docker compose up --menu=false
+
+Copy .env.example to .env to set the model, tool style, and memory limits
+without editing docker-compose.yml. ./dynamic_config.sh also writes .env.
+Restart the container to apply env changes. :splash replays the intro.
+
+Inside the container the process is engram-shell. Non-interactive:
+
+    engram-shell --once "ls"
+    engram-shell --script /path/to/lines.txt
+    engram-shell --mode root
+    engram-shell --self-test
+    engram-shell --reinstall-missing
+
+--once is a single prompt. It uses the same line dispatch as the prompt
+(section 2). --reinstall-missing installs ledger packages that apk reports
+missing, then exits. The entrypoint calls it on each start unless
+ENGRAM_SKIP_PACKAGE_RESTORE=1.
+
+--script reads a file, one command or prompt per line. History persists
+across lines, including the hallucination virtual filesystem.
+
+    Trim the line first.
+    An empty line is skipped.
+    A line whose first character is # is skipped. A shell command cannot
+    start with #. This is not a shell comment syntax inside a command.
+    A line whose first character is : is a meta-command with no TTY.
+        :exit, :quit, and :q stop the file. Later lines do not run.
+        :menu prints "menu: interactive only".
+        :emerge prints "emerge: interactive only".
+        :chat prints "chat: interactive only".
+        :web prints "web: interactive only".
+        :quickyn prints "quickyn: interactive only" and names the quickyn binary.
+        Every non-TUI meta-command in the list below still runs
+        (:help, :sys, :splash, :mode, :tools, :skills, :model, :top,
+        :packages, :logs, :shomagent, :clear, :exit, and their aliases).
+    Any other line is one turn. Stderr shows "# [n] <line>" before it runs.
+    ENGRAM_SCRIPT_MARKERS=1 (also true, yes, on) wraps that turn's stdout:
+
+        <<<ENGRAM_TURN n>>>
+        <stdout>
+        <<<ENGRAM_END>>>
+
+A non-zero BusyBox status does not fail engram-shell. The output contains
+a line "[exit N]" and --once / --script still exit 0. engram-shell exits
+non-zero when the process itself fails (the script path cannot be read,
+config or skills fail to load). A direct shell line is also appended to
+the conversation as "$ <line>" plus that output, so a later natural-language
+line in the same script can see it.
+
+Stop:
+
+    Inside the prompt:  :exit   or   :quit   or   Ctrl+D
+    :emerge page:       Ctrl-C on the container TTY returns to the prompt.
+                        It does not stop the container.
+    Container:          leaving the shell ends the process. The entrypoint
+                        kills shomagentd and mistralrs. restart policy is "no".
+
+Interactive launchers name the container shomsky-live
+(SHOMSKY_LIVE_CONTAINER). A second start while it is running fails with
+"container shomsky-live is already running". On exit, if /lib/apk/db changed,
+the launcher commits the container to the local image shomskylinux:installed
+(SHOMSKY_INSTALLED_IMAGE) and removes the container. If the commit fails, the
+container is left for the next launch. A stopped leftover is committed on the
+next start before a new container is created.
+
+Force-stop a stuck session from the host:
+
+    docker stop shomsky-live
+    docker rm -f shomsky-live
+
+`docker compose run --rm` (the test services) does not commit packages.
+
+Build the image:
+
+    Docker 24+ with BuildKit.
+    ./build.sh
+    # or
+    docker compose build shomsky
+    # or, only when the tag is not already local:
+    SHOMSKY_BUILD=1 ./start-shomsky-linux-shell.sh
+
+./scripts/shell.sh sets SHOMSKY_COMPOSE_RUN_ARGS=--build, so the base image
+rebuilds before the session. --build tags the base image, never
+shomskylinux:installed. When the installed image's label shomsky.base-id
+matches the base image id, the next session starts from shomskylinux:installed
+so apk packages survive.
+
+First mistral.rs compile is long (often 20-40 minutes) and wants several GB
+of RAM. On a small builder:
+
+    export CARGO_BUILD_JOBS=1
+
+Defaults: ALPINE_VERSION=3.24, MISTRALRS_REF=v0.9.0, CARGO_BUILD_JOBS=2.
+The build needs network to crates.io and GitHub. Host `cargo test` is optional
+and is not how you run the shell. Rust edition 2021, rust-version 1.74.
+
+Publish (maintainers): tag-driven GitHub Actions to
+ghcr.io/mtshomskyieee/shomsky-linux. Manual: docs/build-and-publish.md.
+The product version is the single line in VERSION. :sys prints version=.
+
+
+2. INSIDE THE SHELL — SCRIPTING VERBS
+
+Prompt shape: mode:path [workspace]>
+Example: agent:~/work [engram]> or agent:~ [home]>
+Colors on a TTY: cyan agent, magenta hallucination, yellow root.
+In agent mode, cd ~ is /engram/user. In root mode, cd ~ is /root.
+Esc cancels in-flight thinking or a tool on a TTY.
+Quote a frequency or a question when it contains spaces.
+
+Dispatch order. The interactive prompt, --once, and each --script turn use
+this order. Source: src/repl.rs (run_once, run_script, handle_meta),
+src/packages.rs, src/tools/shell_detect.rs.
+
+    1. A line that starts with : is a meta-command. It never reaches ash
+       or the model. Unknown names print an error and suggest :help.
+    2. A line that starts with , or ?? is learn intent. Agent mode plans
+       it. Any other mode prints an error and does not run the line.
+       A bare comma or bare ?? does not match.
+    3. Then the mode:
+
+       agent
+         a. A basename listed in
+            /engram/skills/ignore_llm_for_these_commands.md
+            inherits the TTY (top, mc, editors). No LLM.
+         b. A package install line is rewritten to `apk add` and run.
+            Named `shominstall`, `install NAME`, and `apt-get install NAME`
+            match. See shominstall below. This step runs before the
+            chatty-prefix check, so `please shominstall git` still installs.
+         c. Bare `shominstall` (no package) is sent to the model with a
+            steering prompt. It is not executed.
+         d. If direct shell is on (default) and the line looks like a
+            command, BusyBox ash runs it immediately. cd persists.
+            The line does not wait on the model.
+         e. Otherwise the line goes to the model.
+
+       root
+         a. The same TUI ignore list inherits the TTY.
+         b. The same package rewrite runs `apk add`.
+         c. Every other line is BusyBox. No LLM.
+            Refused when allow_root_mode is false.
+
+       hallucination
+         Common builtins run on the in-memory filesystem (/virt).
+         Other lines go to the model with no tool schemas.
+         Real tools and MCP calls are no-ops. No disk writes.
+         The direct-shell allowlist is not used.
+
+Direct shell is on unless ENGRAM_DIRECT_SHELL is 0, false, no, or off.
+Turning it off skips step d only. Learn, meta-commands, and the package
+rewrite still run.
+
+A line looks like a command when any of these hold
+(src/tools/shell_detect.rs):
+
+    It contains | > < && || ; $( or a backtick.
+    Or the first token's basename is a learned command: a file at
+    ~/bin/<name> whose name is ASCII letters, digits, hyphen, or underscore.
+    Or that basename is in the allowlist. First-party names on it:
+        shomagent  shomsky  quickyn  shomloop
+    Also the BusyBox-shaped names: ls cd pwd cat echo mkdir rm cp mv touch
+    head tail grep find wc uname whoami id env export apk chmod chown ln
+    which git sh ash wget curl tar and the rest of the list in that file.
+    shominstall is not on this list. The package parser owns it.
+    `install` is on the list, and the package parser runs first, so
+    `install git` is apk and `install -m 755 a b` stays BusyBox install.
+
+A line does not look like a command when it is empty, starts with :, or
+starts with a chatty prefix: what, why, how, please, can you, could you,
+would you, explain, tell me, write me, help me, help, describe, summarize,
+who are, hello, hi, hey, thanks, thank you. Those go to the model unless
+an earlier step already took them (package rewrite, learn, meta).
+
+A new script verb that must run without the model has to be added to that
+allowlist, or be installed under ~/bin, or get its own parser the way
+shominstall does. Clap definitions for the binaries live in
+crates/shomagent, crates/shomsky, crates/quickyn, and crates/shomloop
+under src/bin/.
+
+shominstall — Alpine packages
+
+    shominstall NAME [NAME...]
+        The shell runs `apk add` for those names before the line reaches
+        the model. shominstall is not a binary. Do not exec it.
+        Bare `shominstall` (no name) asks which Alpine package to install.
+        Polite prefixes work: please shominstall git
+        Pipelines, questions, and leading : do not match.
+
+    install NAME
+        Also means `apk add NAME` (and apt-get install NAME is rewritten
+        to apk). BusyBox install is left alone: any flag, any path, or
+        install SOURCE DEST.
+
+    apk add NAME / apk del NAME
+        Direct package commands. Successful add and del are recorded in
+        /engram/user/.packages.json.
+
+    :packages | :pkgs
+        Print the ledger.
+    :menu → Packages
+        Enter on a ● package to uninstall, on a ○ package to reinstall.
+
+    Alpine package names often differ from the binary (python3, not python).
+    Search with apk search before assuming the name. Interactive shells
+    commit apk database changes into shomskylinux:installed. Each start
+    reinstalls ledger names that are still marked installed and missing
+    from the image. Tests stay ephemeral.
+
+shomagent — background crew
+
+    shomagentd starts with the container. SKIP_SHOMAGENT=1 skips it.
+    Members are numbered #1, #2, …. Create a member before ask, talk,
+    write, click, or type. Control socket: /run/shomagent/.
+
+    shomagent | shomagent roster
+        List members. Marks: ▶ running, ⏸ paused, ◇ read, ◆ readwrite,
+        ~ dream, ✦ refine, ◎ web. Anything else is ■.
+        :shomagent roster uses the same marks except web, which it prints
+        as ■. :shomagent talk N peeks at the last finding. It does not
+        open `shomagent talk`.
+    shomagent watch "<cmd>" --tell-me "…"
+    shomagent spawn "<cmd>" --tell-me "…"
+        Same command. Supervise that process. Ring buffer, summary against
+        the brief, novelty filter (same class suppressed for an hour).
+        Findings print between prompts. They do not spam the log.
+    shomagent read <path>
+        Read-only document. ask and talk work. write is rejected.
+    shomagent readwrite <path>
+        Document plus write. Creates the file if missing.
+    shomagent write <id> "<text>"
+        Append. readwrite members only.
+    shomagent write <id> --replace "<text>"
+        Replace the whole file.
+    shomagent web <url>
+        Headless browser page.
+    shomagent web <url> --browser
+        Stay in the foreground until quit.
+    shomagent click <id> "<visible text>"
+    shomagent type <id> <label> <text>
+        Type does not submit. Use -- between a multi-word label and the value.
+    shomagent navigate <id> <url>
+    shomagent refresh <id>
+    shomagent ask <id> "<question>"
+        One-shot. The answer line starts with #N >.
+    shomagent talk <id>
+        Interactive. :q leaves.
+    shomagent pause <id> | resume <id> | stop <id>
+        Process lifecycle. stop on a document detaches and keeps the file.
+        stop on a web member closes the browser.
+    shomagent dream [path]
+        Foreground generative journal. Default path dream.md.
+        Type a line to steer. quit leaves.
+    shomagent dream seed [path]
+        Same journal. Waits for a user-written seed (end with . or Ctrl-D)
+        before the first model beat.
+    shomagent refine idea [path]
+        Foreground idea rewrite. Default idea.md. Each pass overwrites the
+        file. Type a line to replace the standing task. quit leaves.
+
+    Flags on watch, spawn, read, readwrite, and web: --name, --tell-me.
+    watch and spawn also take --persist, which writes
+    ./shomagent_crew.d/<name>.toml. That directory overrides
+    /etc/shomsky/shomagent_crew.d/ for the same name.
+
+    :shomagent | :agents
+        Roster from inside engram-shell. :shomagent talk N peeks.
+    :menu → shomagent
+        List, type a filename for readwrite / dream seed / refine idea,
+        or pick an opened document for ask / talk.
+
+    Crew drop-in (autostart defaults false):
+
+        name = "dev-watch"
+        command = "npm"
+        args = ["run", "dev"]
+        tell_me = "when a request 500s, with the stack trace root cause"
+        restart = "on-failure"
+        autostart = false
+
+    SHOMAGENT_STUB_LLM=1 is for CI without a model. Detail: docs/shomagent.md.
+
+shomloop — scheduled commands
+
+    The ledger is ~/.loop/planned_runs.csv. The default container is root,
+    so ~ is /root. There is no second ledger under /engram/user.
+    Columns: id,enabled,frequency,cron,command,created_at.
+    Enabled rows become crontab lines between # BEGIN shomloop and
+    # END shomloop. Other crontab lines stay. Disabled rows stay in the
+    CSV and are omitted from crontab. Cron runs `shomloop run <id>`, which
+    appends a stamped block to /tmp/shomloop/<id>.log. /tmp is empty on a
+    fresh container. Unknown phrases are errors. The model is not asked
+    to invent a cron expression.
+
+    shomloop "<frequency>" <command>
+        Prints "scheduled <id> (<cron>) <command>".
+    shomloop list
+    shomloop logs
+    shomloop logs <id>
+    shomloop enable <id>
+    shomloop disable <id>
+    shomloop delete <id>
+    shomloop edit <id> "<frequency>" <command>
+    shomloop run <id>
+        What cron calls. Appends the log block and exits with the command's
+        status. A disabled id logs "skipped: disabled" and exits 0.
+        A missing id exits 1.
+    shomloop restore
+        Rewrites the marked crontab block and starts crond.
+        The entrypoint runs this on every start.
+
+    Exit 0 on success. Exit 1 on a bad phrase, a missing id, a missing
+    command, or a crontab update failure. `shomloop run` is the exception:
+    its exit code is the job's.
+
+    Frequencies:
+        hourly                         0 * * * *
+        daily                          0 0 * * *
+        daily at 5pm | 5:30pm | 17:00  that minute and hour
+        weekly                         Sunday 00:00
+        weekly on monday [at 5pm]      that weekday
+        monthly [at 5pm]               day 1
+        every 15 minutes | every 2 hours
+        five cron fields               passed through
+
+    :menu → shomloop
+        New loop, logs, and per-run edit / disable / enable / delete.
+    Detail: docs/shomloop.md.
+
+quickyn — yes or no
+
+    quickyn "<question>"
+        Prints `yes 0.91` or `no 0.42`.
+        Exit 0 = yes, 1 = no, 2 = error.
+    quickyn "<question>" <file>
+        File body is context before the question.
+        Files over 1000 characters warn on stderr. The call still runs.
+    :quickyn
+        Split TUI over the same path.
+    QUICKYN_STUB_LLM=1 for CI. Detail: docs/quickyn.md.
+
+Learn — turn intent into a command
+
+    Agent mode only. A line starting with , or ?? is intent, handled
+    before direct-shell and LLM routing.
+
+        , show the five largest files here as a table
+        ?? same
+
+    The model returns a visible shell plan. Confirm [r]un, [e]dit, or [q]uit.
+    After a successful run, [s]ave (or s / save) asks for a POSIX script,
+    a man page, and a BATS test. One repair retry. If BATS fails, nothing
+    is installed.
+
+        ~/bin/<name>                      command (on PATH via entrypoint)
+        ~/share/man/man1/<name>.1         man page
+        ~/bin/tests/<name>.bats           test
+        ~/bin/completions/<name>          completion
+        ~/bin/.learn/<name>.toml          registry
+
+    shomsky list
+        Print learned command names from ~/bin/.learn/*.toml, one per line.
+        Prints "(no learned commands)" when the registry is missing or empty.
+    shomsky publish <name>
+        Local apk into /usr/local/bin and the system man page.
+        The name must already exist in ~/bin/.learn/.
+        Prints the apk path and `apk add --allow-untrusted <path>`.
+        There is no community registry. /usr/local/bin is publish only.
+        Learn itself installs under $HOME/bin only after BATS passes.
+    Both accept --home <dir> (env ENGRAM_USER_DIR) to override the agent
+    home. Default is ENGRAM_USER_DIR, else HOME, else /engram/user.
+    Exit 0 on success, 1 on error (bad name, missing registry entry).
+
+    ENGRAM_LEARN_STUB=1 canned payloads for CI.
+    ENGRAM_LEARN_AUTO=1 auto-confirms run and save.
+    Detail: docs/learn.md.
+
+Meta-commands (type at the prompt; they are not shell programs).
+Aliases are the same command. A non-TUI prints or changes a setting and
+returns, so it can go in an engram-shell --script file. An interactive TUI
+takes the screen and waits for keys. It refuses when stdout is not a
+terminal, including --script, --once, and a pipe.
+
+Non-TUI, safe in a script:
+
+    :help | :h         Print this map as text.
+    :sys | :uname      Print version, mode, model alias, tools, llm endpoint.
+    :splash            On a terminal, play the intro and return. Any key
+                       skips it. Without a terminal it does nothing.
+    :mode [name]       Show or set agent | hallucination | root.
+                       At a real prompt, switching to hallucination can ask
+                       [r] resume or [f] fresh. Under --script there is no
+                       prompt: it starts a fresh session.
+    :tools | :tool-style [style]
+                       Show or set auto | native | text.
+    :skills            List /engram/skills.
+    :model             Print the active model and endpoint.
+    :top [N]           Print most-used commands (default 10).
+    :packages | :pkgs  Print the apk ledger.
+    :logs [N]          Print the last N lines of /engram/mistralrs.log
+                       (default 40).
+    :shomagent | :agents
+                       Print the roster. :shomagent talk N prints the last
+                       finding and returns. It does not open shomagent talk.
+                       Subcommands are roster and talk only.
+    :clear             Clear conversation history. In hallucination mode,
+                       start a new session file and reset the virtual filesystem.
+    :exit | :quit | :q Leave the shell. In --script, stop the rest of the file.
+
+Interactive TUI, not for a script:
+
+    :menu | :m         Help, Learn, Modes, Packages, Scripts, shomagent,
+                       shomloop, System, Web. Arrows, hjkl, or Tab move.
+                       Enter selects. Esc backs out. Esc Esc or q leaves.
+                       Without a TTY: "menu: interactive only".
+                       Scripts is the learned ~/bin list. Enter runs or
+                       deletes one. From a script, run the ~/bin name
+                       directly instead of opening this menu.
+    :quickyn           Split yes/no TUI. Without a TTY: "quickyn: interactive
+                       only". From a script, call the quickyn binary.
+    :chat              Framed chat. No tools. Esc exits. c compactifies.
+                       Saves saved_chat_<YYYYMMDDTHHMMSSZ>.md in the cwd
+                       (skipped in hallucination mode).
+                       Without a TTY: "chat: interactive only".
+    :web [url]         Text browser. chat> click N, click <text>,
+                       type <label> -- <text>. Ctrl-L clears chat context.
+                       Without a TTY: "web: interactive only".
+                       From a script, use shomagent web / click / type.
+
+Not a TUI, and not for a script. It blocks the prompt until Ctrl-C:
+
+    :emerge            Serve this session at http://localhost:1337.
+                       ENGRAM_EMERGE=off (also 0, false, no) disables it.
+                       ENGRAM_EMERGE_PORT overrides 1337 inside the container.
+                       Without a TTY: "emerge: interactive only".
+
+Tool protocol the model may emit in agent mode (allow-list only):
+
+    shell_exec, read_file, write_file, list_dir, load_skill, and mcp__ names.
+    Unknown tool names are ignored, not executed.
+    Text form:  TOOL shell_exec command=apk add neovim
+    Or:         <tool_call>{"name":"list_dir","arguments":{"path":"/etc/engram"}}</tool_call>
+    Styles (:tools, ENGRAM_TOOL_STYLE): auto, native, text.
+    tiny defaults to text. Hallucination mode: real tools and MCP are no-ops.
+
+MCP shipped in the image: engram-cmdfreq.
+Tools: mcp__cmdfreq__record_command, mcp__cmdfreq__top_commands.
+Real shell lines are recorded automatically. :top reads
+/engram/user/.command_freq.json. A new server is an in-image stdio binary
+plus a [[mcp_servers]] entry in /etc/engram/engram.toml. No TCP listen for
+MCP. The one shell listen is :emerge.
+
+Skills are markdown under /engram/skills (copied from engram/skills/ at build).
+always_load skills (shell, packages) are in the system prompt. Others load
+via load_skill (learn, ignore_llm_for_these_commands). TUI basenames in
+ignore_llm_for_these_commands.md (top, mc, editors) inherit the TTY in agent
+and root. Their output is not chat history.
+
+
+3. MOUNTS AND WORKSPACES
+
+Compose volumes (docker-compose.yml):
+
+    shomsky-models named volume     →  /engram/models
+        GGUF weights. Survives --rm. Not a host directory.
+    ${SHOMSKY_USER_DIR:-./engram/user}  →  /engram/user
+        Agent work tree. Working directory of the service is /engram/user.
+    ${SHOMSKY_HALLUC_HISTORY:-./.hallucination_shell_history}
+        →  /engram/.hallucination_shell_history
+        Hallucination session JSON.
+
+Choose the user tree:
+
+    First ./start-shomsky-linux-shell.sh asks:
+        1) home directory          ($HOME on the host)
+        2) docker's home directory (./engram/user)
+    Saved as SHOMSKY_USER_DIR and SHOMSKY_WORKDIR_KIND in .env.
+    Re-ask: ./start-shomsky-linux-shell.sh reask
+    Or set the keys yourself:
+        SHOMSKY_USER_DIR=/home/you
+        SHOMSKY_WORKDIR_KIND=home
+    or:
+        SHOMSKY_USER_DIR=./engram/user
+        SHOMSKY_WORKDIR_KIND=engram
+
+    SHOMSKY_WORKDIR_KIND=home
+        Bind-mounts the host home onto /engram/user.
+        The agent prompt shows [home].
+        The entrypoint does not chown that tree (host ownership stays).
+    SHOMSKY_WORKDIR_KIND=engram  (default, and any value other than home)
+        Bind-mounts ./engram/user. The prompt shows [engram].
+        The entrypoint chowns /engram/user to shomsky:shomsky.
+    The label is agent-mode only. Root and hallucination prompts omit it.
+
+    Hallucination mode ignores the user directory. It uses an in-memory
+    filesystem rooted at /virt. Nothing is written to the bind mount.
+    Sessions save as hallucination_shell_<timestamp>.json under the history
+    directory. Entering the mode offers resume or fresh.
+    Chat transcripts are not saved in hallucination mode.
+
+    A host-home mount means agent-mode writes land in the real home
+    directory on the host. That is the point of choice 1. Treat it as
+    giving the container write access to that directory.
+
+Other paths the entrypoint creates under the user tree:
+
+    bin/  bin/tests/  bin/completions/  bin/.learn/  bin/packages/
+    share/man/man1/
+    PATH is prefixed with $USER_DIR/bin.
+    MANPATH includes $USER_DIR/share/man.
+
+Also on the filesystem:
+
+    /engram/user/.command_freq.json     command counts
+    /engram/user/.packages.json         apk ledger
+    /engram/user/.web_history.json      :web sites
+    /engram/skills/                     manuals (image copy; bind-mount to replace)
+    /engram/.shell_history              readline history
+    /engram/mistralrs.log               inference log (:logs)
+    /etc/engram/engram.toml             mode, allow_root_mode, tool style, MCP
+    /etc/engram/models.toml             model alias registry
+    /etc/shomsky/shomagent_crew.d/      system crew drop-ins
+    /root/.loop/planned_runs.csv        shomloop ledger (root's home)
+    /tmp/shomloop/                      shomloop job logs (not durable)
+
+Extra bind example for skills:
+
+    docker run -v "$PWD/my-skills:/engram/skills:ro" …
+
+:emerge is published as 127.0.0.1:1337:1337 only. `compose run` does not
+publish service ports unless the launcher passes -p, which it does.
+Do not publish 1337 on 0.0.0.0 unless you mean to.
+
+
+4. REQUIREMENTS TO RUN
+
+To run a published image:
+
+    A Docker engine that can run Linux containers.
+    An interactive TTY (-it) for the shell, menu, and spinner.
+    Disk for the GGUF in the shomsky-models volume.
+    Network on first start (Hugging Face). Optional HF_TOKEN /
+    HUGGING_FACE_HUB_TOKEN for gated downloads.
+    After the volume has the file, inference does not need the network.
+
+RAM (CPU, compose mem_limit default 8g, shm_size 1gb):
+
+    tiny          about 400 MB weights,  at least 2 GB host RAM
+    qwen1.5       about 1.1 GB
+    gemma         about 1.6 GB
+    llama         about 2.0 GB
+    qwen3         about 2.1 GB
+    phi           about 2.4 GB
+    mistral       about 4.4 GB           at least 8 GB for 7B Q4
+    qwen          about 4.7 GB
+    qwen-coder    about 4.7 GB
+    deepseek      about 4.7 GB
+
+    Use tiny when free RAM is under 8 GB, and for smoke tests.
+    Set SHOMSKY_MODEL=tiny. Prefer ENGRAM_TOOL_STYLE=text for tiny.
+
+Timing: model load can take minutes (ENGRAM_LLM_READY_TRIES default 600
+seconds inside the shell; the entrypoint's non-interactive wait is
+LLM_READY_TRIES, default 600). The first chat completion can also be slow.
+The shell HTTP client allows 900 seconds. Inference is CPU. The flagship
+image is Alpine/musl. CUDA is not part of that image.
+containers/Dockerfile.cuda is a separate glibc companion, not the flagship.
+
+To build from this tree: Docker 24+ with BuildKit, network to crates.io
+and GitHub, and enough RAM for the mistral.rs compile (CARGO_BUILD_JOBS=1
+on small machines).
+
+Models (SHOMSKY_MODEL, default mistral), licenses of the weights:
+
+    mistral      Apache-2.0    Mistral 7B Instruct v0.2 Q4_K_M
+    qwen         Apache-2.0    Qwen2.5 7B Instruct
+    qwen1.5      Apache-2.0    Qwen2.5 1.5B Instruct
+    qwen3        Apache-2.0    Qwen2.5 3B Instruct
+    qwen-coder   Apache-2.0    Qwen2.5-Coder 7B Instruct
+    deepseek     MIT           DeepSeek-R1-Distill-Qwen-7B
+    llama        Llama-3.2     Llama 3.2 3B Instruct
+    gemma        Gemma         Gemma 2 2B Instruct
+    phi          MIT           Phi-3.5-mini-instruct
+    tiny         Apache-2.0    Qwen2.5 0.5B Instruct
+
+./choose_llm.sh writes the alias into .env. Registry:
+/etc/engram/models.toml (source: rootfs/etc/engram/models.toml).
+
+Useful environment:
+
+    SHOMSKY_MODEL            alias above (default mistral)
+    SHOMSKY_IMAGE            default shomskylinux:dev
+    SHOMSKY_BUILD            1 = compile when the image is missing
+    SHOMSKY_USER_DIR         host path for /engram/user
+    SHOMSKY_WORKDIR_KIND     home | engram
+    SHOMSKY_HALLUC_HISTORY   host path for hallucination JSON
+    SHOMSKY_MEM_LIMIT        default 8g
+    SHOMSKY_SHM_SIZE         default 1gb
+    ENGRAM_MODE              agent | hallucination | root
+    ENGRAM_DIRECT_SHELL      default on. 0|false|no|off skips the allowlist
+                             (section 2, step d). Learn and shominstall stay.
+    ENGRAM_SCRIPT_MARKERS    1|true|yes|on wraps --script turns
+    ENGRAM_TOOL_STYLE        auto | native | text
+    ENGRAM_MAX_CONTEXT       default 24
+    ENGRAM_CONTEXT_TOKENS    chat window estimate, default 32768
+    ENGRAM_SPINNER           auto | always | off
+    ENGRAM_MATRIX            auto | always | off   intro rain
+    ENGRAM_MATRIX_SECS       0-10, default 5 (0 skips)
+    ENGRAM_MATRIX_GLYPHS     ascii for ASCII rain
+    NO_COLOR                 1 disables splash and prompt color
+    MISTRALRS_LOG_TO_TTY     1 streams inference logs to the terminal
+    SKIP_LLM                 1 skips mistral.rs (suites that need no model)
+    SKIP_MODEL_FETCH         1 skips download; requires SHOMSKY_MODEL_PATH
+    SKIP_SHOMAGENT           1 skips shomagentd
+    HF_TOKEN                 optional Hugging Face token
+    allow_root_mode          in /etc/engram/engram.toml, default true.
+                             false refuses :mode root.
+
+Tests:
+
+    docker compose run --rm tests          no LLM
+    docker compose run --rm tests-llm      tiny model
+    ./tests/run.sh
+    RUN_LLM_TESTS=1 ./tests/run.sh         when mistralrs is already up
+    cargo test -p shomagent -p shomsky -p quickyn -p shomloop
+
+
+5. LICENSES AND THIRD PARTIES
+
+Shomsky Linux original source (engram-shell, scripts, docs, skills, container
+glue) is MIT. Copyright (c) 2026 Shomsky Linux contributors. See LICENSE.
+The software is provided AS IS, without warranty. Operators run the container
+at their own risk. Do not invent a second license or a warranty.
+Policy: docs/adr/0006-mit-as-is-and-ai-contributions.md.
+
+Brand as "Shomsky Linux, based on Alpine Linux." This project is not
+affiliated with, endorsed by, or sponsored by the Alpine Linux project.
+Do not treat Alpine's name or logo as ours.
+
+Third parties recorded in NOTICE:
+
+    docker-alpine          MIT
+        Copyright (c) 2019 Natanael Copa
+        Verbatim copy: third_party/docker-alpine/LICENSE
+        https://github.com/alpinelinux/docker-alpine
+    Alpine package set     not one license. Unmodified packages in the image.
+        musl libc              MIT
+        BusyBox                GPL-2.0
+        apk-tools              GPL-2.0
+        alpine-baselayout      GPL-2.0
+        Sources: https://git.alpinelinux.org/ and https://pkgs.alpinelinux.org/
+    mistral.rs             MIT
+        Copyright (c) Eric Buehler and contributors
+        https://github.com/EricLBuehler/mistral.rs
+        Image pin: MISTRALRS_REF, default v0.9.0
+    Candle (Hugging Face)  Apache-2.0
+        https://github.com/huggingface/candle
+    xterm.js 5.3.0 and xterm-addon-fit 0.8.0    MIT
+        Vendored for the :emerge page.
+        Copyright (c) 2019, The xterm.js authors
+        Notice: assets/emerge/LICENSE
+    Rust crates            MIT or Apache-2.0 preferred (ADR-0002).
+        Each crate's own license applies. See Cargo.toml files.
+    Model weights          not included. The user downloads them.
+        Each file's license is in models.toml (section 4).
+        llama and gemma aliases are not Apache-2.0. Read those terms
+        before use.
+
+Workspace crates, all first-party MIT: engram-shell (src/), engram-cmdfreq,
+shomagent, shomsky, quickyn, shomloop.
+
+
+6. ALSO NEEDED TO OPERATE THIS
+
+Modes. Switch with :mode or :menu. The model cannot switch itself.
+
+    agent (default)   Real tools. Shell-shaped lines run immediately.
+    hallucination     In-memory builtins. Other lines go to the model
+                      with no tool schemas. No disk writes.
+    root              Every line is BusyBox. No LLM.
+                      Gated by allow_root_mode (default true).
+
+Security posture. Agent mode plus a home bind mount can change host files
+under SHOMSKY_USER_DIR. Hallucination mode, a non-root user, a read-only
+rootfs, and allow_root_mode = false reduce exposure. They do not move
+responsibility off the operator. MCP servers are stdio children. A command
+containing :// is refused. Compose does not publish MCP ports.
+
+What the entrypoint does before the prompt:
+
+    Resolve SHOMSKY_MODEL against /etc/engram/models.toml.
+    Download the GGUF into /engram/models if missing (optional sha256).
+    mkdir the user tree, prepend ~/bin to PATH.
+    chown models and hallucination history to shomsky.
+    chown the user tree unless SHOMSKY_WORKDIR_KIND=home.
+    engram-shell --reinstall-missing
+    shomloop restore
+    mistralrs serve --format gguf --cpu 127.0.0.1:1234
+    shomagentd
+    exec engram-shell
+
+Binaries in the image under /usr/local/bin:
+
+    engram-shell, shomagent, shomagentd, shomsky, quickyn, shomloop,
+    engram-cmdfreq, mistralrs
+
+Do not commit weights, tokens, or .env.
+
+Where to read next:
+
+    README.md                         quick start
+    docs/llm.txt                      contributor and in-shell agent map
+    docs/shell-modes.md               modes, menu, tools, :emerge
+    docs/engram.md                    /engram and skills
+    docs/shomagent.md                 crew
+    docs/shomloop.md                  schedules
+    docs/quickyn.md                   yes/no
+    docs/learn.md                     , and ?? and shomsky publish
+    docs/models.md                    aliases, RAM, cold start
+    docs/mcp.md                       stdio MCP
+    docs/chat.md                      :chat
+    docs/build-and-publish.md         image build and GHCR
+    docs/licensing.md                 SPDX inventory
+    docs/adr/README.md                accepted decisions
+    NOTICE                            third-party notices
+    LICENSE                           MIT text

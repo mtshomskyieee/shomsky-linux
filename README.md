@@ -4,6 +4,8 @@ Shomsky Linux is an Alpine-derived Linux distribution distributed as a Docker
 container. Its linux shell is an LLM agent that can use real tools against the
 filesystem, or run in safer modes that only simulate writes.
 
+How to run it, including mounts and the in-shell verbs, is in [llm.txt](llm.txt).
+
 ## Quick start
 
 Pull the published image from GitHub Container Registry:

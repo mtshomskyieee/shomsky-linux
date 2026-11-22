@@ -1,7 +1,9 @@
 LLM ENGAGEMENT
 Shomsky Linux
 
-Markdown twin: docs/llm.md
+Operator manual (start, stop, build, scripting verbs, mounts, requirements,
+licenses): ../llm.txt
+Markdown twin of this engagement map: docs/llm.md
 This file is a map of the documentation. It is not a new decision.
 When this file and an Accepted ADR disagree, the ADR wins.
 How-to pages explain operations. ADRs record why a constraint exists.
