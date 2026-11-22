@@ -64,6 +64,7 @@ Workspace (docs/adr/0002-rust-language-and-style.md):
 - shomagent        crates/shomagent/           shomagentd and the shomagent CLI
 - shomsky          crates/shomsky/             learn registry and shomsky publish
 - quickyn          crates/quickyn/             yes/no + confidence CLI
+- shomloop         crates/shomloop/            scheduled commands, crontab, planned-run CSV
 
 engram-shell modules: main.rs (CLI, --once, --script, --self-test), config.rs, modes.rs, repl.rs, llm.rs, tools/, mcp/, skills.rs, ui.rs, menu.rs, spinner.rs, completer.rs, learn/, halluc_fs.rs, halluc_session.rs, quickyn_tui.rs, chat_tui.rs.
 
@@ -94,6 +95,7 @@ docs/engram.md
 - /usr/local/bin/shomagentd              Crew daemon.
 - /usr/local/bin/shomsky                 Learn publish CLI.
 - /usr/local/bin/quickyn                 Yes/no + confidence CLI.
+- /usr/local/bin/shomloop                Scheduled commands and crontab restore.
 - /usr/local/bin/engram-cmdfreq          Command-frequency MCP.
 - /usr/local/bin/mistralrs               Inference server.
 
@@ -147,6 +149,19 @@ First-party binary beside shomagent. One-shot yes/no plus confidence from the cu
 - Agent mode treats quickyn as a direct shell command.
 
 
+SHOMLOOP
+
+docs/shomloop.md
+docs/adr/0013-shomloop.md
+First-party binary beside quickyn. Schedule phrases become crontab lines. The ledger is ~/.loop/planned_runs.csv (root's home in the default container).
+
+- shomloop "<frequency>" <command> appends a row and rewrites crontab.
+- shomloop list prints planned runs. shomloop logs [id] prints /tmp/shomloop logs.
+- shomloop enable, disable, delete, and edit update the row and rewrite crontab.
+- The entrypoint runs shomloop restore, which rewrites the marked crontab block and starts crond.
+- Unknown phrases are errors. Agent mode treats shomloop as a direct shell command.
+
+
 CHAT
 
 docs/chat.md
@@ -193,7 +208,7 @@ Skills are markdown with YAML frontmatter: name, description, always_load.
 - learn                              on demand via load_skill.
 - ignore_llm_for_these_commands      on demand. The shell also reads it as the TUI bypass list.
 
-:menu or :m on a color TTY covers Modes, Learn, Packages, shomagent, Help, and System. Under shomagent: list agents, type a filename for readwrite / dream seed / refine idea, or pick an opened document for ask / talk. :help is the same map as text. Both stay available from the ready line.
+:menu or :m on a color TTY covers Help, Learn, Modes, Packages, Scripts, shomagent, shomloop, System, and Web. Under shomagent: list agents, type a filename for readwrite / dream seed / refine idea, or pick an opened document for ask / talk. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. :help is the same map as text. Both stay available from the ready line.
 
 
 IF YOU ARE CHANGING THE REPOSITORY
@@ -202,7 +217,7 @@ IF YOU ARE CHANGING THE REPOSITORY
 2. Keep the musl/CPU image buildable. Do not add a glibc-only dependency to the flagship path.
 3. Keep tool execution and mode checks in the shell.
 4. Cover non-LLM behavior in tests/cases/ or --self-test. Run: docker compose run --rm tests   or   ./tests/run.sh
-5. Use: cargo test -p shomagent -p shomsky -p quickyn
+5. Use: cargo test -p shomagent -p shomsky -p quickyn -p shomloop
 6. Write an ADR when the change moves a cross-cutting boundary (sandbox, MCP transport, CI gates, license posture), adds or removes an integration, or would surprise someone who only read the code. Skip ADRs for routine bugfixes and doc clarifications that do not change a decision.
 7. How-to docs stay detailed. ADRs stay short: Status, Date, Context, Decision, Consequences, optional Steering.
 8. Do not commit weights, tokens, or .env.
@@ -243,6 +258,8 @@ WHERE TO READ NEXT
 - shomagent how-to             docs/shomagent.md
 - Yes/no CLI                   docs/adr/0009-quickyn-yes-no.md
 - quickyn how-to               docs/quickyn.md
+- Scheduled commands           docs/adr/0013-shomloop.md
+- shomloop how-to              docs/shomloop.md
 - Framed chat                  docs/chat.md
 - Learn decision               docs/adr/0008-learn-userland-verb.md
 - Learn how-to                 docs/learn.md

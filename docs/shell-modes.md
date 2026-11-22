@@ -89,12 +89,15 @@ On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
 
 | Category | Examples |
 |----------|----------|
-| Modes | Switch agent / hallucination / root |
-| Learn | Prefill `, ` or `?? `; save when a promote is pending |
-| Packages | Ledger of successful `apk add` / `apk del`; Enter → [u]ninstall / [r]einstall |
-| shomagent | list agents; `readwrite` / `dream seed` / `refine idea` (type a filename); `ask` / `talk` (pick a document); `stop` / end (pick any agent) |
 | Help | Run `:help` |
+| Learn | Prefill `, ` or `?? `; save when a promote is pending |
+| Modes | Switch agent / hallucination / root |
+| Packages | Ledger of successful `apk add` / `apk del`; Enter → [u]ninstall / [r]einstall |
+| Scripts | Saved commands; Enter → run or delete |
+| shomagent | list agents; `readwrite` / `dream seed` / `refine idea` (type a filename); `ask` / `talk` (pick a document); `stop` / end (pick any agent) |
+| shomloop | planned runs; new loop; logs; Enter → edit / disable / enable / delete |
 | System | `:emerge`, `:sys`, `:splash`, `:quickyn`, `:chat`, `:model`, `:skills`, `:top`, `:packages`, `:clear`, exit |
+| Web | Open the text browser, revisit sites, clear history |
 
 Arrow keys / `hjkl` / Tab navigate; Enter selects; Esc backs up a level; Esc Esc
 (or `q`) leaves the menu. Under pipes, `--once`, and `--script` the overlay is

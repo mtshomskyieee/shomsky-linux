@@ -86,6 +86,14 @@ if [ "${ENGRAM_SKIP_PACKAGE_RESTORE:-0}" != "1" ] \
     log "warning: missing-package reinstall failed; continuing"
 fi
 
+# Crontab is derived from ~/.loop/planned_runs.csv. A restart drops crond
+# even when the ledger is still on the writable layer.
+export HOME="${HOME:-/root}"
+if [ -x /usr/local/bin/shomloop ]; then
+  /usr/local/bin/shomloop restore || \
+    log "warning: shomloop restore failed; continuing"
+fi
+
 if [ "$SKIP_MODEL_FETCH" != "1" ]; then
   [ -f "$MODELS_TOML" ] || die "missing models registry: $MODELS_TOML"
   info="$(lookup_model "$SHOMSKY_MODEL" "$MODELS_TOML")" \

@@ -9,11 +9,13 @@
 - [ADR-0009: quickyn yes/no CLI](adr/0009-quickyn-yes-no.md)
 - [ADR-0010: Build version](adr/0010-build-version.md)
 - [ADR-0012: :emerge web terminal](adr/0012-emerge-web-terminal.md)
+- [ADR-0013: shomloop scheduled commands](adr/0013-shomloop.md)
 - [Shell modes](shell-modes.md)
 - [Engram (skills)](engram.md)
 - [Learn](learn.md) — `,` / `??` intent → promote to `~/bin` → `shomsky publish`
 - [shomagent](shomagent.md) — background watchers, notification lane, stream-scoped talk
 - [quickyn](quickyn.md) — yes/no + confidence from the current model
+- [shomloop](shomloop.md) — scheduled commands, crontab, and `~/.loop/planned_runs.csv`
 - [chat](chat.md) — immersive framed chat with the current model (`:chat`)
 - [MCP (local tools)](mcp.md) — in-container stdio MCP; cmdfreq / top 10 commands
 - [Models](models.md)
