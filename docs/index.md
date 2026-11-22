@@ -1,5 +1,6 @@
 # Shomsky Linux documentation
 
+- [Operator manual](../llm.txt) — start, stop, build, mounts, in-shell verbs, requirements, licenses
 - [LLM engagement](llm.md) — load this before changing code or answering as the in-shell agent ([plain text](llm.txt))
 - [Architecture Decision Records](adr/README.md)
   - [ADR-0001: Alpine + LLM Linux shell](adr/0001-alpine-llm-linux-shell.md)

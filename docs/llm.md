@@ -1,6 +1,6 @@
 # LLM engagement
 
-Load this file before generating or editing Shomsky Linux code, and before answering as the agent inside `engram-shell`. Plain-text twin: [llm.txt](llm.txt). It is a map of the documentation. It is not a new decision.
+Load this file before generating or editing Shomsky Linux code, and before answering as the agent inside `engram-shell`. Plain-text twin: [llm.txt](llm.txt). This file is a map of the documentation. It is not a new decision. How to start, stop, build, mount a workspace, and use the in-shell verbs: [../llm.txt](../llm.txt).
 
 When this file and an **Accepted** ADR disagree, the ADR wins. How-to pages (`shell-modes.md`, `mcp.md`, `models.md`, and the rest) explain operations. ADRs record why a constraint exists. The essay in [writeup.md](writeup.md) is for human readers.
 
