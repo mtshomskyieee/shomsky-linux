@@ -56,9 +56,21 @@ presented; kept across Ctrl-K so a small local model can recover after
 compaction), and quickyn file args.
 
 Planning prompt steers toward first-party CLIs. Webpage / JS work should be
-planned as `shell` steps that run `shomagent web` (and `ask` / `stop`), not as
-`curl` HTML scrapers. Native plan verb `shomagent` remains limited to
-ask/pause/resume/stop/roster; opening a URL is always via `shell`.
+planned as `shell` steps that run `shomagent web`, then a roster/`shomagent list`
+step, then `ask` / `stop` — not as `curl` HTML scrapers. Plans must not invent
+member ids from chat history; they use id `0` as a placeholder after web+roster.
+At run time SINE binds `0` (and any stale planned id missing from the live
+roster) to the last attached member still on the roster. Native plan verb
+`shomagent` remains limited to ask/pause/resume/stop/roster (`list` normalizes
+to roster); opening a URL is always via `shell`.
+
+When the operator asks for recurring work (and optionally “also right now”),
+the preferred plan is: write a self-contained job script under `/engram/user/`,
+`chmod +x`, run it once for the test, then a `shell` step
+`shomloop "<frequency>" /engram/user/<job>.sh` ([ADR-0013](0013-shomloop.md)).
+The script parses its own member ids; SINE’s id-`0` binding does not apply
+inside `crond`. There is still no native `shomloop` plan verb — create/list/
+enable go through the CLI via `shell`.
 
 ## Consequences
 

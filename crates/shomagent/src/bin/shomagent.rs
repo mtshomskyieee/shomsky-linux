@@ -142,6 +142,7 @@ enum Commands {
     /// Stop a member
     Stop { id: u32 },
     /// List members (same as bare `shomagent`)
+    #[command(visible_alias = "list")]
     Roster,
 }
 

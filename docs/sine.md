@@ -48,11 +48,17 @@ Plan verb **`quickyn`** asks a yes/no with confidence (ADR-0009) when the
 step is a boolean gate.
 
 While planning or running, a spinner (`[-] planning…` / `running…`) appears
-under the SINE art. The agents/loops list refreshes during long shell steps and
-about twice a minute otherwise. If a shell step fails (e.g. `shomagent ask`
-overwhelms the local model on a large page), SINE **halts** the plan, skips
-remaining steps, and prints recourse in the agent pane — keep the web member,
-retry a tiny ask, then write the file.
+under the SINE art and the bunny's `o` eyes glance around the face. After a
+plan or step error the eyes settle on `x` until the next request. The
+agents/loops list refreshes during long shell steps and about twice a minute
+otherwise. One-shot webpage plans use `web` → `shomagent list`/`roster` →
+`ask`/`stop` with id `0` (SINE binds stale/zero ids to the live roster). When
+the ask includes a schedule (daily / loop / “at 4am”), the plan should write a
+job script under `/engram/user/`, run it once if testing now, then
+`shomloop "<frequency>" /engram/user/<job>.sh` — not an interactive-only plan.
+If a shell step fails (wrong member id, or `shomagent ask` overwhelms the local
+model on a large page), SINE **halts** the plan, skips remaining steps, and
+prints recourse in the agent pane.
 
 ## Flow
 
