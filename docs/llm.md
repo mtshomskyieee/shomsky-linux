@@ -158,7 +158,7 @@ Files over 1000 characters warn on stderr (call still runs). `QUICKYN_STUB_LLM=1
 
 ## SINE
 
-[sine.md](sine.md), [ADR-0014](adr/0014-sine-assistant.md). Plan-then-approve assistant (`:sine` or bare `sine`). Split frame: left top brand/art ([sine_image.txt](sine_image.txt)), left bottom shomagent then shomloop, right top agent output, right bottom chat, status + command line. Plans with one local `chat_text_max` call; user `approve` / `edit` / `cancel`. `auto` is a shell flag. Idle (while the screen is open) reads top commands from the cmdfreq JSON and rewrites `playbook.md`. Session under `/engram/user/.sine/` (skipped in hallucination). `ENGRAM_SINE_STUB=1` for CI. Dependency surface is ADR-0014 only.
+[sine.md](sine.md), [ADR-0014](adr/0014-sine-assistant.md). Plan-then-approve assistant (`:sine` or bare `sine`). Split frame: left top brand/art ([sine_image.txt](sine_image.txt)), left bottom agents/loops/files (Tab+↑↓+Enter opens a numbered file viewer), right top agent output, right bottom chat, status + command line. Plans with one local `chat_text_max` call; verbs include `quickyn` for yes/no; user `approve` / `edit` / `cancel`. `auto` is a shell flag. Idle (while the screen is open) reads top commands from the cmdfreq JSON and rewrites `playbook.md`. Session under `/engram/user/.sine/` (skipped in hallucination). `ENGRAM_SINE_STUB=1` for CI. Dependency surface is ADR-0014 only.
 
 ## shomagent
 

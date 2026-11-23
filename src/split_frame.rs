@@ -43,6 +43,8 @@ pub enum Key {
     CtrlRight,
     PageUp,
     PageDown,
+    Home,
+    End,
     Enter,
     Esc,
     Tab,
@@ -376,7 +378,7 @@ impl SplitFrame {
     /// Build the SINE-shaped layout: left top/bottom + right top/bottom.
     pub fn sine_layout() -> Self {
         let left_top = Leaf::new("left_top").with_header("SINE");
-        let left_bottom = Leaf::new("left_bottom").with_header("agents / loops");
+        let left_bottom = Leaf::new("left_bottom").with_header("agents / loops / files");
         let right_top = Leaf::new("right_top").with_header("agent");
         let right_bottom = Leaf::new("right_bottom").with_header("chat");
 
@@ -1099,6 +1101,26 @@ pub fn decode_key(first: u8, stdin: &mut impl Read) -> Key {
                 if n >= 3 && rest[1] == b'6' && rest[2] == b'~' {
                     return Key::PageDown;
                 }
+                // Home: ESC [ H  or  ESC [ 1 ~  or  ESC [ 7 ~
+                if n >= 2 && rest[1] == b'H' {
+                    return Key::Home;
+                }
+                if n >= 3 && rest[1] == b'1' && rest[2] == b'~' {
+                    return Key::Home;
+                }
+                if n >= 3 && rest[1] == b'7' && rest[2] == b'~' {
+                    return Key::Home;
+                }
+                // End: ESC [ F  or  ESC [ 4 ~  or  ESC [ 8 ~
+                if n >= 2 && rest[1] == b'F' {
+                    return Key::End;
+                }
+                if n >= 3 && rest[1] == b'4' && rest[2] == b'~' {
+                    return Key::End;
+                }
+                if n >= 3 && rest[1] == b'8' && rest[2] == b'~' {
+                    return Key::End;
+                }
                 // ESC [ 1 ; 5 A  (ctrl-up) etc.
                 if n >= 5 && rest[1] == b'1' && rest[2] == b';' && rest[3] == b'5' {
                     return match rest[4] {
@@ -1224,6 +1246,27 @@ mod tests {
         frame.publish(Slot::RightTop, "hello\nworld");
         let leaf = frame.leaf("right_top").unwrap();
         assert_eq!(leaf.lines, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[test]
+    fn clear_slot_empties_agent_and_chat() {
+        let mut frame = SplitFrame::sine_layout();
+        frame.publish(Slot::RightTop, "plan junk");
+        frame.publish(Slot::RightBottom, "you: hi");
+        frame.clear_slot(Slot::RightTop);
+        frame.clear_slot(Slot::RightBottom);
+        assert!(frame.leaf("right_top").unwrap().lines.is_empty());
+        assert!(frame.leaf("right_bottom").unwrap().lines.is_empty());
+        frame.set_slot_lines(Slot::RightTop, vec!["(cleared)".into()]);
+        frame.set_slot_lines(Slot::RightBottom, vec!["sine: (context cleared)".into()]);
+        assert_eq!(
+            frame.leaf("right_top").unwrap().lines,
+            vec!["(cleared)".to_string()]
+        );
+        assert_eq!(
+            frame.leaf("right_bottom").unwrap().lines,
+            vec!["sine: (context cleared)".to_string()]
+        );
     }
 
     #[test]

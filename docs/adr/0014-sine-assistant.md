@@ -25,7 +25,7 @@ Ship **SINE** as a foreground `engram-shell` screen (`:sine` / bare `sine`):
 | Surface | Behavior |
 |---------|----------|
 | Open | `:sine` or exact bare `sine`; optional remainder is the first request |
-| Layout | Left top (brand/art from `docs/sine_image.txt`), left bottom (roster), right top (agent), right bottom (chat), status + command line |
+| Layout | Left top (brand/art from `docs/sine_image.txt`), left bottom (agents / loops / files), right top (agent), right bottom (chat), status + command line. Tab-focus left, ↑↓ select a touched file, Enter opens a full-screen numbered/wrapped viewer (Esc closes) |
 | Plan | One local `chat_text_max` JSON plan; show it; user `approve` / `edit` / `cancel` |
 | `auto` | Shell flag stored in the session; still shows the plan, then runs without a second confirm. The model cannot flip it |
 | Idle | While the screen is open and quiet, read top commands, one short model call, rewrite the playbook |
@@ -42,9 +42,18 @@ Allowed dependency surface (code implements only this list):
 | ADR-0007 crew | Left-bottom roster and the `shomagent` verb use `shomagent::daemon::rpc` on `/run/shomagent/ctl.sock`. Allowed requests: roster, ask (Talk), pause, resume, stop. SINE does not supervise processes and does not speak dream, refine, or web unless a later update to this ADR adds them |
 | ADR-0013 scheduler | Roster loop list via `shomloop::list_runs()` on `~/.loop/planned_runs.csv`. No crontab rewrite. enable/disable/delete/edit stay out until this ADR says otherwise |
 | ADR-0008 learn | UX ancestor for plan-then-confirm only. SINE does not call `learn::promote` and does not install scripts |
+| ADR-0009 quickyn | Plan verb `quickyn` calls `quickyn::decide` in-process for yes/no + confidence. Optional `file` arg is pre-prompt context. Prefer this over inventing a shell yes/no |
 
 Closed plan verbs the shell may execute after approval: `shell`, `shomagent`,
-`top_commands`, `say`. Unknown verbs are refused.
+`top_commands`, `say`, `quickyn`. Unknown verbs are refused.
+
+Touched files appear under **files:** in the left-bottom pane and persist in
+`session.json`. Sources: shell redirects / path-like args / `tee`, files
+created or mtime-updated in cwd (and `/engram/user`) during a shell step
+(catches `yc_headlines_$(date …).csv`), `/engram/…` paths printed in shell
+output, session.json, playbook.md, **plan.md** (written when a plan is
+presented; kept across Ctrl-L so a small local model can recover after
+compaction), and quickyn file args.
 
 Planning prompt steers toward first-party CLIs. Webpage / JS work should be
 planned as `shell` steps that run `shomagent web` (and `ask` / `stop`), not as
