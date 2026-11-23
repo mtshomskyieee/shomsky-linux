@@ -10,7 +10,7 @@ get numeric ids; **create a member before `ask` / `talk` / `write`.**
 
 | Command | Purpose |
 |---------|---------|
-| `shomagent` / `roster` | List members |
+| `shomagent` / `roster` / `list` | List members |
 | `watch "<cmd>" --tell-me "…"` | Supervise a process stream |
 | `spawn …` | Alias of `watch` |
 | `read <path>` | Attach document **read-only** |

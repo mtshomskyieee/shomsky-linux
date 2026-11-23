@@ -53,6 +53,7 @@ pub enum Key {
     CtrlC,
     CtrlK,
     CtrlL,
+    CtrlR,
     CtrlS,
     CtrlU,
     Char(char),
@@ -1301,6 +1302,7 @@ pub fn decode_key(first: u8, stdin: &mut impl Read) -> Key {
         0x03 => Key::CtrlC,
         0x0b => Key::CtrlK,
         0x0c => Key::CtrlL,
+        0x12 => Key::CtrlR,
         0x13 => Key::CtrlS,
         0x15 => Key::CtrlU,
         b'\r' | b'\n' => Key::Enter,
@@ -1553,6 +1555,12 @@ mod tests {
     fn ctrl_s_decodes() {
         let mut empty: &[u8] = &[];
         assert_eq!(decode_key(0x13, &mut empty), Key::CtrlS);
+    }
+
+    #[test]
+    fn ctrl_r_decodes() {
+        let mut empty: &[u8] = &[];
+        assert_eq!(decode_key(0x12, &mut empty), Key::CtrlR);
     }
 
     #[test]

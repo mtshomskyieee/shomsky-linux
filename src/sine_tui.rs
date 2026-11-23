@@ -31,15 +31,23 @@ Prefer first-party Shomsky tools over inventing curl/grep scrapers.
 CLOSED verbs — the \"verb\" field must be EXACTLY one of these five strings:
   shell | shomagent | top_commands | say | quickyn
 WRONG (never use these as verb): \"shomagent web\", \"shomagent ask\", \"shomagent pause\",
-\"shomagent read\", \"curl\", \"web\". Those are CLI words inside a shell command, not verbs.
+\"shomagent read\", \"curl\", \"web\", \"schedule\". Those are CLI words inside a \
+shell command, not verbs.
 
 First-party CLI (only via verb shell, args.command):
   shomagent web <url>     headless Chromium; use for any webpage / JS / headlines
+  shomagent / shomagent list / shomagent roster
+                          list live members and ids (REQUIRED after web, before ask)
   shomagent ask <id> \"…\"  question a member (web page, watch, document)
   shomagent stop <id>
   shomagent click|type|navigate <id> …
   shomagent watch|spawn|read|readwrite|dream|refine …
-  shomloop …              only when the user asks for recurring work
+  shomloop \"<frequency>\" <command>
+                          ONLY via verb shell, and ONLY when the user asked for
+                          a schedule / loop / daily / cron. Frequency phrases
+                          match shomloop (e.g. \"daily at 4am\"). Prefer pointing
+                          shomloop at a job script file under /engram/user/ \
+(not a giant inline sh -c).
 
 Verb args:
   shell: {\"command\": \"...\"}
@@ -48,21 +56,48 @@ Verb args:
   say: {\"text\": \"...\"}
   quickyn: {\"question\": \"...\", \"file\": \"... optional path for context\"}
 
-Webpage example (copy this shape; keep plans SHORT — typically 2 to 6 steps):
-{\"summary\":\"Fetch HN top 10 headlines to CSV\",\"steps\":[\
+Member ids (critical):
+- NEVER invent or reuse numeric ids from chat history or earlier sessions.
+- Interactive (in-plan) web→ask: after every `shomagent web`, list members \
+(roster/`list`), then ask/stop with id 0. SINE binds 0 (or stale ids) to the \
+live roster member. Do not guess 1, 2, 5, etc.
+- Job scripts for shomloop/cron: parse the live id from attach output \
+(`shomagent#N`) or `shomagent list` inside the script. Never hardcode ids. \
+SINE id-0 binding does NOT apply inside crond.
+
+ONE-SHOT webpage (no schedule asked) — copy this shape (3–6 steps):
+{\"summary\":\"Fetch HN top 10 headlines to CSV once\",\"steps\":[\
 {\"verb\":\"shell\",\"args\":{\"command\":\"shomagent web https://news.ycombinator.com\"}},\
-{\"verb\":\"shell\",\"args\":{\"command\":\"shomagent ask 1 \\\"list top 10 story titles and urls as CSV with header rank,title,url\\\"\"}},\
-{\"verb\":\"shell\",\"args\":{\"command\":\"sh -c 'ts=$(date -u +%Y%m%dT%H%M%SZ); shomagent ask 1 \\\"emit only the CSV\\\" > /engram/user/yc_headlines_$ts.csv'\"}},\
-{\"verb\":\"shell\",\"args\":{\"command\":\"shomagent stop 1\"}}\
+{\"verb\":\"shomagent\",\"args\":{\"action\":\"roster\"}},\
+{\"verb\":\"shell\",\"args\":{\"command\":\"shomagent ask 0 \\\"list top 10 story titles and urls as CSV with header rank,title,url\\\"\"}},\
+{\"verb\":\"shell\",\"args\":{\"command\":\"sh -c 'ts=$(date -u +%Y%m%dT%H%M%SZ); shomagent ask 0 \\\"emit only the CSV\\\" > /engram/user/yc_headlines_$ts.csv'\"}},\
+{\"verb\":\"shell\",\"args\":{\"command\":\"shomagent stop 0\"}}\
+]}
+
+SCHEDULED / daily / loop (REQUIRED shape when the user asks for a schedule):
+Write a self-contained job script under /engram/user/, chmod +x, run it once \
+if they also asked to test now, then register shomloop on that script path. \
+Do NOT emit only an interactive web→ask plan when a schedule was requested.
+{\"summary\":\"HN top 10 daily at 4am + test now\",\"steps\":[\
+{\"verb\":\"shell\",\"args\":{\"command\":\"cat > /engram/user/yc_headlines_job.sh <<'EOF'\\n#!/bin/sh\\nset -e\\nout=$(shomagent web https://news.ycombinator.com)\\nid=$(printf '%s\\\\n' \\\"$out\\\" | sed -n 's/.*shomagent#\\\\([0-9][0-9]*\\\\).*/\\\\1/p' | tail -n 1)\\ntest -n \\\"$id\\\"\\nts=$(date -u +%Y%m%dT%H%M%SZ)\\nshomagent ask \\\"$id\\\" \\\"list top 10 story titles and urls as CSV with header rank,title,url\\\" > /engram/user/yc_headlines_$ts.csv\\nshomagent stop \\\"$id\\\"\\nEOF\"}},\
+{\"verb\":\"shell\",\"args\":{\"command\":\"chmod +x /engram/user/yc_headlines_job.sh\"}},\
+{\"verb\":\"shell\",\"args\":{\"command\":\"/engram/user/yc_headlines_job.sh\"}},\
+{\"verb\":\"shell\",\"args\":{\"command\":\"shomloop \\\"daily at 4am\\\" /engram/user/yc_headlines_job.sh\"}}\
 ]}
 
 Rules:
-- Opening a URL is always verb shell with command shomagent web <url>.
+- Opening a URL is always verb shell with command shomagent web <url> (or inside a job script).
 - Do NOT use curl|wget for HTML/JS pages when shomagent web fits.
 - Large sites (cnn.com, etc.): ask for ONE short fact (\"most recent headline title and url only\"). \
 Never ask the model to dump the whole page. Prefer few short asks over one huge ask.
 - Do NOT invent pause/resume loops or duplicate web/ask pairs.
-- Do NOT invent shomloop unless the user asked for a schedule.
+- Do NOT invent shomloop unless the user asked for a schedule / daily / loop.
+- When the user asks for a schedule (daily / loop / cron / \"at 4am\") — even if they \
+also say \"right now\" / \"test\": you MUST include (1) write job script, (2) chmod, \
+(3) run script once if they asked to test now, (4) shell `shomloop \"<frequency>\" \
+/engram/user/<job>.sh`. Omitting shomloop when a schedule was requested is WRONG.
+- Prefer a durable script path under /engram/user/ (survives for cron); avoid \
+relying on /tmp for the scheduled job body.
 - For yes/no use verb quickyn (not shell).
 - Output ONLY one JSON object. No markdown fences. Prefer few steps.";
 
@@ -87,6 +122,26 @@ const POLL: Duration = Duration::from_millis(50);
 /// Same glyphs as `chat_tui` / `spinner.rs` (Alpine ASCII-only).
 const SPIN_FRAMES: &[char] = &['-', '\\', '|', '/'];
 const SPIN_TICK: Duration = Duration::from_millis(120);
+/// How long each bunny eye pose is held while planning/running.
+const EYE_POSE_TICK: Duration = Duration::from_millis(350);
+/// Resting eyeball cells on the face line (0-based row/col into `SINE_IMAGE`).
+const EYE_ROW: usize = 8;
+const EYE_LEFT_COL: usize = 10;
+const EYE_RIGHT_COL: usize = 13;
+/// Face-interior blank (same as surrounding braille voids in the art).
+const BRAILLE_BLANK: char = '\u{2800}';
+/// Busy eye offsets: (d_row, d_col) applied to both resting eyes.
+/// Cycle returns to center between glances so the bounce reads clearly.
+const EYE_POSES: &[(isize, isize)] = &[
+    (0, 0),  // center
+    (-1, 0), // up
+    (0, 0),  // center
+    (0, -1), // left
+    (0, 0),  // center
+    (0, 1),  // right
+    (0, 0),  // center
+    (1, 0),  // down
+];
 
 // ── Plan ────────────────────────────────────────────────────────────────────
 
@@ -224,7 +279,8 @@ fn shell_shomagent_web(args: &serde_json::Value) -> PlanStep {
 fn normalize_shomagent_compound(action: &str, args: &serde_json::Value) -> Result<PlanStep> {
     match action {
         "web" => Ok(shell_shomagent_web(args)),
-        "ask" | "pause" | "resume" | "stop" | "roster" => {
+        "ask" | "pause" | "resume" | "stop" | "roster" | "list" => {
+            let action = if action == "list" { "roster" } else { action };
             let mut map = serde_json::Map::new();
             map.insert("action".into(), serde_json::json!(action));
             if let Some(id) = args.get("id") {
@@ -511,14 +567,37 @@ struct SineState {
     last_roster: Instant,
     idle_done: bool,
     status_extra: Option<String>,
-    /// When Planning/Running started (for brand-pane spinner).
+    /// When Planning/Running started (for brand-pane spinner / eye bounce).
     busy_since: Option<Instant>,
+    /// Left-top bunny shows `x` eyes after a plan/step failure (UI-only).
+    brand_error: bool,
+    /// Most recent shomagent member attached in this run (web/doc/…).
+    /// Used to bind planned ask/stop id `0` (or stale ids) to the live roster.
+    last_bound_member: Option<u32>,
     /// Last completed LLM sample (chars/4 / wall secs) for the status line.
     last_tok_per_sec: Option<f64>,
     /// Index into selectable file rows in the left-bottom list (0 = first file).
     file_select: usize,
     /// Full-screen file viewer overlay (Esc closes).
     viewer: Option<FileViewer>,
+}
+
+/// How the bunny eyes are drawn for one brand-pane paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrandEyes {
+    /// Resting `o` at the packaged positions.
+    Rest,
+    /// Bounce `o` around the face while work is in flight.
+    Busy(Duration),
+    /// Resting cells become `x` after a plan or step error.
+    Error,
+}
+
+/// Outcome of running an approved plan (halt still returns Ok for chat/`plan.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunOutcome {
+    Done,
+    Halted,
 }
 
 /// Numbered, wrapped file view that replaces the split UI until Esc.
@@ -595,6 +674,8 @@ impl SineState {
             idle_done: false,
             status_extra: None,
             busy_since: None,
+            brand_error: false,
+            last_bound_member: None,
             last_tok_per_sec: None,
             file_select: 0,
             viewer: None,
@@ -694,7 +775,7 @@ impl SineState {
         ));
         // Bottom menu: keys + current auto state (Ctrl-A toggles).
         self.frame.footer = Some(format!(
-            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · Tab left=files · ↑↓ · a/e/q"
+            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · ^R files · Tab left=files · ↑↓ · a/e/q"
         ));
         // Live meter on the agent pane header (same estimate as :chat).
         self.frame
@@ -705,19 +786,27 @@ impl SineState {
     }
 
     /// ASCII art plus a spinner line while planning or running.
+    /// Busy work wins over `brand_error` so a retry bounces immediately.
     fn paint_brand(&mut self) {
-        let mut lines: Vec<String> = SINE_IMAGE.lines().map(|l| l.to_string()).collect();
-        if let Some(since) = self.busy_since {
-            if matches!(self.phase, Phase::Planning | Phase::Running) {
-                let label = match self.phase {
-                    Phase::Planning => "planning",
-                    Phase::Running => "running",
-                    _ => "busy",
-                };
-                let g = spinner_glyph(since.elapsed());
-                lines.push(String::new());
-                lines.push(format!("[{g}] {label}…"));
-            }
+        let busy = matches!(self.phase, Phase::Planning | Phase::Running);
+        let eyes = if busy {
+            BrandEyes::Busy(self.busy_since.map(|s| s.elapsed()).unwrap_or_default())
+        } else if self.brand_error {
+            BrandEyes::Error
+        } else {
+            BrandEyes::Rest
+        };
+        let mut lines = render_brand_lines(eyes);
+        if busy {
+            let label = match self.phase {
+                Phase::Planning => "planning",
+                Phase::Running => "running",
+                _ => "busy",
+            };
+            let elapsed = self.busy_since.map(|s| s.elapsed()).unwrap_or_default();
+            let g = spinner_glyph(elapsed);
+            lines.push(String::new());
+            lines.push(format!("[{g}] {label}…"));
         }
         self.frame.set_slot_lines(Slot::LeftTop, lines);
     }
@@ -727,6 +816,15 @@ impl SineState {
         let state = if self.session.auto { "on" } else { "off" };
         self.push_chat(true, &format!("auto {state}"));
         self.refresh_status();
+        self.save_if_allowed();
+    }
+
+    /// Drop the accumulated files: list so the next shell step's mtime
+    /// snapshot is a fresh baseline. Session/playbook/plan are re-seeded on
+    /// the following roster refresh when they exist on disk.
+    fn clear_touched_files(&mut self) {
+        self.session.touched_files.clear();
+        self.file_select = 0;
         self.save_if_allowed();
     }
 
@@ -742,6 +840,8 @@ impl SineState {
         self.session.playbook.clear();
         self.last_tok_per_sec = None;
         self.busy_since = None;
+        self.brand_error = false;
+        self.last_bound_member = None;
         self.idle_done = false;
         self.set_phase(Phase::Idle);
         self.status_extra = None;
@@ -907,7 +1007,7 @@ async fn refresh_roster(state: &mut SineState) {
     }
     lines.push("files:".into());
     if state.session.touched_files.is_empty() {
-        lines.push("  (none — Tab left, ↑↓ select, Enter open)".into());
+        lines.push("  (none — Tab left, ↑↓ select, Enter open · ^R clear)".into());
     } else {
         if state.file_select >= state.session.touched_files.len() {
             state.file_select = state.session.touched_files.len() - 1;
@@ -922,6 +1022,31 @@ async fn refresh_roster(state: &mut SineState) {
         .set_leaf_header("left_bottom", "agents / loops / files");
     state.frame.set_slot_lines(Slot::LeftBottom, lines);
     state.last_roster = Instant::now();
+}
+
+/// Snapshot of live members for the planner (ids change; do not hardcode from chat).
+async fn roster_for_plan() -> String {
+    match rpc(&Request::Roster).await {
+        Ok(Response::Ok { roster, .. }) if roster.is_empty() => {
+            "(no members yet — after shomagent web, list with action roster, then ask id 0)".into()
+        }
+        Ok(Response::Ok { roster, .. }) => {
+            let mut lines = Vec::with_capacity(roster.len());
+            for m in roster {
+                lines.push(format!(
+                    "  #{} {} [{}] {}",
+                    m.id, m.name, m.state, m.command
+                ));
+            }
+            format!(
+                "Live now (may change after a new web attach; still use id 0 for members \
+                 this plan creates):\n{}",
+                lines.join("\n")
+            )
+        }
+        Ok(Response::Err { message }) => format!("(roster error: {message})"),
+        Err(e) => format!("(roster unavailable: {e:#})"),
+    }
 }
 
 async fn make_plan(cfg: Config, intent: String) -> Result<(SinePlan, Option<LlmTiming>)> {
@@ -947,10 +1072,14 @@ async fn make_plan(cfg: Config, intent: String) -> Result<(SinePlan, Option<LlmT
         ));
     }
     let started = Instant::now();
+    let roster_note = roster_for_plan().await;
     let llm = LlmClient::new(&cfg)?;
+    let user = format!(
+        "Live shomagent roster:\n{roster_note}\n\nOperator request:\n{intent}"
+    );
     let messages = vec![
         ChatMessage::system(PLAN_SYSTEM),
-        ChatMessage::user(&intent),
+        ChatMessage::user(&user),
     ];
     let raw = llm
         .chat_text_max(&messages, PLAN_MAX_TOKENS)
@@ -964,13 +1093,16 @@ async fn make_plan(cfg: Config, intent: String) -> Result<(SinePlan, Option<LlmT
         Err(e1) => {
             let repair = vec![
                 ChatMessage::system(PLAN_SYSTEM),
-                ChatMessage::user(&intent),
+                ChatMessage::user(&user),
                 ChatMessage::assistant_text(&raw),
                 ChatMessage::user(format!(
                     "Previous reply failed ({e1}). Reply with ONLY a short JSON plan. \
                      verb must be exactly shell|shomagent|top_commands|say|quickyn — \
-                     never \"shomagent web\". Opening a URL: \
-                     {{\"verb\":\"shell\",\"args\":{{\"command\":\"shomagent web <url>\"}}}}. \
+                     never \"shomagent web\". If the operator asked for daily/loop/schedule: \
+                     write /engram/user/<job>.sh (web; parse shomagent#id; ask; write CSV; stop), \
+                     chmod +x, run once if they asked to test now, then \
+                     shomloop \"<frequency>\" /engram/user/<job>.sh. \
+                     One-shot only (no schedule): web → roster → ask/stop id 0. \
                      At most 6 steps."
                 )),
             ];
@@ -1014,10 +1146,10 @@ async fn make_idle_playbook(cfg: Config, tops: String) -> Result<(String, Option
 async fn execute_plan(
     plan: &SinePlan,
     state: &mut SineState,
-) -> Result<()> {
+) -> Result<RunOutcome> {
     if state.mode == Mode::Hallucination {
         state.agent_note("(hallucination mode: plan shown, not executed)");
-        return Ok(());
+        return Ok(RunOutcome::Done);
     }
     refresh_roster(state).await;
     state.refresh_status();
@@ -1037,30 +1169,48 @@ async fn execute_plan(
         state.frame.draw();
         if step_output_failed(&note) {
             let left = plan.steps.len().saturating_sub(idx + 1);
-            let recovery = format!(
-                "--- halted: step {} failed; skipped {left} remaining ---\n\
-                 SINE's ctx % is not the shomagent ask budget — page text can still \
-                 overwhelm the local model.\n\
-                 Recourse (member may still be in the left list):\n\
-                 1. Retry a tiny ask: shomagent ask <id> \"one headline title and url only\"\n\
-                 2. Write the reply to the file yourself, then shomagent stop <id>\n\
-                 3. Or re-open plan.md after ^K and type a narrower request\n\
-                 Do not re-run the full plan until ask succeeds.",
-                idx + 1
-            );
+            let unknown_member = note.contains("unknown member");
+            let recovery = if unknown_member {
+                format!(
+                    "--- halted: step {} failed; skipped {left} remaining ---\n\
+                     That was a bad/stale member id, not a context-window problem.\n\
+                     Recourse (check the left roster for the live id):\n\
+                     1. shomagent list   (or bare shomagent) — note the #id for the URL\n\
+                     2. shomagent ask <id> \"…\" then write the file; shomagent stop <id>\n\
+                     3. Or re-plan: web → roster → ask/stop with id 0 (SINE binds the live id)",
+                    idx + 1
+                )
+            } else {
+                format!(
+                    "--- halted: step {} failed; skipped {left} remaining ---\n\
+                     If ask failed on a large page: SINE's ctx % is not the shomagent ask \
+                     budget — page text can still overwhelm the local model.\n\
+                     Recourse (member may still be in the left list):\n\
+                     1. Retry a tiny ask: shomagent ask <id> \"one headline title and url only\"\n\
+                     2. Write the reply to the file yourself, then shomagent stop <id>\n\
+                     3. Or re-open plan.md after ^K and type a narrower request\n\
+                     Do not re-run the full plan until ask succeeds.",
+                    idx + 1
+                )
+            };
             state.agent_note(&recovery);
-            state.push_chat(
-                false,
-                &format!(
+            let chat = if unknown_member {
+                format!(
+                    "halted after failed step {} — wrong member id; list the roster and ask the live #id (see agent pane)",
+                    idx + 1
+                )
+            } else {
+                format!(
                     "halted after failed step {} — retry a shorter shomagent ask (see agent pane)",
                     idx + 1
-                ),
-            );
+                )
+            };
+            state.push_chat(false, &chat);
             write_plan_md(state, plan, &format!("halted at step {}", idx + 1));
-            break;
+            return Ok(RunOutcome::Halted);
         }
     }
-    Ok(())
+    Ok(RunOutcome::Done)
 }
 
 fn step_output_failed(note: &str) -> bool {
@@ -1098,6 +1248,81 @@ async fn shell_exec_live(state: &mut SineState, command: &str) -> Result<crate::
 fn spinner_glyph(elapsed: Duration) -> char {
     let i = (elapsed.as_millis() / SPIN_TICK.as_millis()) as usize;
     SPIN_FRAMES[i % SPIN_FRAMES.len()]
+}
+
+/// Brand art with resting, busy (bouncing), or error (`x`) eyes.
+fn render_brand_lines(eyes: BrandEyes) -> Vec<String> {
+    let mut lines: Vec<String> = SINE_IMAGE.lines().map(|l| l.to_string()).collect();
+    match eyes {
+        BrandEyes::Rest => {}
+        BrandEyes::Error => {
+            set_char_at(&mut lines, EYE_ROW, EYE_LEFT_COL, 'x');
+            set_char_at(&mut lines, EYE_ROW, EYE_RIGHT_COL, 'x');
+        }
+        BrandEyes::Busy(elapsed) => {
+            // Clear resting o cells first so the glance leaves a blank socket.
+            set_char_at(&mut lines, EYE_ROW, EYE_LEFT_COL, BRAILLE_BLANK);
+            set_char_at(&mut lines, EYE_ROW, EYE_RIGHT_COL, BRAILLE_BLANK);
+            let (lr, lc, rr, rc) = eye_pose_cells(elapsed, &lines);
+            set_char_at(&mut lines, lr, lc, 'o');
+            set_char_at(&mut lines, rr, rc, 'o');
+        }
+    }
+    lines
+}
+
+/// Pick eye cells for the current busy pose; skip poses that would overwrite
+/// non-blank face ink (falls back through the cycle toward center).
+fn eye_pose_cells(elapsed: Duration, lines: &[String]) -> (usize, usize, usize, usize) {
+    let start = (elapsed.as_millis() / EYE_POSE_TICK.as_millis()) as usize % EYE_POSES.len();
+    for i in 0..EYE_POSES.len() {
+        let (dr, dc) = EYE_POSES[(start + i) % EYE_POSES.len()];
+        let Some((lr, lc)) = offset_eye(EYE_ROW, EYE_LEFT_COL, dr, dc) else {
+            continue;
+        };
+        let Some((rr, rc)) = offset_eye(EYE_ROW, EYE_RIGHT_COL, dr, dc) else {
+            continue;
+        };
+        // Keep at least one blank between pupils.
+        if lr == rr && lc.abs_diff(rc) < 2 {
+            continue;
+        }
+        if cell_is_blank(lines, lr, lc) && cell_is_blank(lines, rr, rc) {
+            return (lr, lc, rr, rc);
+        }
+    }
+    (EYE_ROW, EYE_LEFT_COL, EYE_ROW, EYE_RIGHT_COL)
+}
+
+fn offset_eye(row: usize, col: usize, dr: isize, dc: isize) -> Option<(usize, usize)> {
+    let r = row as isize + dr;
+    let c = col as isize + dc;
+    if r < 0 || c < 0 {
+        return None;
+    }
+    Some((r as usize, c as usize))
+}
+
+fn cell_is_blank(lines: &[String], row: usize, col: usize) -> bool {
+    let Some(line) = lines.get(row) else {
+        return false;
+    };
+    match line.chars().nth(col) {
+        None => false,
+        Some(c) => c == BRAILLE_BLANK || c == ' ',
+    }
+}
+
+fn set_char_at(lines: &mut [String], row: usize, col: usize, ch: char) {
+    let Some(line) = lines.get_mut(row) else {
+        return;
+    };
+    let mut chars: Vec<char> = line.chars().collect();
+    if col >= chars.len() {
+        return;
+    }
+    chars[col] = ch;
+    *line = chars.into_iter().collect();
 }
 
 impl FileViewer {
@@ -1272,6 +1497,90 @@ fn wrap_numbered_lines(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Ids mentioned after `shomagent ask|stop|…` in a shell command.
+fn planned_member_ids_in_command(command: &str) -> Vec<u32> {
+    let re = regex::Regex::new(
+        r"(?i)\bshomagent\s+(?:ask|stop|pause|resume|click|type|navigate|refresh|write)\s+(\d+)\b",
+    )
+    .expect("member-id regex");
+    re.captures_iter(command)
+        .filter_map(|c| c.get(1)?.as_str().parse().ok())
+        .collect()
+}
+
+/// Rewrite `shomagent <verb> <from>` → `<to>` (shell and nested `sh -c`).
+fn rewrite_member_id_in_command(command: &str, from: u32, to: u32) -> String {
+    if from == to {
+        return command.to_string();
+    }
+    let re = regex::Regex::new(&format!(
+        r"(?i)(\bshomagent\s+(?:ask|stop|pause|resume|click|type|navigate|refresh|write)\s+){from}\b"
+    ))
+    .expect("rewrite-id regex");
+    re.replace_all(command, format!("${{1}}{to}").as_str())
+        .into_owned()
+}
+
+/// Parse `⟡ shomagent#N …` (web/doc/dream attach lines).
+fn parse_attached_member_id(output: &str) -> Option<u32> {
+    let re = regex::Regex::new(r"(?i)shomagent#(\d+)\b").expect("attach-id regex");
+    let mut last = None;
+    for cap in re.captures_iter(output) {
+        if let Some(id) = cap.get(1).and_then(|m| m.as_str().parse().ok()) {
+            last = Some(id);
+        }
+    }
+    last
+}
+
+async fn fetch_roster_members() -> Vec<shomagent::protocol::MemberStatus> {
+    match rpc(&Request::Roster).await {
+        Ok(Response::Ok { roster, .. }) => roster,
+        _ => Vec::new(),
+    }
+}
+
+/// Pick a live member for ask/stop: prefer last attach still on roster, else
+/// sole web member, else highest-id web member, else highest id overall.
+fn pick_bound_member(
+    last: Option<u32>,
+    roster: &[shomagent::protocol::MemberStatus],
+) -> Option<u32> {
+    if roster.is_empty() {
+        return None;
+    }
+    if let Some(id) = last {
+        if roster.iter().any(|m| m.id == id) {
+            return Some(id);
+        }
+    }
+    let webs: Vec<_> = roster.iter().filter(|m| m.state == "web").collect();
+    if webs.len() == 1 {
+        return Some(webs[0].id);
+    }
+    if let Some(m) = webs.iter().max_by_key(|m| m.id) {
+        return Some(m.id);
+    }
+    roster.iter().map(|m| m.id).max()
+}
+
+/// Resolve a planned id against the live roster. `0` / missing / stale → bound.
+async fn resolve_member_id(state: &SineState, planned: Option<u32>) -> Option<(u32, bool)> {
+    let roster = fetch_roster_members().await;
+    let bound = pick_bound_member(state.last_bound_member, &roster)?;
+    match planned {
+        None | Some(0) => Some((bound, true)),
+        Some(id) if roster.iter().any(|m| m.id == id) => Some((id, false)),
+        Some(id) => Some((bound, id != bound)),
+    }
+}
+
+fn note_bound_member(state: &mut SineState, output: &str) {
+    if let Some(id) = parse_attached_member_id(output) {
+        state.last_bound_member = Some(id);
+    }
+}
+
 async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> {
     match step.verb.as_str() {
         "say" => {
@@ -1320,11 +1629,50 @@ async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> 
             Ok(line)
         }
         "shell" => {
-            let command = step
+            let raw_command = step
                 .args
                 .get("command")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("shell step missing command"))?;
+            let mut bind_note = String::new();
+            let command = {
+                let planned = planned_member_ids_in_command(raw_command);
+                let needs_bind = planned.is_empty()
+                    && raw_command.to_ascii_lowercase().contains("shomagent ask");
+                if !planned.is_empty() || needs_bind {
+                    // Bind each distinct planned id (0 / stale) to the live member.
+                    let mut cmd = raw_command.to_string();
+                    let ids: Vec<u32> = if planned.is_empty() {
+                        vec![0]
+                    } else {
+                        let mut u = planned;
+                        u.sort_unstable();
+                        u.dedup();
+                        u
+                    };
+                    for from in ids {
+                        if let Some((to, rewritten)) = resolve_member_id(state, Some(from)).await {
+                            if rewritten || from == 0 {
+                                let next = rewrite_member_id_in_command(&cmd, from, to);
+                                if next != cmd {
+                                    if !bind_note.is_empty() {
+                                        bind_note.push('\n');
+                                    }
+                                    bind_note.push_str(&format!(
+                                        "(bound shomagent id {from} → #{to} from roster)"
+                                    ));
+                                    cmd = next;
+                                } else if from == 0 {
+                                    // ask without a digit is rare; leave as-is.
+                                }
+                            }
+                        }
+                    }
+                    cmd
+                } else {
+                    raw_command.to_string()
+                }
+            };
             // Snapshot cwd (and /engram/user) so date-expanded redirects like
             // `> yc_headlines_$(date +%Y%m%d_%H%M%S).csv` still land in files:.
             let watch = touch_watch_dirs(state);
@@ -1332,9 +1680,9 @@ async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> 
             // Live roster/UI while the shell runs — otherwise a long
             // `shomagent ask` freezes the left pane on "(none)" even though
             // web already attached.
-            let result = shell_exec_live(state, command).await?;
-            state.cwd = result.cwd;
-            for path in extract_touched_paths(command, &state.cwd) {
+            let result = shell_exec_live(state, &command).await?;
+            state.cwd = result.cwd.clone();
+            for path in extract_touched_paths(&command, &state.cwd) {
                 state.touch_file(path);
             }
             for path in discover_new_or_updated(&before, &watch) {
@@ -1343,7 +1691,25 @@ async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> 
             for path in extract_paths_from_text(&result.output) {
                 state.touch_file(path);
             }
-            let mut out = format!("$ {command}\n{}", result.output);
+            note_bound_member(state, &result.output);
+            // Stopping the bound member clears the binding.
+            if result.success {
+                let stop_re =
+                    regex::Regex::new(r"(?i)\bshomagent\s+stop\s+(\d+)\b").expect("stop-id regex");
+                for cap in stop_re.captures_iter(&command) {
+                    if let Some(id) = cap.get(1).and_then(|m| m.as_str().parse().ok()) {
+                        if state.last_bound_member == Some(id) {
+                            state.last_bound_member = None;
+                        }
+                    }
+                }
+            }
+            let mut out = String::new();
+            if !bind_note.is_empty() {
+                out.push_str(&bind_note);
+                out.push('\n');
+            }
+            out.push_str(&format!("$ {command}\n{}", result.output));
             if !result.success {
                 out.push_str("\n(exit failed)");
             }
@@ -1355,38 +1721,40 @@ async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> 
                 .get("action")
                 .and_then(|v| v.as_str())
                 .unwrap_or("roster");
+            let planned_id = step.args.get("id").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let mut bind_note = String::new();
+            let resolved_id = if matches!(action, "ask" | "pause" | "resume" | "stop") {
+                match resolve_member_id(state, planned_id).await {
+                    Some((id, rewritten)) => {
+                        if rewritten {
+                            let from = planned_id.unwrap_or(0);
+                            bind_note = format!(
+                                "(bound shomagent id {from} → #{id} from roster)\n"
+                            );
+                        }
+                        Some(id)
+                    }
+                    None => planned_id,
+                }
+            } else {
+                planned_id
+            };
             let req = match action {
-                "roster" => Request::Roster,
+                "roster" | "list" => Request::Roster,
                 "pause" => {
-                    let id = step
-                        .args
-                        .get("id")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| anyhow!("pause needs id"))? as u32;
+                    let id = resolved_id.ok_or_else(|| anyhow!("pause needs id"))?;
                     Request::Pause { id }
                 }
                 "resume" => {
-                    let id = step
-                        .args
-                        .get("id")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| anyhow!("resume needs id"))? as u32;
+                    let id = resolved_id.ok_or_else(|| anyhow!("resume needs id"))?;
                     Request::Resume { id }
                 }
                 "stop" => {
-                    let id = step
-                        .args
-                        .get("id")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| anyhow!("stop needs id"))? as u32;
+                    let id = resolved_id.ok_or_else(|| anyhow!("stop needs id"))?;
                     Request::Stop { id }
                 }
                 "ask" => {
-                    let id = step
-                        .args
-                        .get("id")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| anyhow!("ask needs id"))? as u32;
+                    let id = resolved_id.ok_or_else(|| anyhow!("ask needs id (use 0 after roster)"))?;
                     let message = step
                         .args
                         .get("message")
@@ -1404,9 +1772,10 @@ async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> 
                     roster,
                     ..
                 } => {
-                    let mut out = String::new();
+                    let mut out = bind_note;
                     if let Some(m) = message {
                         out.push_str(&m);
+                        note_bound_member(state, &m);
                     }
                     if let Some(r) = reply {
                         if !out.is_empty() {
@@ -1414,8 +1783,21 @@ async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> 
                         }
                         out.push_str(&r);
                     }
+                    if action == "stop" {
+                        if let Some(id) = resolved_id {
+                            if state.last_bound_member == Some(id) {
+                                state.last_bound_member = None;
+                            }
+                        }
+                    }
                     if !roster.is_empty() {
-                        for m in roster {
+                        // Prefer highest-id web as soft bind when listing after attach.
+                        if state.last_bound_member.is_none() {
+                            if let Some(id) = pick_bound_member(None, &roster) {
+                                state.last_bound_member = Some(id);
+                            }
+                        }
+                        for m in &roster {
                             out.push_str(&format!(
                                 "\n#{} {} [{}] {}",
                                 m.id, m.name, m.state, m.command
@@ -1427,7 +1809,9 @@ async fn execute_step(step: &PlanStep, state: &mut SineState) -> Result<String> 
                     }
                     Ok(out)
                 }
-                Response::Err { message } => Ok(format!("shomagent error: {message}")),
+                Response::Err { message } => {
+                    Ok(format!("{bind_note}shomagent error: {message}"))
+                }
             }
         }
         other => bail!("unknown verb '{other}'"),
@@ -1591,6 +1975,7 @@ fn looks_like_path_token(tok: &str) -> bool {
 }
 
 fn present_plan(state: &mut SineState, plan: SinePlan) {
+    state.brand_error = false;
     state.agent_note(&plan.format_for_pane());
     state.push_chat(false, &format!("plan ready: {}", plan.summary));
     write_plan_md(state, &plan, "awaiting approve");
@@ -1613,12 +1998,18 @@ async fn approve_and_run(state: &mut SineState) {
     state.refresh_status();
     state.frame.draw();
     match execute_plan(&plan, state).await {
-        Ok(()) => {
+        Ok(RunOutcome::Done) => {
+            state.brand_error = false;
             state.push_chat(false, "done");
             state.agent_note("--- done ---");
             write_plan_md(state, &plan, "done");
         }
+        Ok(RunOutcome::Halted) => {
+            state.brand_error = true;
+            // Chat / plan.md already updated inside execute_plan.
+        }
         Err(e) => {
+            state.brand_error = true;
             state.agent_note(&format!("error: {e:#}"));
             state.push_chat(false, &format!("error: {e}"));
             write_plan_md(state, &plan, &format!("error: {e}"));
@@ -1650,6 +2041,14 @@ async fn handle_line(state: &mut SineState, line: &str, cfg: &Config, pending: &
                 job.handle.abort();
             }
             state.clear_context();
+            return;
+        }
+        "files clear" | "clear files" | "refresh files" => {
+            state.clear_touched_files();
+            refresh_roster(state).await;
+            state.agent_note("(files list cleared — baseline reset)");
+            state.refresh_status();
+            state.frame.draw();
             return;
         }
         "approve" | "a" if state.phase == Phase::AwaitingApproval => {
@@ -1696,6 +2095,7 @@ async fn handle_line(state: &mut SineState, line: &str, cfg: &Config, pending: &
     }
 
     state.push_chat(true, trimmed);
+    state.brand_error = false;
     state.set_phase(Phase::Planning);
     state.refresh_status();
     state.frame.draw();
@@ -1824,6 +2224,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                         }
                     }
                     Ok(JobResult::Plan(Err(e))) => {
+                        state.brand_error = true;
                         state.agent_note(&format!("plan error: {e:#}"));
                         state.push_chat(false, &format!("plan error: {e}"));
                         state.set_phase(Phase::Idle);
@@ -1844,6 +2245,10 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                         state.quiet_since = Instant::now();
                     }
                     Err(e) => {
+                        // Only brand-error for plan jobs; idle playbook failures stay soft.
+                        if state.phase == Phase::Planning {
+                            state.brand_error = true;
+                        }
                         state.agent_note(&format!("job join error: {e}"));
                         state.set_phase(Phase::Idle);
                         state.note_activity();
@@ -1945,6 +2350,16 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 state.note_activity();
                 state.frame.draw();
             }
+            Some(Key::CtrlR) => {
+                // Reset files: list (drop prior-session paths); next shell step
+                // mtime snapshot starts clean. Roster refresh re-seeds sine meta.
+                state.clear_touched_files();
+                refresh_roster(&mut state).await;
+                state.agent_note("(files list cleared — baseline reset)");
+                state.note_activity();
+                state.refresh_status();
+                state.frame.draw();
+            }
             Some(Key::CtrlU) => {
                 state.frame.clear_input();
                 state.note_activity();
@@ -2031,6 +2446,40 @@ mod tests {
         assert!(step_output_failed("$ x\n(exit failed)"));
         assert!(step_output_failed("Error: shomagent chat request failed"));
         assert!(!step_output_failed("$ shomagent web https://cnn.com\n✧ ok"));
+    }
+
+    fn char_at(lines: &[String], row: usize, col: usize) -> Option<char> {
+        lines.get(row).and_then(|l| l.chars().nth(col))
+    }
+
+    #[test]
+    fn brand_rest_keeps_packaged_eyes() {
+        let lines = render_brand_lines(BrandEyes::Rest);
+        assert_eq!(char_at(&lines, EYE_ROW, EYE_LEFT_COL), Some('o'));
+        assert_eq!(char_at(&lines, EYE_ROW, EYE_RIGHT_COL), Some('o'));
+    }
+
+    #[test]
+    fn brand_busy_moves_eyes_onto_blank_cells() {
+        // Pose index 1 = up (after one EYE_POSE_TICK).
+        let lines = render_brand_lines(BrandEyes::Busy(EYE_POSE_TICK));
+        assert_eq!(char_at(&lines, EYE_ROW, EYE_LEFT_COL), Some(BRAILLE_BLANK));
+        assert_eq!(char_at(&lines, EYE_ROW, EYE_RIGHT_COL), Some(BRAILLE_BLANK));
+        assert_eq!(char_at(&lines, EYE_ROW - 1, EYE_LEFT_COL), Some('o'));
+        assert_eq!(char_at(&lines, EYE_ROW - 1, EYE_RIGHT_COL), Some('o'));
+        // Both pupils land on blank face interior (no border ink).
+        let rest = render_brand_lines(BrandEyes::Rest);
+        assert!(cell_is_blank(&rest, EYE_ROW - 1, EYE_LEFT_COL));
+        assert!(cell_is_blank(&rest, EYE_ROW - 1, EYE_RIGHT_COL));
+    }
+
+    #[test]
+    fn brand_error_replaces_eyes_with_x() {
+        let lines = render_brand_lines(BrandEyes::Error);
+        assert_eq!(char_at(&lines, EYE_ROW, EYE_LEFT_COL), Some('x'));
+        assert_eq!(char_at(&lines, EYE_ROW, EYE_RIGHT_COL), Some('x'));
+        let face = &lines[EYE_ROW];
+        assert!(!face.contains('o'), "error face must not keep resting o: {face}");
     }
 
     #[test]
@@ -2242,6 +2691,82 @@ mod tests {
             PLAN_SYSTEM.contains("Do NOT use curl"),
             "planner must deprioritize curl scrapers for pages"
         );
+        assert!(
+            PLAN_SYSTEM.contains("shomagent list") && PLAN_SYSTEM.contains("id 0"),
+            "planner must list roster and use id 0 placeholders"
+        );
+        assert!(
+            PLAN_SYSTEM.contains("shomloop")
+                && PLAN_SYSTEM.contains("daily at 4am")
+                && PLAN_SYSTEM.contains("yc_headlines_job.sh")
+                && PLAN_SYSTEM.contains("Omitting shomloop"),
+            "planner must prefer job script + shomloop when a schedule is asked"
+        );
+    }
+
+    #[test]
+    fn parse_plan_normalizes_shomagent_list_to_roster() {
+        let raw = r#"{"summary":"list","steps":[{"verb":"shomagent list","args":{}}]}"#;
+        let plan = parse_plan_json(raw).unwrap();
+        assert_eq!(plan.steps[0].verb, "shomagent");
+        assert_eq!(
+            plan.steps[0].args.get("action").and_then(|v| v.as_str()),
+            Some("roster")
+        );
+    }
+
+    #[test]
+    fn parse_attached_member_id_from_web_line() {
+        let out = "⟡ shomagent#2 web (https://www.slashdot.org)\n";
+        assert_eq!(parse_attached_member_id(out), Some(2));
+    }
+
+    #[test]
+    fn rewrite_member_id_rewrites_ask_and_nested_shell() {
+        let cmd = r#"sh -c 'shomagent ask 5 "hi"; shomagent stop 5'"#;
+        let next = rewrite_member_id_in_command(cmd, 5, 2);
+        assert!(next.contains("ask 2"), "{next}");
+        assert!(next.contains("stop 2"), "{next}");
+        assert!(!next.contains("ask 5"), "{next}");
+    }
+
+    #[test]
+    fn rewrite_member_id_zero_placeholder() {
+        let cmd = r#"shomagent ask 0 "top links""#;
+        assert_eq!(
+            rewrite_member_id_in_command(cmd, 0, 2),
+            r#"shomagent ask 2 "top links""#
+        );
+    }
+
+    #[test]
+    fn pick_bound_member_prefers_last_then_web() {
+        use shomagent::protocol::MemberStatus;
+        let roster = vec![
+            MemberStatus {
+                id: 1,
+                name: "old".into(),
+                state: "web".into(),
+                pid: None,
+                runtime_secs: 0,
+                findings: 0,
+                tell_me: String::new(),
+                command: "https://example.com".into(),
+            },
+            MemberStatus {
+                id: 2,
+                name: "slashdot".into(),
+                state: "web".into(),
+                pid: None,
+                runtime_secs: 0,
+                findings: 0,
+                tell_me: String::new(),
+                command: "https://www.slashdot.org".into(),
+            },
+        ];
+        assert_eq!(pick_bound_member(Some(2), &roster), Some(2));
+        assert_eq!(pick_bound_member(Some(9), &roster), Some(2)); // stale → max web
+        assert_eq!(pick_bound_member(None, &roster), Some(2));
     }
 
     #[test]
