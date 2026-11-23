@@ -63,7 +63,7 @@ Workspace ([ADR-0002](adr/0002-rust-language-and-style.md)):
 | `quickyn` | `crates/quickyn/` | yes/no + confidence CLI |
 | `shomloop` | `crates/shomloop/` | scheduled commands, crontab, planned-run CSV |
 
-`engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`, `quickyn_tui.rs`, `chat_tui.rs`, `emerge.rs`.
+`engram-shell` modules: `main.rs` (CLI, `--once`, `--script`, `--self-test`), `config.rs`, `modes.rs`, `repl.rs`, `llm.rs`, `tools/`, `mcp/`, `skills.rs`, `ui.rs`, `menu.rs`, `spinner.rs`, `completer.rs`, `learn/`, `halluc_fs.rs`, `halluc_session.rs`, `quickyn_tui.rs`, `chat_tui.rs`, `web_tui.rs`, `emerge.rs`, `split_frame.rs`, `sine_tui.rs`.
 
 Put new shell behavior in that map. Add a module or a workspace crate only when the boundary is real.
 
@@ -80,6 +80,7 @@ Tests: unit tests live next to the module. Behavior and golden paths live in `te
 | `/engram/user/` | Agent work tree. Compose bind mount (`SHOMSKY_USER_DIR`). Prompt shows `[home]` or `[engram]`. |
 | `/engram/user/bin/` | Learned commands. Entrypoint prepends this to `PATH`. |
 | `/engram/user/.command_freq.json` | Command counts for `:top` and cmdfreq. |
+| `/engram/user/.sine/` | SINE `session.json` and `playbook.md` (agent/root; skipped in hallucination). |
 | `/engram/user/.packages.json` | Successful `apk add` / `apk del` ledger. Interactive shells commit matching apk files into `shomskylinux:installed`; each start reinstalls names still marked installed that are missing. |
 | `/engram/skills/` | Markdown skills copied from `engram/skills/` at build. |
 | `/engram/models/` | GGUF volume `shomsky-models`. |
@@ -155,6 +156,10 @@ Files over 1000 characters warn on stderr (call still runs). `QUICKYN_STUB_LLM=1
 
 [chat.md](chat.md). Immersive framed conversation with the current model (`:chat`). New session: no REPL history, no tools. Title shows estimated token size and percent of the window (`ENGRAM_CONTEXT_TOKENS`, default 32768). `c` compactifies the dialogue into one summary turn and recalculates the counters. Esc exits. Saves `saved_chat_<YYYYMMDDTHHMMSSZ>.md` in the shell cwd (skipped in hallucination mode). `ENGRAM_CHAT_STUB=1` for CI.
 
+## SINE
+
+[sine.md](sine.md), [ADR-0014](adr/0014-sine-assistant.md). Plan-then-approve assistant (`:sine` or bare `sine`). Split frame: left top brand/art ([sine_image.txt](sine_image.txt)), left bottom agents/loops/files (Tab+↑↓+Enter opens a numbered file viewer), right top agent output, right bottom chat, status + command line. Plans with one local `chat_text_max` call; verbs include `quickyn` for yes/no; user `approve` / `edit` / `cancel`. `auto` is a shell flag. Idle (while the screen is open) reads top commands from the cmdfreq JSON and rewrites `playbook.md`. Session under `/engram/user/.sine/` (skipped in hallucination). `ENGRAM_SINE_STUB=1` for CI. Dependency surface is ADR-0014 only.
+
 ## shomagent
 
 [shomagent.md](shomagent.md), [ADR-0007](adr/0007-shomagent-background-crew.md). `shomagentd` starts with the container (`SKIP_SHOMAGENT=1` skips it). Create a member before `ask`, `talk`, or `write`.
@@ -215,6 +220,7 @@ You are the agent in Shomsky Linux, an Alpine container, talking to a person at 
 - In agent mode, call only allow-listed tools. `shell_exec` runs ash. `read_file`, `write_file`, and `list_dir` touch the sandbox filesystem. `load_skill` pulls a manual from `/engram/skills`. MCP tools use the `mcp__{server}__{tool}` name.
 - Shell-shaped lines are already executed by the shell. Do not re-issue them unless the user is asking you to.
 - Lines starting with `,` or `??` are the learn loop. Do not fake that loop with `shell_exec`. The user types the prefix at the prompt.
+- `:sine` / bare `sine` is the user's SINE screen. Do not imitate that loop with `shell_exec`. Plans stay visible; the user approves them unless they have turned `auto` on.
 - Install and remove software with `apk` in agent mode. If `which` fails, search (`apk search`) before assuming the package name matches the binary. Alpine often provides `python3` and not `python`. Successful `apk add` / `apk del` are recorded for `:packages`.
 - For “top commands” or “most used,” call `mcp__cmdfreq__top_commands` with `{"limit":10}`.
 - In hallucination mode, act as a virtual shell. Do not attempt real tools. Nothing you say should imply a disk write occurred.
@@ -239,6 +245,7 @@ You are the agent in Shomsky Linux, an Alpine container, talking to a person at 
 | Yes/no CLI | [adr/0009](adr/0009-quickyn-yes-no.md), [quickyn.md](quickyn.md) |
 | Scheduled commands | [adr/0013](adr/0013-shomloop.md), [shomloop.md](shomloop.md) |
 | Framed chat | [chat.md](chat.md) |
+| SINE assistant | [sine.md](sine.md), [adr/0014](adr/0014-sine-assistant.md) |
 | Modes, menu, tool protocol | [shell-modes.md](shell-modes.md) |
 | `:emerge` web terminal | [adr/0012](adr/0012-emerge-web-terminal.md), [shell-modes.md](shell-modes.md) |
 | `/engram` and skills | [engram.md](engram.md) |

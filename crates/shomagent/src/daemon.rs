@@ -252,6 +252,10 @@ const TALK_HISTORY_LIMIT: usize = 12;
 const TALK_RING_LINES: usize = 200;
 /// Characters of a document included in a talk or ask prompt.
 const DOC_EXCERPT_MAX: usize = 80_000;
+/// Web page text sent on ask/talk. Full sites (CNN, etc.) used to dump up to
+/// [`DOC_EXCERPT_MAX`] into a small CPU model and crash completions; headlines
+/// live near the top, so keep a tight head slice.
+const WEB_ASK_EXCERPT_MAX: usize = 12_000;
 /// Same default window as `:chat` (`ENGRAM_CONTEXT_TOKENS`).
 const DEFAULT_CONTEXT_TOKENS: u64 = 32_768;
 
@@ -508,17 +512,18 @@ fn member_context_excerpt(m: &Member) -> Excerpt {
                 clipped: false,
             };
         }
-        if text.len() <= DOC_EXCERPT_MAX {
+        if text.len() <= WEB_ASK_EXCERPT_MAX {
             Excerpt {
                 text,
                 clipped: false,
             }
         } else {
-            let end = floor_char_boundary(&text, DOC_EXCERPT_MAX);
+            let end = floor_char_boundary(&text, WEB_ASK_EXCERPT_MAX);
             Excerpt {
                 text: format!(
-                    "{}\n\n… [truncated; {} bytes total]",
+                    "{}\n\n… [truncated for ask; head {} of {} bytes — retry with a shorter question if the model fails]",
                     &text[..end],
+                    end,
                     text.len()
                 ),
                 clipped: true,
@@ -3331,9 +3336,24 @@ async fn handle_client(mut stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> Re
                                     context_usage: Some(begun.usage),
                                 }
                             }
-                            Err(e) => Response::Err {
-                                message: format!("{e:#}"),
-                            },
+                            Err(e) => {
+                                let heavy = begun.usage.percent >= 50
+                                    || begun.usage.excerpt_clipped
+                                    || begun.usage.tokens_used > 4_000;
+                                let hint = if heavy {
+                                    format!(
+                                        "\n(hint: ask context was ~{} tok / {}% — large pages overwhelm a small local model. \
+                                         Keep the web member; retry with a tiny question, e.g. \
+                                         shomagent ask {id} \"one headline title and url only\")",
+                                        begun.usage.tokens_used, begun.usage.percent
+                                    )
+                                } else {
+                                    String::new()
+                                };
+                                Response::Err {
+                                    message: format!("{e:#}{hint}"),
+                                }
+                            }
                         },
                     }
                     }

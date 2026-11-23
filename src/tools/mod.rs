@@ -16,7 +16,7 @@ use crate::skills::SkillStore;
 
 pub use fs::{list_dir, read_file, write_file};
 pub use shell_detect::looks_like_shell_command;
-pub use shell_exec::shell_exec;
+pub use shell_exec::{shell_exec, ShellResult};
 pub use shell_interactive::{is_ignore_llm_command, shell_exec_interactive};
 pub use text_parse::{
     extract_tool_calls, extract_tool_calls_with, strip_tool_markup, text_tool_instructions,
