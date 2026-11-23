@@ -40,7 +40,7 @@ pub const SPLASH_ART: &str = r#"
 \         /  :mode hallucination =       \         /   :menu      :help
  \       /          LLM dreams it's a CLI \       /    :splash    :sys
    \   /     :mode root = shell only        \   /      :quickyn   :chat
-     v                    no LLM              v        :web   
+     v                    no LLM              v        :web :sine
 "#;
 
 /// Whether we should paint splash / colors on this TTY.

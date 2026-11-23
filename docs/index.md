@@ -18,6 +18,8 @@
 - [quickyn](quickyn.md) — yes/no + confidence from the current model
 - [shomloop](shomloop.md) — scheduled commands, crontab, and `~/.loop/planned_runs.csv`
 - [chat](chat.md) — immersive framed chat with the current model (`:chat`)
+- [sine](sine.md) — SINE plan-then-approve assistant (`:sine` / bare `sine`); [ADR-0014](adr/0014-sine-assistant.md)
+- [sine-usecase](sine-usecase.md) — example: HN top 10 headlines → CSV once immediately
 - [MCP (local tools)](mcp.md) — in-container stdio MCP; cmdfreq / top 10 commands
 - [Models](models.md)
 - [Build and publish](build-and-publish.md)

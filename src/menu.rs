@@ -722,6 +722,11 @@ fn items_for(
                 kind: ItemKind::RunMeta(":chat"),
             },
             Item {
+                label: ":sine".into(),
+                detail: "SINE plan-then-approve assistant (roster, chat, idle playbook)".into(),
+                kind: ItemKind::RunMeta(":sine"),
+            },
+            Item {
                 label: ":model".into(),
                 detail: "Active model / LLM endpoint".into(),
                 kind: ItemKind::RunMeta(":model"),

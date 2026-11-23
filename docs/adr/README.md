@@ -22,6 +22,7 @@ AI-assisted contribution rules.
 | [0011](0011-shomagent-web.md) | shomagent web (headless browser) | Accepted |
 | [0012](0012-emerge-web-terminal.md) | :emerge web terminal | Accepted |
 | [0013](0013-shomloop.md) | shomloop scheduled commands | Accepted |
+| [0014](0014-sine-assistant.md) | SINE assistant | Accepted |
 
 How-to docs (modes, MCP usage, models, licensing inventory) stay under
 [`docs/`](../).

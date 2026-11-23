@@ -37,6 +37,7 @@ const META_COMMANDS: &[&str] = &[
     ":agents",
     ":quickyn",
     ":chat",
+    ":sine",
     ":web",
     ":emerge",
 ];

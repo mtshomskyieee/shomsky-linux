@@ -235,6 +235,12 @@ impl Repl {
                 break;
             }
 
+            // Bare `sine` / `sine …` opens the SINE assistant (exact first token).
+            if let Some(rest) = bare_sine_request(&line) {
+                crate::sine_tui::run(&self.cfg, self.cwd.clone(), rest).await;
+                continue;
+            }
+
             // Local identity — don't spend an LLM turn on uname.
             if ui::is_sys_command(&line) {
                 ui::print_sys(&self.cfg, &self.cwd);
@@ -435,6 +441,16 @@ impl Repl {
 
     pub async fn run_once(&mut self, prompt: &str) -> Result<()> {
         self.ensure_mcp().await;
+
+        let line = prompt.trim();
+        if line.starts_with(':') {
+            let _ = self.handle_meta(line, None).await?;
+            return Ok(());
+        }
+        if let Some(rest) = bare_sine_request(line) {
+            crate::sine_tui::run(&self.cfg, self.cwd.clone(), rest).await;
+            return Ok(());
+        }
 
         if let Some(pending) = self.pending_promote.clone() {
             match learn::handle_save_line(prompt, &self.llm, &pending).await {
@@ -716,6 +732,15 @@ impl Repl {
             }
             ":chat" => {
                 crate::chat_tui::run(&self.cfg, self.cwd.clone()).await;
+            }
+            ":sine" => {
+                let rest = line.trim_start_matches(":sine").trim();
+                let initial = if rest.is_empty() {
+                    None
+                } else {
+                    Some(rest.to_string())
+                };
+                crate::sine_tui::run(&self.cfg, self.cwd.clone(), initial).await;
             }
             ":web" => {
                 let rest = line.trim_start_matches(":web").trim();
@@ -1476,6 +1501,23 @@ fn is_shell_exit(line: &str) -> bool {
     }
 }
 
+/// Bare `sine` or `sine <request>` — open SINE. Returns `Some(None)` for bare
+/// `sine`, `Some(Some(rest))` when a request follows, or `None` if not a match.
+fn bare_sine_request(line: &str) -> Option<Option<String>> {
+    let mut parts = line.split_whitespace();
+    match parts.next() {
+        Some("sine") => {
+            let rest = parts.collect::<Vec<_>>().join(" ");
+            if rest.is_empty() {
+                Some(None)
+            } else {
+                Some(Some(rest))
+            }
+        }
+        _ => None,
+    }
+}
+
 fn build_agent_prompt(cfg: &Config, skills: &SkillStore) -> String {
     let mut s = String::new();
     s.push_str(
@@ -1558,6 +1600,7 @@ Meta-commands:
   :shomagent         Roster background agents (:agents); :shomagent talk N peeks
   :quickyn           Split-screen yes/no TUI (question + file left; check/X right)
   :chat              Framed chat with the current model (ctx size, compactify, save)
+  :sine [request]    SINE plan-then-approve assistant (also: bare sine)
   :web [url]         Split text browser (page left, chat right; url + chat inputs)
   :emerge            Serve this session at http://localhost:1337 (Ctrl-C returns)
   :clear             Clear conversation history (hallucination: new session file)
@@ -1570,6 +1613,13 @@ quickyn (agent mode / PATH):
 
 chat:
   :chat              Immersive framed chat; Esc exits; saves saved_chat_<stamp>.md
+
+sine:
+  :sine [request]    Plan-then-approve assistant (ADR-0014); Esc saves /engram/user/.sine
+  sine [request]     Same as :sine (exact first token)
+  Ctrl-A / auto      Toggle autonomous run (footer shows ^A auto:on|off)
+  Ctrl-L / clear     Clear chat, agent log, and pending plan
+  approve/a edit/e cancel/q   Respond to a pending plan (e loads plan into the line)
 
 web:
   :web [url]         Text browser TUI; chat side shows ctx used/buffer; spinner while loading or thinking
