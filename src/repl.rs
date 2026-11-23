@@ -1618,7 +1618,7 @@ sine:
   :sine [request]    Plan-then-approve assistant (ADR-0014); Esc saves /engram/user/.sine
   sine [request]     Same as :sine (exact first token)
   Ctrl-A / auto      Toggle autonomous run (footer shows ^A auto:on|off)
-  Ctrl-L / clear     Clear chat, agent log, and pending plan
+  Ctrl-K / clear     Clear chat, agent log, and pending plan
   approve/a edit/e cancel/q   Respond to a pending plan (e loads plan into the line)
 
 web:

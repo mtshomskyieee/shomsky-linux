@@ -52,7 +52,7 @@ Touched files appear under **files:** in the left-bottom pane and persist in
 created or mtime-updated in cwd (and `/engram/user`) during a shell step
 (catches `yc_headlines_$(date …).csv`), `/engram/…` paths printed in shell
 output, session.json, playbook.md, **plan.md** (written when a plan is
-presented; kept across Ctrl-L so a small local model can recover after
+presented; kept across Ctrl-K so a small local model can recover after
 compaction), and quickyn file args.
 
 Planning prompt steers toward first-party CLIs. Webpage / JS work should be

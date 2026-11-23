@@ -38,7 +38,9 @@ rank,title,url
 
 ### 1. Natural-language request (preferred)
 
-Open SINE, then type something explicit:
+Open SINE, then type something explicit — or **paste** the block below into the
+composer (multi-line paste stays in the draft; finish with **Ctrl-S**, or Enter
+on a trailing blank line):
 
 ```text
 Visit https://news.ycombinator.com with shomagent web (headless browser).

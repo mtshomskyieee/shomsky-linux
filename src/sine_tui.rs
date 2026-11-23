@@ -145,7 +145,7 @@ impl SinePlan {
 /// Estimate tokens for SINE **session** working memory (chat, agent log,
 /// pending plan, in-memory playbook). Same chars/4 heuristic as `:chat`.
 ///
-/// The fixed plan system prompt is **not** counted here: `^L` / `clear` must
+/// The fixed plan system prompt is **not** counted here: `^K` / `clear` must
 /// leave the agent/chat meters at `ctx 0 tok` when the session is empty.
 pub fn estimate_sine_tokens(session: &SineSession) -> usize {
     let mut n = 0usize;
@@ -694,7 +694,7 @@ impl SineState {
         ));
         // Bottom menu: keys + current auto state (Ctrl-A toggles).
         self.frame.footer = Some(format!(
-            "Esc exit · Enter send/open · ^A auto:{auto} · ^L clear · Tab left=files · ↑↓ select · a/e/q plan"
+            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · Tab left=files · ↑↓ · a/e/q"
         ));
         // Live meter on the agent pane header (same estimate as :chat).
         self.frame
@@ -1044,7 +1044,7 @@ async fn execute_plan(
                  Recourse (member may still be in the left list):\n\
                  1. Retry a tiny ask: shomagent ask <id> \"one headline title and url only\"\n\
                  2. Write the reply to the file yourself, then shomagent stop <id>\n\
-                 3. Or re-open plan.md after ^L and type a narrower request\n\
+                 3. Or re-open plan.md after ^K and type a narrower request\n\
                  Do not re-run the full plan until ask succeeds.",
                 idx + 1
             );
@@ -1678,7 +1678,7 @@ async fn handle_line(state: &mut SineState, line: &str, cfg: &Config, pending: &
                 state.frame.set_input(edit);
                 state.push_chat(
                     false,
-                    "plan loaded into the command line — edit it, then Enter to re-plan",
+                    "plan loaded into the command line — edit it, then Enter/^S to re-plan",
                 );
             }
             state.status_extra = Some("edit".into());
@@ -1730,6 +1730,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
         let _ = write!(out, "\x1b[?1049h\x1b[?25h");
         let _ = out.flush();
     }
+    split_frame::set_bracketed_paste(true);
 
     let allow_persist = cfg.mode != Mode::Hallucination;
     let sine_dir = default_sine_dir();
@@ -1890,7 +1891,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 }
                 break;
             }
-            Some(key) if state.frame.handle_resize_key(key) => {
+            Some(key) if state.frame.handle_resize_key(&key) => {
                 state.persist_ratios();
                 continue;
             }
@@ -1901,10 +1902,30 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 {
                     state.open_selected_file();
                     state.note_activity();
+                } else if split_frame::enter_should_send(
+                    &state.frame.input,
+                    state.frame.cursor,
+                ) {
+                    let line = state.frame.take_input();
+                    handle_line(&mut state, &line, cfg, &mut pending).await;
+                } else if state.frame.input.is_empty() {
+                    // Empty right-focus Enter: no-op (do not insert a stray blank).
+                    state.note_activity();
                 } else {
+                    state.frame.insert_newline();
+                    state.note_activity();
+                }
+            }
+            Some(Key::CtrlS) => {
+                if !state.frame.input.trim().is_empty() {
                     let line = state.frame.take_input();
                     handle_line(&mut state, &line, cfg, &mut pending).await;
                 }
+                state.note_activity();
+            }
+            Some(Key::Paste(text)) => {
+                state.frame.insert_str(&text);
+                state.note_activity();
             }
             Some(Key::Backspace) => {
                 state.frame.backspace();
@@ -1914,8 +1935,9 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 state.toggle_auto();
                 state.note_activity();
             }
-            Some(Key::CtrlL) => {
+            Some(Key::CtrlK) => {
                 // Abort in-flight plan/idle so a late result can't refill panes.
+                // (^K — not ^L: many hosts treat Ctrl-L as terminal form-feed.)
                 if let Some(job) = pending.take() {
                     job.handle.abort();
                 }
@@ -1971,6 +1993,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
 
     state.save_if_allowed();
 
+    split_frame::set_bracketed_paste(false);
     {
         let mut out = io::stdout().lock();
         let _ = write!(out, "\x1b[?1049l");

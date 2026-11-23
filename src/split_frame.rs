@@ -31,7 +31,7 @@ pub enum ResizeTarget {
     RightHorizontal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Key {
     Up,
     Down,
@@ -51,11 +51,18 @@ pub enum Key {
     Backspace,
     CtrlA,
     CtrlC,
+    CtrlK,
     CtrlL,
+    CtrlS,
     CtrlU,
     Char(char),
+    /// Bracketed-paste payload (`\r` / `\r\n` normalized to `\n`).
+    Paste(String),
     Other,
 }
+
+/// Visible composer height cap (plan: grow 1–3 rows).
+pub const COMPOSER_MAX_ROWS: usize = 3;
 
 const RATIO_MIN: f32 = 0.2;
 const RATIO_MAX: f32 = 0.8;
@@ -69,6 +76,8 @@ pub struct Leaf {
     pub lines: Vec<String>,
     pub scroll: usize,
     pub follow_bottom: bool,
+    /// Soft-wrap long lines to the pane width (agent / chat).
+    pub wrap: bool,
 }
 
 impl Leaf {
@@ -80,11 +89,17 @@ impl Leaf {
             lines: Vec::new(),
             scroll: 0,
             follow_bottom: true,
+            wrap: false,
         }
     }
 
     pub fn with_header(mut self, header: impl Into<String>) -> Self {
         self.header = Some(header.into());
+        self
+    }
+
+    pub fn with_wrap(mut self) -> Self {
+        self.wrap = true;
         self
     }
 
@@ -134,10 +149,18 @@ impl Leaf {
         h.max(1)
     }
 
+    fn display_line_count(&self, pane_w: usize) -> usize {
+        if self.wrap {
+            wrap_pane_lines(&self.lines, pane_w.max(1)).len()
+        } else {
+            self.lines.len()
+        }
+    }
+
     #[allow(dead_code)]
-    fn clamp_scroll(&mut self, pane_h: usize) {
+    fn clamp_scroll(&mut self, pane_h: usize, pane_w: usize) {
         let body = self.content_height(pane_h);
-        let max_scroll = self.lines.len().saturating_sub(body);
+        let max_scroll = self.display_line_count(pane_w).saturating_sub(body);
         if self.follow_bottom {
             self.scroll = max_scroll;
         } else {
@@ -145,10 +168,10 @@ impl Leaf {
         }
     }
 
-    pub fn scroll_by(&mut self, delta: isize, pane_h: usize) {
+    pub fn scroll_by(&mut self, delta: isize, pane_h: usize, pane_w: usize) {
         self.follow_bottom = false;
         let body = self.content_height(pane_h);
-        let max_scroll = self.lines.len().saturating_sub(body) as isize;
+        let max_scroll = self.display_line_count(pane_w).saturating_sub(body) as isize;
         let next = (self.scroll as isize + delta).clamp(0, max_scroll.max(0));
         self.scroll = next as usize;
         if self.scroll >= max_scroll as usize {
@@ -379,8 +402,8 @@ impl SplitFrame {
     pub fn sine_layout() -> Self {
         let left_top = Leaf::new("left_top").with_header("SINE");
         let left_bottom = Leaf::new("left_bottom").with_header("agents / loops / files");
-        let right_top = Leaf::new("right_top").with_header("agent");
-        let right_bottom = Leaf::new("right_bottom").with_header("chat");
+        let right_top = Leaf::new("right_top").with_header("agent").with_wrap();
+        let right_bottom = Leaf::new("right_bottom").with_header("chat").with_wrap();
 
         let left = Node::rows(
             0.45,
@@ -524,7 +547,7 @@ impl SplitFrame {
         };
     }
 
-    pub fn handle_resize_key(&mut self, key: Key) -> bool {
+    pub fn handle_resize_key(&mut self, key: &Key) -> bool {
         match key {
             Key::CtrlLeft => {
                 self.resize(ResizeTarget::Vertical, false);
@@ -559,10 +582,31 @@ impl SplitFrame {
     }
 
     pub fn insert_char(&mut self, c: char) {
+        // Soft newlines only via insert_str / Enter handler — ignore bare \n here.
+        if c == '\n' || c == '\r' {
+            self.insert_str("\n");
+            return;
+        }
         let idx = byte_index_at_char(&self.input, self.cursor);
         self.input.insert(idx, c);
         self.cursor += 1;
         self.history_idx = None;
+    }
+
+    /// Insert text at the cursor (paste / newline). Normalizes `\r\n` and `\r` to `\n`.
+    pub fn insert_str(&mut self, text: &str) {
+        let normalized = normalize_paste(text);
+        if normalized.is_empty() {
+            return;
+        }
+        let idx = byte_index_at_char(&self.input, self.cursor);
+        self.input.insert_str(idx, &normalized);
+        self.cursor += normalized.chars().count();
+        self.history_idx = None;
+    }
+
+    pub fn insert_newline(&mut self) {
+        self.insert_str("\n");
     }
 
     pub fn backspace(&mut self) {
@@ -573,6 +617,16 @@ impl SplitFrame {
         self.input.remove(idx);
         self.cursor -= 1;
         self.history_idx = None;
+    }
+
+    /// Rows the composer should occupy (1..=COMPOSER_MAX_ROWS) for current input/width.
+    pub fn composer_rows_for(&self, cols: usize) -> usize {
+        let input_w = cols
+            .saturating_sub(self.prompt.chars().count())
+            .max(1);
+        wrap_composer_lines(&self.input, input_w)
+            .len()
+            .clamp(1, COMPOSER_MAX_ROWS)
     }
 
     pub fn clear_input(&mut self) {
@@ -659,15 +713,27 @@ impl SplitFrame {
         let Some(id) = id.map(str::to_string) else {
             return;
         };
-        let lay = FrameLayout::compute(&self.root);
-        let pane_h = lay.pane_height_for(&id).unwrap_or(4);
+        let (term_rows, term_cols) = term::term_size();
+        let cols = term_cols.clamp(40, term::MAX_COLS);
+        let rows = term_rows.clamp(10, term::MAX_ROWS);
+        let composer_rows = self.composer_rows_for(cols);
+        let lay = FrameLayout::compute_sized(&self.root, rows, cols, composer_rows);
+        let (pane_w, pane_h) = lay.pane_size_for(&id).unwrap_or((cols, 4));
         if let Some(leaf) = self.root.find_leaf_mut(&id) {
-            leaf.scroll_by(delta, pane_h);
+            leaf.scroll_by(delta, pane_h, pane_w);
         }
     }
 
     pub fn draw(&self) {
-        let lay = FrameLayout::compute(&self.root);
+        let (term_rows, term_cols) = term::term_size();
+        let cols = term_cols.clamp(40, term::MAX_COLS);
+        let rows = term_rows.clamp(10, term::MAX_ROWS);
+        let prefix = &self.prompt;
+        let prefix_w = prefix.chars().count();
+        let input_w = cols.saturating_sub(prefix_w).max(1);
+        let visual = wrap_composer_lines(&self.input, input_w);
+        let composer_rows = visual.len().clamp(1, COMPOSER_MAX_ROWS);
+        let lay = FrameLayout::compute_sized(&self.root, rows, cols, composer_rows);
         let color = ui::color_enabled();
         let r = "\x1b[0m";
         let bold = if color { "\x1b[1m" } else { "" };
@@ -711,22 +777,31 @@ impl SplitFrame {
             pad_visible(&status_line, lay.cols)
         );
 
-        let input_y = status_y + 1;
-        let prefix = &self.prompt;
-        let input_w = lay.cols.saturating_sub(prefix.chars().count()).max(1);
-        let (shown, cursor_col) = visible_input(&self.input, self.cursor, input_w);
-        let input_cell = format!("{prefix}{shown}");
-        let _ = write!(
-            buf,
-            "\x1b[{input_y};1H{cyan}{bold}{}{r}",
-            pad_visible(&input_cell, lay.cols)
-        );
+        let (cursor_row, cursor_col) = cursor_visual_pos(&self.input, self.cursor, input_w);
+        let scroll = composer_scroll(visual.len(), cursor_row, composer_rows);
+        let composer_y0 = status_y + 1;
+        for row in 0..composer_rows {
+            let y = composer_y0 + row;
+            let line_idx = scroll + row;
+            let line = visual.get(line_idx).map(String::as_str).unwrap_or("");
+            let cell = if line_idx == 0 {
+                format!("{prefix}{line}")
+            } else {
+                format!("{:width$}{line}", "", width = prefix_w)
+            };
+            let _ = write!(
+                buf,
+                "\x1b[{y};1H{cyan}{bold}{}{r}",
+                pad_visible(&cell, lay.cols)
+            );
+        }
         let _ = inv; // reserved for focused chrome
         // Footer help row (keys / auto).
-        if lay.rows > input_y {
-            let foot_y = lay.rows;
+        let foot_y = lay.rows;
+        if foot_y > composer_y0 + composer_rows - 1 {
             let footer = self.footer.clone().unwrap_or_else(|| {
-                "Esc exit · Enter send · Tab focus · Ctrl-arrows resize".into()
+                "Esc exit · ^S send · Enter newline/send · Tab focus · Ctrl-arrows resize"
+                    .into()
             });
             let _ = write!(
                 buf,
@@ -735,8 +810,12 @@ impl SplitFrame {
             );
         }
 
-        let screen_col = 1 + prefix.chars().count() + cursor_col;
-        let _ = write!(buf, "\x1b[?25h\x1b[{input_y};{screen_col}H");
+        let cursor_screen_row = composer_y0 + cursor_row.saturating_sub(scroll);
+        let screen_col = 1 + prefix_w + cursor_col;
+        let _ = write!(
+            buf,
+            "\x1b[?25h\x1b[{cursor_screen_row};{screen_col}H"
+        );
 
         let mut out = io::stdout().lock();
         let _ = out.write_all(buf.as_bytes());
@@ -754,12 +833,11 @@ struct FrameLayout {
 }
 
 impl FrameLayout {
-    fn compute(root: &Node) -> Self {
-        let (rows, cols) = term::term_size();
-        let cols = cols.clamp(40, term::MAX_COLS);
-        let rows = rows.clamp(10, term::MAX_ROWS);
-        // body + status + input + footer
-        let body_rows = rows.saturating_sub(3).max(3);
+    fn compute_sized(root: &Node, rows: usize, cols: usize, composer_rows: usize) -> Self {
+        let composer_rows = composer_rows.clamp(1, COMPOSER_MAX_ROWS);
+        // body + status + composer + footer
+        let chrome = 2 + composer_rows;
+        let body_rows = rows.saturating_sub(chrome).max(3);
         let mut lay = Self {
             cols,
             rows,
@@ -800,11 +878,11 @@ impl FrameLayout {
         }
     }
 
-    fn pane_height_for(&self, id: &str) -> Option<usize> {
+    fn pane_size_for(&self, id: &str) -> Option<(usize, usize)> {
         self.panes
             .iter()
             .find(|(pid, ..)| pid == id)
-            .map(|(_, _, _, _, h)| *h)
+            .map(|(_, _, _, w, h)| (*w, *h))
     }
 
 }
@@ -939,7 +1017,12 @@ fn paint_leaf(
     }
 
     let body_h = content_h.max(1);
-    let max_scroll = leaf.lines.len().saturating_sub(body_h);
+    let display: Vec<String> = if leaf.wrap {
+        wrap_pane_lines(&leaf.lines, w)
+    } else {
+        leaf.lines.clone()
+    };
+    let max_scroll = display.len().saturating_sub(body_h);
     let start = if leaf.follow_bottom {
         max_scroll
     } else {
@@ -947,12 +1030,13 @@ fn paint_leaf(
     };
     for row in 0..body_h {
         let gy = content_y + row;
-        let text = leaf
-            .lines
-            .get(start + row)
-            .cloned()
-            .unwrap_or_default();
-        let cell = truncate_visible(&text, w);
+        let text = display.get(start + row).cloned().unwrap_or_default();
+        let cell = if leaf.wrap {
+            // Already soft-wrapped to `w`; pad only.
+            text
+        } else {
+            truncate_visible(&text, w)
+        };
         let _ = write!(buf, "\x1b[{gy};{x}H{}", pad_visible(&cell, w));
     }
 
@@ -1035,6 +1119,7 @@ fn byte_index_at_char(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
+#[allow(dead_code)] // kept for single-line chrome callers / tests
 pub fn visible_input(input: &str, cursor: usize, width: usize) -> (String, usize) {
     let chars: Vec<char> = input.chars().collect();
     if chars.len() <= width {
@@ -1045,6 +1130,126 @@ pub fn visible_input(input: &str, cursor: usize, width: usize) -> (String, usize
     let shown: String = chars[start..end].iter().collect();
     let cursor_col = cursor.saturating_sub(start);
     (shown, cursor_col)
+}
+
+/// Soft-wrap each logical pane line to `width` (agent / chat display).
+pub fn wrap_pane_lines(lines: &[String], width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out: Vec<String> = Vec::new();
+    if lines.is_empty() {
+        return out;
+    }
+    for line in lines {
+        if line.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let mut start = 0;
+        while start < chars.len() {
+            let end = (start + width).min(chars.len());
+            out.push(chars[start..end].iter().collect());
+            start = end;
+        }
+    }
+    out
+}
+
+/// Soft-wrap composer text into display rows (hard `\n` preserved).
+pub fn wrap_composer_lines(input: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out: Vec<String> = Vec::new();
+    // `split` keeps a trailing empty segment when input ends with `\n`.
+    for logical in input.split('\n') {
+        if logical.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let chars: Vec<char> = logical.chars().collect();
+        let mut start = 0;
+        while start < chars.len() {
+            let end = (start + width).min(chars.len());
+            out.push(chars[start..end].iter().collect());
+            start = end;
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Cursor (row, col) within [`wrap_composer_lines`] for a character offset.
+pub fn cursor_visual_pos(input: &str, cursor: usize, width: usize) -> (usize, usize) {
+    let width = width.max(1);
+    let chars: Vec<char> = input.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let before: String = chars[..cursor].iter().collect();
+    let lines = wrap_composer_lines(&before, width);
+    // When `before` ends with `\n`, wrap yields a trailing empty row — cursor sits there.
+    let row = lines.len().saturating_sub(1);
+    let col = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+    (row, col)
+}
+
+fn composer_scroll(total_lines: usize, cursor_row: usize, view_rows: usize) -> usize {
+    let view_rows = view_rows.max(1);
+    if total_lines <= view_rows {
+        return 0;
+    }
+    let max_scroll = total_lines - view_rows;
+    if cursor_row < view_rows {
+        0
+    } else {
+        (cursor_row + 1).saturating_sub(view_rows).min(max_scroll)
+    }
+}
+
+/// Normalize pasted / multi-line text: `\r\n` and `\r` → `\n`; drop other C0 controls.
+pub fn normalize_paste(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push('\n');
+            }
+            '\n' | '\t' => out.push(c),
+            c if c == '\u{7f}' || (c as u32) < 0x20 => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Whether Enter should submit (vs insert a newline).
+///
+/// - Single-line non-empty → send
+/// - Multi-line with cursor at end and buffer ending in `\n` → send (blank trailing line)
+pub fn enter_should_send(input: &str, cursor: usize) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    if !input.contains('\n') {
+        return true;
+    }
+    let at_end = cursor >= input.chars().count();
+    at_end && input.ends_with('\n')
+}
+
+/// Enable or disable DECSET 2004 bracketed paste.
+pub fn set_bracketed_paste(enabled: bool) {
+    let mut out = io::stdout().lock();
+    let seq = if enabled {
+        "\x1b[?2004h"
+    } else {
+        "\x1b[?2004l"
+    };
+    let _ = out.write_all(seq.as_bytes());
+    let _ = out.flush();
 }
 
 pub fn poll_key(timeout: Duration) -> Option<Key> {
@@ -1065,11 +1270,38 @@ pub fn poll_key(timeout: Duration) -> Option<Key> {
     }
 }
 
+fn read_bracketed_paste(stdin: &mut impl Read, prefix: &[u8]) -> Key {
+    let mut raw = Vec::from(prefix);
+    let mut window = [0u8; 1];
+    // End marker: ESC [ 2 0 1 ~
+    let end = b"\x1b[201~";
+    loop {
+        match stdin.read(&mut window) {
+            Ok(1) => {
+                raw.push(window[0]);
+                if raw.ends_with(end) {
+                    raw.truncate(raw.len() - end.len());
+                    break;
+                }
+                // Cap runaway pastes (512 KiB).
+                if raw.len() > 512 * 1024 {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    Key::Paste(normalize_paste(&text))
+}
+
 pub fn decode_key(first: u8, stdin: &mut impl Read) -> Key {
     match first {
         0x01 => Key::CtrlA,
         0x03 => Key::CtrlC,
+        0x0b => Key::CtrlK,
         0x0c => Key::CtrlL,
+        0x13 => Key::CtrlS,
         0x15 => Key::CtrlU,
         b'\r' | b'\n' => Key::Enter,
         b'\t' => Key::Tab,
@@ -1082,6 +1314,15 @@ pub fn decode_key(first: u8, stdin: &mut impl Read) -> Key {
                 return Key::Esc;
             }
             if rest[0] == b'[' {
+                // Bracketed paste start: ESC [ 200 ~
+                if n >= 5
+                    && rest[1] == b'2'
+                    && rest[2] == b'0'
+                    && rest[3] == b'0'
+                    && rest[4] == b'~'
+                {
+                    return read_bracketed_paste(stdin, &rest[5..n]);
+                }
                 // CSI: plain arrows / page, or modifier form ESC [ 1 ; 5 A
                 if n >= 2 && rest[1] == b'A' {
                     return Key::Up;
@@ -1300,5 +1541,111 @@ mod tests {
     fn ctrl_l_decodes() {
         let mut empty: &[u8] = &[];
         assert_eq!(decode_key(0x0c, &mut empty), Key::CtrlL);
+    }
+
+    #[test]
+    fn ctrl_k_decodes() {
+        let mut empty: &[u8] = &[];
+        assert_eq!(decode_key(0x0b, &mut empty), Key::CtrlK);
+    }
+
+    #[test]
+    fn ctrl_s_decodes() {
+        let mut empty: &[u8] = &[];
+        assert_eq!(decode_key(0x13, &mut empty), Key::CtrlS);
+    }
+
+    #[test]
+    fn bracketed_paste_decodes_with_newlines() {
+        // After ESC, remaining stream is `[200~…\x1b[201~`
+        let mut body: &[u8] = b"[200~line1\r\nline2\x1b[201~";
+        let key = decode_key(0x1b, &mut body);
+        assert_eq!(key, Key::Paste("line1\nline2".into()));
+    }
+
+    #[test]
+    fn normalize_paste_maps_crlf() {
+        assert_eq!(normalize_paste("a\r\nb\rc"), "a\nb\nc");
+        assert_eq!(normalize_paste("x\0y"), "xy");
+    }
+
+    #[test]
+    fn enter_should_send_single_and_trailing_blank() {
+        assert!(!enter_should_send("", 0));
+        assert!(enter_should_send("hello", 5));
+        assert!(!enter_should_send("hello\nworld", 11));
+        assert!(enter_should_send("hello\nworld\n", 12));
+        assert!(!enter_should_send("hello\n", 3)); // cursor mid-buffer
+        assert!(enter_should_send("hello\n", 6));
+    }
+
+    #[test]
+    fn wrap_composer_hard_newlines_and_soft_wrap() {
+        let lines = wrap_composer_lines("ab\nc", 10);
+        assert_eq!(lines, vec!["ab".to_string(), "c".to_string()]);
+        let soft = wrap_composer_lines("abcdef", 3);
+        assert_eq!(
+            soft,
+            vec!["abc".to_string(), "def".to_string()]
+        );
+        let trailing = wrap_composer_lines("hi\n", 10);
+        assert_eq!(trailing, vec!["hi".to_string(), String::new()]);
+    }
+
+    #[test]
+    fn wrap_pane_lines_soft_wraps_long_rows() {
+        let src = vec![
+            "short".into(),
+            "abcdefghij".into(),
+            String::new(),
+            "xy".into(),
+        ];
+        let wrapped = wrap_pane_lines(&src, 4);
+        assert_eq!(
+            wrapped,
+            vec![
+                "shor".to_string(),
+                "t".to_string(),
+                "abcd".to_string(),
+                "efgh".to_string(),
+                "ij".to_string(),
+                String::new(),
+                "xy".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn sine_agent_and_chat_enable_wrap() {
+        let frame = SplitFrame::sine_layout();
+        assert!(frame.leaf("right_top").unwrap().wrap);
+        assert!(frame.leaf("right_bottom").unwrap().wrap);
+        assert!(!frame.leaf("left_top").unwrap().wrap);
+    }
+
+    #[test]
+    fn composer_rows_clamp_to_three() {
+        let mut frame = SplitFrame::sine_layout();
+        frame.set_input("a\nb\nc\nd\ne");
+        assert_eq!(frame.composer_rows_for(80), 3);
+        frame.clear_input();
+        assert_eq!(frame.composer_rows_for(80), 1);
+    }
+
+    #[test]
+    fn insert_str_paste_does_not_submit() {
+        let mut frame = SplitFrame::sine_layout();
+        frame.insert_str("one\ntwo\nthree");
+        assert_eq!(frame.input, "one\ntwo\nthree");
+        assert_eq!(frame.cursor, "one\ntwo\nthree".chars().count());
+        assert!(!enter_should_send(&frame.input, frame.cursor));
+    }
+
+    #[test]
+    fn cursor_visual_pos_after_newline() {
+        let (row, col) = cursor_visual_pos("hi\n", 3, 40);
+        assert_eq!((row, col), (1, 0));
+        let (row, col) = cursor_visual_pos("abcdef", 4, 3);
+        assert_eq!((row, col), (1, 1)); // "abc" / "d|ef"
     }
 }
