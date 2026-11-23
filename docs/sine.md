@@ -38,11 +38,13 @@ Keys: Esc exit · **Ctrl-S** send · Enter send on a one-line draft, insert a
 newline when the draft already has newlines, or send again on a trailing blank
 line (or **open** the selected file when focus is left and the draft is empty) ·
 **Ctrl-A** toggle auto · **Ctrl-K** clear context (not Ctrl-L — hosts often
-eat Ctrl-L as form-feed) · Tab focus column (left = file list) · ↑↓ select file
-when left-focused (or walk input history) · Ctrl-Left/Right vertical split ·
-Ctrl-Up/Down pane split. Bracketed paste keeps newlines in the composer (does
-not auto-send). Typed characters always go to the command line. You can also
-type `auto` or `clear` and press Enter / Ctrl-S.
+eat Ctrl-L as form-feed) · **Ctrl-R** clear the files list (drop prior-session
+paths and reset the touch baseline; session/playbook/plan reappear if present) ·
+Tab focus column (left = file list) · ↑↓ select file when left-focused (or walk
+input history) · Ctrl-Left/Right vertical split · Ctrl-Up/Down pane split.
+Bracketed paste keeps newlines in the composer (does not auto-send). Typed
+characters always go to the command line. You can also type `auto`, `clear`,
+or `files clear` / `refresh files` and press Enter / Ctrl-S.
 
 Plan verb **`quickyn`** asks a yes/no with confidence (ADR-0009) when the
 step is a boolean gate.

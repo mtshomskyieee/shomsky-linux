@@ -775,7 +775,7 @@ impl SineState {
         ));
         // Bottom menu: keys + current auto state (Ctrl-A toggles).
         self.frame.footer = Some(format!(
-            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · Tab left=files · ↑↓ · a/e/q"
+            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · ^R files · Tab left=files · ↑↓ · a/e/q"
         ));
         // Live meter on the agent pane header (same estimate as :chat).
         self.frame
@@ -816,6 +816,15 @@ impl SineState {
         let state = if self.session.auto { "on" } else { "off" };
         self.push_chat(true, &format!("auto {state}"));
         self.refresh_status();
+        self.save_if_allowed();
+    }
+
+    /// Drop the accumulated files: list so the next shell step's mtime
+    /// snapshot is a fresh baseline. Session/playbook/plan are re-seeded on
+    /// the following roster refresh when they exist on disk.
+    fn clear_touched_files(&mut self) {
+        self.session.touched_files.clear();
+        self.file_select = 0;
         self.save_if_allowed();
     }
 
@@ -998,7 +1007,7 @@ async fn refresh_roster(state: &mut SineState) {
     }
     lines.push("files:".into());
     if state.session.touched_files.is_empty() {
-        lines.push("  (none — Tab left, ↑↓ select, Enter open)".into());
+        lines.push("  (none — Tab left, ↑↓ select, Enter open · ^R clear)".into());
     } else {
         if state.file_select >= state.session.touched_files.len() {
             state.file_select = state.session.touched_files.len() - 1;
@@ -2034,6 +2043,14 @@ async fn handle_line(state: &mut SineState, line: &str, cfg: &Config, pending: &
             state.clear_context();
             return;
         }
+        "files clear" | "clear files" | "refresh files" => {
+            state.clear_touched_files();
+            refresh_roster(state).await;
+            state.agent_note("(files list cleared — baseline reset)");
+            state.refresh_status();
+            state.frame.draw();
+            return;
+        }
         "approve" | "a" if state.phase == Phase::AwaitingApproval => {
             state.push_chat(true, trimmed);
             approve_and_run(state).await;
@@ -2331,6 +2348,16 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 }
                 state.clear_context();
                 state.note_activity();
+                state.frame.draw();
+            }
+            Some(Key::CtrlR) => {
+                // Reset files: list (drop prior-session paths); next shell step
+                // mtime snapshot starts clean. Roster refresh re-seeds sine meta.
+                state.clear_touched_files();
+                refresh_roster(&mut state).await;
+                state.agent_note("(files list cleared — baseline reset)");
+                state.note_activity();
+                state.refresh_status();
                 state.frame.draw();
             }
             Some(Key::CtrlU) => {
