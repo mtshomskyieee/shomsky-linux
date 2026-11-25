@@ -56,6 +56,8 @@ pub enum Key {
     CtrlR,
     CtrlS,
     CtrlU,
+    CtrlY,
+    CtrlZ,
     Char(char),
     /// Bracketed-paste payload (`\r` / `\r\n` normalized to `\n`).
     Paste(String),
@@ -137,6 +139,12 @@ impl Leaf {
         self.lines = lines;
         self.follow_bottom = true;
         self.scroll = 0;
+    }
+
+    /// Replace lines without forcing follow-bottom (roster refresh, etc.).
+    pub fn set_lines_preserve_scroll(&mut self, lines: Vec<String>) {
+        self.lines = lines;
+        // scroll / follow_bottom clamped on next draw or scroll_by
     }
 
     fn content_height(&self, pane_h: usize) -> usize {
@@ -334,10 +342,37 @@ impl Node {
     }
 }
 
+/// Which pane receives Up/Down / PageUp/PageDown (typed chars still go to input).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColumnFocus {
-    Left,
-    Right,
+pub enum PaneFocus {
+    Input,
+    Files,
+    Agent,
+    Chat,
+}
+
+impl PaneFocus {
+    pub fn label(self) -> &'static str {
+        match self {
+            PaneFocus::Input => "input",
+            PaneFocus::Files => "files",
+            PaneFocus::Agent => "agent",
+            PaneFocus::Chat => "chat",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            PaneFocus::Input => PaneFocus::Files,
+            PaneFocus::Files => PaneFocus::Agent,
+            PaneFocus::Agent => PaneFocus::Chat,
+            PaneFocus::Chat => PaneFocus::Input,
+        }
+    }
+
+    fn is_left(self) -> bool {
+        matches!(self, PaneFocus::Files)
+    }
 }
 
 /// Full-screen split frame with optional status and a bottom command line.
@@ -351,7 +386,7 @@ pub struct SplitFrame {
     pub cursor: usize,
     pub input_history: Vec<String>,
     pub history_idx: Option<usize>,
-    pub column_focus: ColumnFocus,
+    pub pane_focus: PaneFocus,
     pub prompt: String,
     /// Slot id → leaf id mapping for publish.
     slot_map: SlotMap,
@@ -402,7 +437,10 @@ impl SplitFrame {
     /// Build the SINE-shaped layout: left top/bottom + right top/bottom.
     pub fn sine_layout() -> Self {
         let left_top = Leaf::new("left_top").with_header("SINE");
-        let left_bottom = Leaf::new("left_bottom").with_header("agents / loops / files");
+        // Roster is top-anchored (agents → loops → files); do not follow the
+        // files tail the way agent/chat follow new lines.
+        let mut left_bottom = Leaf::new("left_bottom").with_header("agents / loops / files");
+        left_bottom.follow_bottom = false;
         let right_top = Leaf::new("right_top").with_header("agent").with_wrap();
         let right_bottom = Leaf::new("right_bottom").with_header("chat").with_wrap();
 
@@ -426,7 +464,7 @@ impl SplitFrame {
             cursor: 0,
             input_history: Vec::new(),
             history_idx: None,
-            column_focus: ColumnFocus::Right,
+            pane_focus: PaneFocus::Input,
             prompt: "> ".into(),
             slot_map: SlotMap {
                 left: None,
@@ -461,6 +499,15 @@ impl SplitFrame {
         if let Some(id) = self.slot_map.resolve(slot).map(str::to_string) {
             if let Some(leaf) = self.root.find_leaf_mut(&id) {
                 leaf.set_lines(lines);
+            }
+        }
+    }
+
+    /// Replace slot lines without snapping to the bottom (left roster refresh).
+    pub fn set_slot_lines_preserve_scroll(&mut self, slot: Slot, lines: Vec<String>) {
+        if let Some(id) = self.slot_map.resolve(slot).map(str::to_string) {
+            if let Some(leaf) = self.root.find_leaf_mut(&id) {
+                leaf.set_lines_preserve_scroll(lines);
             }
         }
     }
@@ -541,11 +588,8 @@ impl SplitFrame {
         }
     }
 
-    pub fn toggle_column_focus(&mut self) {
-        self.column_focus = match self.column_focus {
-            ColumnFocus::Left => ColumnFocus::Right,
-            ColumnFocus::Right => ColumnFocus::Left,
-        };
+    pub fn cycle_pane_focus(&mut self) {
+        self.pane_focus = self.pane_focus.next();
     }
 
     pub fn handle_resize_key(&mut self, key: &Key) -> bool {
@@ -559,23 +603,25 @@ impl SplitFrame {
                 true
             }
             Key::CtrlUp => {
-                let target = match self.column_focus {
-                    ColumnFocus::Left => ResizeTarget::LeftHorizontal,
-                    ColumnFocus::Right => ResizeTarget::RightHorizontal,
+                let target = if self.pane_focus.is_left() {
+                    ResizeTarget::LeftHorizontal
+                } else {
+                    ResizeTarget::RightHorizontal
                 };
                 self.resize(target, false);
                 true
             }
             Key::CtrlDown => {
-                let target = match self.column_focus {
-                    ColumnFocus::Left => ResizeTarget::LeftHorizontal,
-                    ColumnFocus::Right => ResizeTarget::RightHorizontal,
+                let target = if self.pane_focus.is_left() {
+                    ResizeTarget::LeftHorizontal
+                } else {
+                    ResizeTarget::RightHorizontal
                 };
                 self.resize(target, true);
                 true
             }
             Key::Tab => {
-                self.toggle_column_focus();
+                self.cycle_pane_focus();
                 true
             }
             _ => false,
@@ -695,23 +741,31 @@ impl SplitFrame {
         }
     }
 
-    /// Scroll the focused column's bottom-most (or only) content pane.
-    pub fn scroll_focused(&mut self, delta: isize) {
-        let id = match self.column_focus {
-            ColumnFocus::Left => self
+    /// Leaf id for the focused content pane, if any (input has none).
+    pub fn focused_leaf_id(&self) -> Option<&str> {
+        match self.pane_focus {
+            PaneFocus::Input => None,
+            PaneFocus::Files => self
                 .slot_map
                 .left_bottom
                 .as_deref()
-                .or(self.slot_map.left.as_deref())
-                .or(self.slot_map.left_top.as_deref()),
-            ColumnFocus::Right => self
+                .or(self.slot_map.left.as_deref()),
+            PaneFocus::Agent => self
+                .slot_map
+                .right_top
+                .as_deref()
+                .or(self.slot_map.right.as_deref()),
+            PaneFocus::Chat => self
                 .slot_map
                 .right_bottom
                 .as_deref()
-                .or(self.slot_map.right.as_deref())
-                .or(self.slot_map.right_top.as_deref()),
-        };
-        let Some(id) = id.map(str::to_string) else {
+                .or(self.slot_map.right.as_deref()),
+        }
+    }
+
+    /// Scroll the focused content pane (agent / chat / files). No-op for input.
+    pub fn scroll_focused(&mut self, delta: isize) {
+        let Some(id) = self.focused_leaf_id().map(str::to_string) else {
             return;
         };
         let (term_rows, term_cols) = term::term_size();
@@ -757,16 +811,14 @@ impl SplitFrame {
             cyan,
             dim,
             bold,
+            inv,
             r,
-            self.column_focus,
+            self.pane_focus,
         );
 
         let status_y = lay.body_rows + 1;
         let status = self.status.clone().unwrap_or_default();
-        let focus_mark = match self.column_focus {
-            ColumnFocus::Left => "left",
-            ColumnFocus::Right => "right",
-        };
+        let focus_mark = self.pane_focus.label();
         let status_line = if status.is_empty() {
             format!("{dim} tab focus:{focus_mark} · ^←^→ split · ^↑^↓ pane {r}")
         } else {
@@ -796,7 +848,6 @@ impl SplitFrame {
                 pad_visible(&cell, lay.cols)
             );
         }
-        let _ = inv; // reserved for focused chrome
         // Footer help row (keys / auto).
         let foot_y = lay.rows;
         if foot_y > composer_y0 + composer_rows - 1 {
@@ -888,6 +939,15 @@ impl FrameLayout {
 
 }
 
+fn leaf_is_focused(leaf: &Leaf, focus: PaneFocus) -> bool {
+    match focus {
+        PaneFocus::Input => false,
+        PaneFocus::Files => leaf.id == "left_bottom",
+        PaneFocus::Agent => leaf.id == "right_top",
+        PaneFocus::Chat => leaf.id == "right_bottom",
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_node(
     buf: &mut String,
@@ -900,13 +960,27 @@ fn paint_node(
     cyan: &str,
     dim: &str,
     bold: &str,
+    inv: &str,
     reset: &str,
-    focus: ColumnFocus,
+    focus: PaneFocus,
 ) {
     use std::fmt::Write as _;
     match node {
         Node::Leaf(leaf) => {
-            paint_leaf(buf, leaf, x, y, w, h, cyan, dim, bold, reset);
+            paint_leaf(
+                buf,
+                leaf,
+                x,
+                y,
+                w,
+                h,
+                cyan,
+                dim,
+                bold,
+                inv,
+                reset,
+                leaf_is_focused(leaf, focus),
+            );
         }
         Node::Cols {
             ratio,
@@ -917,7 +991,6 @@ fn paint_node(
             let left_w = left_w.clamp(8, w.saturating_sub(8).max(8));
             let right_w = w.saturating_sub(left_w + 1).max(1);
             let div_x = x + left_w;
-            let _ = focus;
             for row in 0..h {
                 let gy = y + row;
                 let ch = if row == 0 {
@@ -930,7 +1003,7 @@ fn paint_node(
                 let _ = write!(buf, "\x1b[{gy};{div_x}H{cyan}{ch}{reset}");
             }
             paint_node(
-                buf, left, _lay, x, y, left_w, h, cyan, dim, bold, reset, focus,
+                buf, left, _lay, x, y, left_w, h, cyan, dim, bold, inv, reset, focus,
             );
             paint_node(
                 buf,
@@ -943,6 +1016,7 @@ fn paint_node(
                 cyan,
                 dim,
                 bold,
+                inv,
                 reset,
                 focus,
             );
@@ -959,7 +1033,7 @@ fn paint_node(
             let line = "─".repeat(w);
             let _ = write!(buf, "\x1b[{div_y};{x}H{cyan}{line}{reset}");
             paint_node(
-                buf, top, _lay, x, y, w, top_h, cyan, dim, bold, reset, focus,
+                buf, top, _lay, x, y, w, top_h, cyan, dim, bold, inv, reset, focus,
             );
             paint_node(
                 buf,
@@ -972,6 +1046,7 @@ fn paint_node(
                 cyan,
                 dim,
                 bold,
+                inv,
                 reset,
                 focus,
             );
@@ -990,7 +1065,9 @@ fn paint_leaf(
     cyan: &str,
     dim: &str,
     bold: &str,
+    inv: &str,
     reset: &str,
+    focused: bool,
 ) {
     use std::fmt::Write as _;
     if w == 0 || h == 0 {
@@ -1003,7 +1080,11 @@ fn paint_leaf(
     if let Some(header) = &leaf.header {
         let title = format!(" {header} ");
         let dash_n = w.saturating_sub(title.chars().count());
-        let line = format!("{bold}{title}{reset}{cyan}{}{reset}", "─".repeat(dash_n));
+        let line = if focused {
+            format!("{inv}{bold}{title}{reset}{cyan}{}{reset}", "─".repeat(dash_n))
+        } else {
+            format!("{bold}{title}{reset}{cyan}{}{reset}", "─".repeat(dash_n))
+        };
         let _ = write!(
             buf,
             "\x1b[{content_y};{x}H{cyan}{}",
@@ -1305,6 +1386,8 @@ pub fn decode_key(first: u8, stdin: &mut impl Read) -> Key {
         0x12 => Key::CtrlR,
         0x13 => Key::CtrlS,
         0x15 => Key::CtrlU,
+        0x19 => Key::CtrlY,
+        0x1a => Key::CtrlZ,
         b'\r' | b'\n' => Key::Enter,
         b'\t' => Key::Tab,
         0x08 | 0x7f => Key::Backspace,
@@ -1564,6 +1647,13 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_y_and_z_decode() {
+        let mut empty: &[u8] = &[];
+        assert_eq!(decode_key(0x19, &mut empty), Key::CtrlY);
+        assert_eq!(decode_key(0x1a, &mut empty), Key::CtrlZ);
+    }
+
+    #[test]
     fn bracketed_paste_decodes_with_newlines() {
         // After ESC, remaining stream is `[200~…\x1b[201~`
         let mut body: &[u8] = b"[200~line1\r\nline2\x1b[201~";
@@ -1655,5 +1745,79 @@ mod tests {
         assert_eq!((row, col), (1, 0));
         let (row, col) = cursor_visual_pos("abcdef", 4, 3);
         assert_eq!((row, col), (1, 1)); // "abc" / "d|ef"
+    }
+
+    #[test]
+    fn tab_cycles_pane_focus() {
+        let mut frame = SplitFrame::sine_layout();
+        assert_eq!(frame.pane_focus, PaneFocus::Input);
+        frame.cycle_pane_focus();
+        assert_eq!(frame.pane_focus, PaneFocus::Files);
+        frame.cycle_pane_focus();
+        assert_eq!(frame.pane_focus, PaneFocus::Agent);
+        frame.cycle_pane_focus();
+        assert_eq!(frame.pane_focus, PaneFocus::Chat);
+        frame.cycle_pane_focus();
+        assert_eq!(frame.pane_focus, PaneFocus::Input);
+    }
+
+    #[test]
+    fn scroll_focused_targets_agent_not_chat() {
+        let mut frame = SplitFrame::sine_layout();
+        let many: Vec<String> = (0..40).map(|i| format!("agent-{i}")).collect();
+        frame.set_slot_lines(Slot::RightTop, many);
+        frame.set_slot_lines(Slot::RightBottom, vec!["chat-only".into()]);
+        frame.pane_focus = PaneFocus::Agent;
+        // Break follow-bottom so scroll sticks.
+        if let Some(leaf) = frame.root.find_leaf_mut("right_top") {
+            leaf.follow_bottom = false;
+            leaf.scroll = 0;
+        }
+        frame.scroll_focused(5);
+        let agent = frame.leaf("right_top").unwrap();
+        let chat = frame.leaf("right_bottom").unwrap();
+        assert_eq!(agent.scroll, 5);
+        assert_eq!(chat.scroll, 0);
+        assert!(chat.follow_bottom);
+    }
+
+    #[test]
+    fn scroll_focused_targets_chat_not_agent() {
+        let mut frame = SplitFrame::sine_layout();
+        frame.set_slot_lines(Slot::RightTop, vec!["agent-only".into()]);
+        let many: Vec<String> = (0..40).map(|i| format!("chat-{i}")).collect();
+        frame.set_slot_lines(Slot::RightBottom, many);
+        frame.pane_focus = PaneFocus::Chat;
+        if let Some(leaf) = frame.root.find_leaf_mut("right_bottom") {
+            leaf.follow_bottom = false;
+            leaf.scroll = 0;
+        }
+        frame.scroll_focused(3);
+        let agent = frame.leaf("right_top").unwrap();
+        let chat = frame.leaf("right_bottom").unwrap();
+        assert_eq!(chat.scroll, 3);
+        assert_eq!(agent.scroll, 0);
+        assert!(agent.follow_bottom);
+    }
+
+    #[test]
+    fn set_slot_lines_preserve_scroll_keeps_position() {
+        let mut frame = SplitFrame::sine_layout();
+        frame.set_slot_lines(
+            Slot::LeftBottom,
+            (0..20).map(|i| format!("row-{i}")).collect(),
+        );
+        if let Some(leaf) = frame.root.find_leaf_mut("left_bottom") {
+            leaf.follow_bottom = false;
+            leaf.scroll = 4;
+        }
+        frame.set_slot_lines_preserve_scroll(
+            Slot::LeftBottom,
+            (0..20).map(|i| format!("new-{i}")).collect(),
+        );
+        let leaf = frame.leaf("left_bottom").unwrap();
+        assert!(!leaf.follow_bottom);
+        assert_eq!(leaf.scroll, 4);
+        assert_eq!(leaf.lines[0], "new-0");
     }
 }

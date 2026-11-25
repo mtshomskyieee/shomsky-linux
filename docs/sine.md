@@ -19,10 +19,10 @@ Generic chrome: `src/split_frame.rs`. SINE fills it as:
 | Pane | Content |
 |------|---------|
 | Left top | Header `SINE`, art from [`sine_image.txt`](sine_image.txt) (packaged as `assets/sine_image.txt` for the image build) |
-| Left bottom | agents / loops / files — roster, shomloop list, then files this session touched; Tab left, ↑↓ select, Enter opens a full-screen numbered/wrapped viewer (Esc closes) |
-| Right top | Plans, step results, idle notes (line-wrapped); header shows live `ctx N tok · est P%` |
-| Right bottom | Chat history (line-wrapped); same context meter in the chat header |
-| Status | Mode, `auto` on/off, phase, context meter |
+| Left bottom | agents / loops / files — roster, enabled shomloops due within 24h (with relative next-fire), then files this session touched; Tab to files, ↑↓ select, Enter opens a full-screen numbered/wrapped viewer (Esc closes; `e` opens the editor), empty draft + `e` opens the editor for the selected file |
+| Right top | Plans, step results, idle notes (line-wrapped); header shows live `ctx N tok · est P%`; Tab to agent, ↑↓ / PgUp/PgDn scroll |
+| Right bottom | Chat history (line-wrapped); same context meter in the chat header; Tab to chat, ↑↓ / PgUp/PgDn scroll |
+| Status | Mode, `auto` on/off, phase, context meter, `focus:input\|files\|agent\|chat` |
 | Command line | Multi-line composer (grows 1–3 visible rows; scrolls if longer) |
 | Footer | Key hints; shows `^A auto:on|off` |
 
@@ -36,15 +36,56 @@ until the first plan or idle call finishes.
 
 Keys: Esc exit · **Ctrl-S** send · Enter send on a one-line draft, insert a
 newline when the draft already has newlines, or send again on a trailing blank
-line (or **open** the selected file when focus is left and the draft is empty) ·
+line (or **open** the selected file when focus is **files** and the draft is empty) ·
+**e** (files focus, empty draft) open the **editor** for the selected file ·
 **Ctrl-A** toggle auto · **Ctrl-K** clear context (not Ctrl-L — hosts often
 eat Ctrl-L as form-feed) · **Ctrl-R** clear the files list (drop prior-session
 paths and reset the touch baseline; session/playbook/plan reappear if present) ·
-Tab focus column (left = file list) · ↑↓ select file when left-focused (or walk
-input history) · Ctrl-Left/Right vertical split · Ctrl-Up/Down pane split.
+**Tab** cycles focus (`input` → `files` → `agent` → `chat`) · ↑↓ walk input
+history on input, select a file on files, or scroll agent/chat · PageUp/PageDown
+scroll agent/chat (or jump files) · Ctrl-Left/Right vertical split ·
+Ctrl-Up/Down pane split (left pair when files-focused, right pair otherwise).
 Bracketed paste keeps newlines in the composer (does not auto-send). Typed
-characters always go to the command line. You can also type `auto`, `clear`,
+characters always go to the command line (except bare `e` / `E` on files with
+an empty draft). You can also type `auto`, `clear`,
 or `files clear` / `refresh files` and press Enter / Ctrl-S.
+
+## Editor
+
+Full-screen overlay (left = numbered editable file, right = AI conversation).
+Open with **e** from the files list (empty draft) or from the read-only viewer.
+Esc autosaves and returns to the four-pane screen. The chat header shows the
+same style of context meter as `:chat` / SINE (`ctx N tok · est P%`): chars/4
+over the editor system prompt, chat transcript, pending suggestion, and the
+file slice attached on the next model call, against `ENGRAM_CONTEXT_TOKENS`.
+**Ctrl-K** / compactify drop that meter the same way they shrink the transcript.
+
+| Control | Action |
+|---------|--------|
+| Tab | Focus file ↔ chat composer |
+| Typing / arrows / PgUp/PgDn | Edit or move in the focused side |
+| Ctrl-S / Enter (composer has text) | Send to the model |
+| Ctrl-A | **Compactify** the editor chat into one summary turn (also: type `compact`) |
+| type `auto` | Toggle **editor** auto (independent of plan `auto`; letter `c` is always typed) |
+| Ctrl-Z / Ctrl-Y | Undo / redo through the version ring |
+| Enter (empty composer, pending suggestion) | Accept proposed edits |
+| Ctrl-K | Dismiss pending suggestion, otherwise **clear** the editor chat context (file kept) |
+| type `clear` | Same as Ctrl-K clear |
+
+**Non-auto (default):** the model runs only after you send. Line edits in its
+JSON reply apply immediately and autosave.
+
+**Auto:** edits stay as proposals until you accept them. After about 20 seconds
+of quiet, one unsolicited suggestion may appear.
+
+Autosave writes the real path about 800ms after the last edit (and on applied
+AI edits / Esc). Versions live under `/engram/user/.sine/edits/<encoded-path>/`
+(`ring.json` keeps the last 16 distinct snapshots; `chat.json` is the editor
+transcript). Hallucination mode does not write the path or meta dir.
+
+**shomloops:** lists enabled loops whose next fire is within 24 hours (local
+time), soonest first, with a coarse relative label (`in 2h`). Use
+`shomloop list` for the full ledger.
 
 Plan verb **`quickyn`** asks a yes/no with confidence (ADR-0009) when the
 step is a boolean gate.
@@ -89,6 +130,7 @@ Directory `/engram/user/.sine/` (override `ENGRAM_SINE_DIR`):
 | `session.json` | Chat, agent log, input history, split ratios, `auto`, pending plan |
 | `playbook.md` | Idle notes |
 | `plan.md` | Last plan (markdown + embedded JSON). Written on present; status updates on approve/cancel/done. Survives Ctrl-K |
+| `edits/<encoded-path>/` | Per-file editor version ring (`ring.json`) and conversation (`chat.json`) |
 
 Restored on the next open. Model calls and idle run only while the screen is
 open.

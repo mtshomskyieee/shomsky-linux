@@ -13,6 +13,7 @@ mod modes;
 mod packages;
 mod quickyn_tui;
 mod repl;
+mod sine_editor;
 mod sine_tui;
 mod skills;
 mod spinner;

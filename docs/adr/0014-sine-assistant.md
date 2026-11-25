@@ -25,22 +25,24 @@ Ship **SINE** as a foreground `engram-shell` screen (`:sine` / bare `sine`):
 | Surface | Behavior |
 |---------|----------|
 | Open | `:sine` or exact bare `sine`; optional remainder is the first request |
-| Layout | Left top (brand/art from `docs/sine_image.txt`), left bottom (agents / loops / files), right top (agent), right bottom (chat), status + command line. Tab-focus left, ↑↓ select a touched file, Enter opens a full-screen numbered/wrapped viewer (Esc closes) |
+| Layout | Left top (brand/art from `docs/sine_image.txt`), left bottom (agents / loops / files), right top (agent), right bottom (chat), status + command line. Tab cycles focus: input → files → agent → chat. On files: ↑↓ select a touched file, Enter opens a full-screen numbered/wrapped viewer (Esc closes); `e` opens the editor overlay for that path. On agent/chat: ↑↓ and PageUp/PageDown scroll that pane |
+| Editor | Full-screen left/right overlay (`src/sine_editor.rs`): numbered editable buffer + file-scoped AI conversation. From the viewer, `e` switches into the editor. Esc flushes autosave and returns. Operator and model can change lines (whole-file `content` rewrite preferred; or line `edits`). Model calls use one system + one user payload (current numbered file is source of truth; prior chat is prose context only — no duplicated ask / no UI “rewrote file” assistant turns). `content` wins over `edits`; a multi-line `replace` of line 1 that looks like a whole file is coerced to `content` so the buffer is not duplicated. Autosave (~800ms after edits) writes the real path and pushes a version ring under `/engram/user/.sine/edits/<encoded-path>/` (`ring.json`, `chat.json`; last 16 distinct snapshots, at least 3 once that many exist). Ctrl-Z / Ctrl-Y undo/redo. Ctrl-K clears the editor chat context (file kept); Ctrl-A / `compact` compactifies that chat into one summary turn (bare `c` is always a typed letter). Type `auto` to toggle `editor_auto`. Chat header shows `ctx N tok · est P%` (chars/4 over system + chat + file slice + pending suggestion; same `ENGRAM_CONTEXT_TOKENS` window as `:chat`). Hallucination mode keeps undo in memory and does not write the path or meta dir |
+| `editor_auto` | Separate from plan `auto`. Defaults off. Type `auto` in the editor composer to toggle it (Ctrl-A is compactify). Off: model runs only on send; changes in the reply apply immediately when the operator asked. On: replies with changes are proposals (Enter accepts, Ctrl-K dismisses); after ~20s quiet, one unsolicited suggestion may appear. The model cannot flip `editor_auto` |
 | Plan | One local `chat_text_max` JSON plan; show it; user `approve` / `edit` / `cancel` |
-| `auto` | Shell flag stored in the session; still shows the plan, then runs without a second confirm. The model cannot flip it |
+| `auto` | Shell flag stored in the session; still shows the plan, then runs without a second confirm. The model cannot flip it. Distinct from editor `editor_auto` |
 | Idle | While the screen is open and quiet, read top commands, one short model call, rewrite the playbook |
 | Session | `/engram/user/.sine/` (`session.json`, `playbook.md`); restored on the next open. Esc saves and returns. No background work after exit |
-| Stub | `ENGRAM_SINE_STUB=1` for CI |
+| Stub | `ENGRAM_SINE_STUB=1` for CI (plans, idle, and editor replies) |
 
 Allowed dependency surface (code implements only this list):
 
 | Upstream | SINE may use |
 |----------|--------------|
 | ADR-0001 shell/modes | Run inside `engram-shell`. The shell executes steps. Hallucination shows the plan and does not run it or write the session. Root may run shell steps and skips the model. The model cannot change mode, turn on `auto`, or add a verb |
-| ADR-0003 local model | Planning and idle each use one `LlmClient::chat_text_max` call to the in-container OpenAI-compatible URL. No cloud client |
+| ADR-0003 local model | Planning, idle, and the editor conversation each use one `LlmClient::chat_text_max` call to the in-container OpenAI-compatible URL. No cloud client. Editor replies are JSON `{say, edits[]}` with `replace` / `delete` / `insert_after` (1-based lines) |
 | ADR-0004 command ledger | Idle and the `top_commands` verb read `/engram/user/.command_freq.json` the way `:top` does. No new MCP server. SINE does not call `mcp__cmdfreq__top_commands` itself |
 | ADR-0007 crew | Left-bottom roster and the `shomagent` verb use `shomagent::daemon::rpc` on `/run/shomagent/ctl.sock`. Allowed requests: roster, ask (Talk), pause, resume, stop. SINE does not supervise processes and does not speak dream, refine, or web unless a later update to this ADR adds them |
-| ADR-0013 scheduler | Roster loop list via `shomloop::list_runs()` on `~/.loop/planned_runs.csv`. No crontab rewrite. enable/disable/delete/edit stay out until this ADR says otherwise |
+| ADR-0013 scheduler | Left-bottom **shomloops:** shows enabled runs from `shomloop::list_runs()` whose next fire (local time via `shomloop::next_fire`) is within 24 hours, sorted soonest-first. Full ledger remains `shomloop list`. No crontab rewrite. enable/disable/delete/edit stay out until this ADR says otherwise |
 | ADR-0008 learn | UX ancestor for plan-then-confirm only. SINE does not call `learn::promote` and does not install scripts |
 | ADR-0009 quickyn | Plan verb `quickyn` calls `quickyn::decide` in-process for yes/no + confidence. Optional `file` arg is pre-prompt context. Prefer this over inventing a shell yes/no |
 
@@ -81,5 +83,5 @@ enable go through the CLI via `shell`.
   second contract.
 - If an upstream ADR and this ADR disagree, the upstream ADR wins and this file
   is corrected. `docs/llm.txt` points at 0014 and does not restate the verb list.
-- Modules: `src/split_frame.rs` (generic UI), `src/sine_tui.rs` (assistant).
-  No new workspace crate.
+- Modules: `src/split_frame.rs` (generic UI), `src/sine_tui.rs` (assistant),
+  `src/sine_editor.rs` (file editor overlay). No new workspace crate.

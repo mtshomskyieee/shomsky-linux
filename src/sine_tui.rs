@@ -16,7 +16,7 @@ use shomagent::protocol::{Request, Response};
 use crate::config::Config;
 use crate::llm::{ChatMessage, LlmClient};
 use crate::modes::Mode;
-use crate::split_frame::{self, ColumnFocus, Key, Slot, SplitFrame};
+use crate::split_frame::{self, Key, PaneFocus, Slot, SplitFrame};
 use crate::term::RawGuard;
 use crate::ui;
 
@@ -733,6 +733,11 @@ impl SineState {
         }
     }
 
+    /// Path for the editor overlay (selected touched file), if any.
+    fn selected_edit_path(&self) -> Option<PathBuf> {
+        self.selected_file().map(PathBuf::from)
+    }
+
     /// Restart the idle countdown (user activity or end of a fielded request).
     fn note_activity(&mut self) {
         self.quiet_since = Instant::now();
@@ -775,7 +780,7 @@ impl SineState {
         ));
         // Bottom menu: keys + current auto state (Ctrl-A toggles).
         self.frame.footer = Some(format!(
-            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · ^R files · Tab left=files · ↑↓ · a/e/q"
+            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · ^R files · Tab focus · ↑↓ scroll · a/e/q"
         ));
         // Live meter on the agent pane header (same estimate as :chat).
         self.frame
@@ -976,15 +981,30 @@ async fn refresh_roster(state: &mut SineState) {
     lines.push("shomloops:".into());
     match shomloop::list_runs() {
         Ok(runs) => {
-            if runs.is_empty() {
-                lines.push("  (none)".into());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let mut upcoming: Vec<(i64, String)> = Vec::new();
+            for r in runs.into_iter().filter(|r| r.enabled) {
+                let Some(fire) = shomloop::next_fire(&r.cron, now) else {
+                    continue;
+                };
+                if fire - now > shomloop::SOON_HORIZON_SECS {
+                    continue;
+                }
+                let until = shomloop::format_until(fire, now);
+                upcoming.push((
+                    fire,
+                    format!("  #{} {}  {}  {}", r.id, until, r.frequency, r.command),
+                ));
+            }
+            upcoming.sort_by_key(|(fire, _)| *fire);
+            if upcoming.is_empty() {
+                lines.push("  (none in the next 24h)".into());
             } else {
-                for r in runs {
-                    let mark = if r.enabled { "+" } else { "-" };
-                    lines.push(format!(
-                        "  {mark}#{} {} {}",
-                        r.id, r.frequency, r.command
-                    ));
+                for (_, line) in upcoming {
+                    lines.push(line);
                 }
             }
         }
@@ -1007,7 +1027,7 @@ async fn refresh_roster(state: &mut SineState) {
     }
     lines.push("files:".into());
     if state.session.touched_files.is_empty() {
-        lines.push("  (none — Tab left, ↑↓ select, Enter open · ^R clear)".into());
+        lines.push("  (none — Tab files, ↑↓ select, Enter open · ^R clear)".into());
     } else {
         if state.file_select >= state.session.touched_files.len() {
             state.file_select = state.session.touched_files.len() - 1;
@@ -1020,7 +1040,10 @@ async fn refresh_roster(state: &mut SineState) {
     state
         .frame
         .set_leaf_header("left_bottom", "agents / loops / files");
-    state.frame.set_slot_lines(Slot::LeftBottom, lines);
+    // Keep scroll across refreshes so shomloops stay visible (do not snap to files).
+    state
+        .frame
+        .set_slot_lines_preserve_scroll(Slot::LeftBottom, lines);
     state.last_roster = Instant::now();
 }
 
@@ -1413,7 +1436,7 @@ impl FileViewer {
         // Parse the source line number from the first visible gutter (…N│).
         let top_src = first_gutter_lineno(self.rows.get(start).map(String::as_str).unwrap_or(""));
         let footer = format!(
-            "{dim} Esc close · ↑↓/PgUp/PgDn/Home/End · rows {}-{} / {}{}{reset}",
+            "{dim} Esc close · e edit · ↑↓/PgUp/PgDn/Home/End · rows {}-{} / {}{}{reset}",
             if self.rows.is_empty() { 0 } else { start + 1 },
             end,
             self.rows.len(),
@@ -1449,10 +1472,10 @@ fn first_gutter_lineno(row: &str) -> Option<usize> {
     }
 }
 
-/// Wrap file text for the viewer.
+/// Wrap file text for the viewer / editor.
 /// First visual row of each source line: `NNN│ text`
 /// Continuations keep a solid gutter: `   │ text`
-fn wrap_numbered_lines(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_numbered_lines(text: &str, width: usize) -> Vec<String> {
     let source: Vec<&str> = if text.is_empty() {
         vec![""]
     } else {
@@ -2153,7 +2176,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
     }
 
     loop {
-        // Full-screen file viewer takes over until Esc.
+        // Full-screen file viewer takes over until Esc (or `e` → editor).
         if let Some(viewer) = state.viewer.as_mut() {
             viewer.relayout();
             viewer.draw();
@@ -2161,6 +2184,17 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 Some(Key::Esc) | Some(Key::CtrlC) => {
                     state.viewer = None;
                     state.note_activity();
+                }
+                Some(Key::Char('e')) | Some(Key::Char('E')) => {
+                    let path = viewer.path.clone();
+                    state.viewer = None;
+                    state.note_activity();
+                    if let Err(e) = crate::sine_editor::run(cfg, &path).await {
+                        state.agent_note(&format!("editor: {e:#}"));
+                    }
+                    state.touch_file(&path);
+                    state.note_activity();
+                    state.refresh_status();
                 }
                 Some(Key::Up) => {
                     if let Some(v) = state.viewer.as_mut() {
@@ -2301,7 +2335,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 continue;
             }
             Some(Key::Enter) => {
-                if state.frame.column_focus == ColumnFocus::Left
+                if state.frame.pane_focus == PaneFocus::Files
                     && !state.session.touched_files.is_empty()
                     && state.frame.input.is_empty()
                 {
@@ -2314,7 +2348,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                     let line = state.frame.take_input();
                     handle_line(&mut state, &line, cfg, &mut pending).await;
                 } else if state.frame.input.is_empty() {
-                    // Empty right-focus Enter: no-op (do not insert a stray blank).
+                    // Empty Enter off the composer: no-op (do not insert a stray blank).
                     state.note_activity();
                 } else {
                     state.frame.insert_newline();
@@ -2364,38 +2398,63 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 state.frame.clear_input();
                 state.note_activity();
             }
-            Some(Key::Up) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+            Some(Key::Up) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(-1);
                     let _ = refresh_roster(&mut state).await;
-                } else {
-                    state.frame.history_up();
                 }
-            }
-            Some(Key::Down) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+                PaneFocus::Agent | PaneFocus::Chat => {
+                    state.frame.scroll_focused(-1);
+                }
+                PaneFocus::Input => state.frame.history_up(),
+            },
+            Some(Key::Down) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(1);
                     let _ = refresh_roster(&mut state).await;
-                } else {
-                    state.frame.history_down();
                 }
-            }
+                PaneFocus::Agent | PaneFocus::Chat => {
+                    state.frame.scroll_focused(1);
+                }
+                PaneFocus::Input => state.frame.history_down(),
+            },
             Some(Key::Left) => state.frame.move_cursor_left(),
             Some(Key::Right) => state.frame.move_cursor_right(),
-            Some(Key::PageUp) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+            Some(Key::PageUp) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(-5);
                     let _ = refresh_roster(&mut state).await;
-                } else {
+                }
+                PaneFocus::Agent | PaneFocus::Chat => {
                     state.frame.scroll_focused(-8);
                 }
-            }
-            Some(Key::PageDown) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+                PaneFocus::Input => {}
+            },
+            Some(Key::PageDown) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(5);
                     let _ = refresh_roster(&mut state).await;
-                } else {
+                }
+                PaneFocus::Agent | PaneFocus::Chat => {
                     state.frame.scroll_focused(8);
+                }
+                PaneFocus::Input => {}
+            },
+            Some(Key::Char('e')) | Some(Key::Char('E'))
+                if state.frame.pane_focus == PaneFocus::Files
+                    && state.frame.input.is_empty()
+                    && !state.session.touched_files.is_empty() =>
+            {
+                if let Some(path) = state.selected_edit_path() {
+                    state.note_activity();
+                    if let Err(e) = crate::sine_editor::run(cfg, &path).await {
+                        state.agent_note(&format!("editor: {e:#}"));
+                    }
+                    state.touch_file(&path);
+                    state.note_activity();
+                    state.refresh_status();
+                } else {
+                    state.agent_note("(no file selected)");
                 }
             }
             Some(Key::Char(c)) => {

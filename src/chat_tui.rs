@@ -219,13 +219,12 @@ impl TuiState {
             return SendAction::None;
         }
         if self.focus == Focus::Compactify {
+            // Only the focused compactify control reacts to `c` — never the
+            // empty input line, so words like "can" / "clear" can be typed.
             if c == 'c' || c == 'C' {
                 return self.request_compactify();
             }
             return SendAction::None;
-        }
-        if self.input.is_empty() && (c == 'c' || c == 'C') {
-            return self.request_compactify();
         }
         let mut chars: Vec<char> = self.input.chars().collect();
         let i = self.cursor.min(chars.len());
@@ -535,6 +534,22 @@ pub async fn run(cfg: &Config, cwd: PathBuf) {
                 state.status = Some("cancelled".into());
             }
             Some(Key::Tab) if pending.is_none() => state.toggle_focus(),
+            Some(Key::CtrlA) if pending.is_none() => {
+                match state.request_compactify() {
+                    SendAction::Compactify => {
+                        state.set_thinking(Thinking::Compactify);
+                        pending = Some(spawn_job(
+                            Thinking::Compactify,
+                            state.compactify_messages(),
+                            COMPACTIFY_MAX_TOKENS,
+                            stub,
+                            llm_cfg.clone(),
+                            STUB_SUMMARY,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
             Some(Key::Enter) => match state.on_enter() {
                 SendAction::Reply => {
                     state.set_thinking(Thinking::Reply);
@@ -651,6 +666,7 @@ enum Key {
     Esc,
     Tab,
     Backspace,
+    CtrlA,
     CtrlC,
     CtrlU,
     Char(char),
@@ -677,6 +693,7 @@ fn poll_key(timeout: Duration) -> Option<Key> {
 
 fn decode_key(first: u8, stdin: &mut impl Read) -> Key {
     match first {
+        0x01 => Key::CtrlA,
         0x03 => Key::CtrlC,
         0x15 => Key::CtrlU,
         b'\r' | b'\n' => Key::Enter,
@@ -843,7 +860,7 @@ fn footer_text(state: &TuiState, inv: &str, reset: &str, dim: &str) -> String {
     } else {
         "[c] compactify".to_string()
     };
-    format!(" Enter send · Tab {compact} · ↑↓ scroll · Esc exit ")
+    format!(" Enter send · Tab {compact} · ^A compact · ↑↓ scroll · Esc exit ")
 }
 
 fn visible_input(input: &str, cursor: usize, width: usize) -> (String, usize) {
@@ -1090,14 +1107,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_c_compactifies() {
+    fn empty_c_types_the_letter() {
         let mut s = test_state();
         s.turns.push(Turn {
             role: Role::User,
             text: "prior".into(),
         });
-        assert_eq!(s.insert_char('c'), SendAction::Compactify);
-        assert!(s.input.is_empty());
+        assert_eq!(s.insert_char('c'), SendAction::None);
+        assert_eq!(s.input, "c");
+        assert_eq!(s.cursor, 1);
     }
 
     #[test]
