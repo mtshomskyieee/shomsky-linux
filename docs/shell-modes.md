@@ -89,6 +89,7 @@ On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
 
 | Category | Examples |
 |----------|----------|
+| Editor | Open `:edit`, recent files, clear edit history |
 | Help | Run `:help` |
 | Learn | Prefill `, ` or `?? `; save when a promote is pending |
 | Modes | Switch agent / hallucination / root |
@@ -98,6 +99,7 @@ On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
 | shomloop | planned runs; new loop; logs; Enter → edit / disable / enable / delete |
 | System | `:emerge`, `:sys`, `:splash`, `:quickyn`, `:chat`, `:model`, `:skills`, `:top`, `:packages`, `:clear`, exit |
 | Web | Open the text browser, revisit sites, clear history |
+| Theme | **color** harbor/coffee/laptop/classic (`.theme`); **avatar** navi/coffee mug/laptop/bunny (`.avatar`) — independent |
 
 Arrow keys / `hjkl` / Tab navigate; Enter selects; Esc backs up a level; Esc Esc
 (or `q`) leaves the menu. Under pipes, `--once`, and `--script` the overlay is

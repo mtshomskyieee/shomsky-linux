@@ -158,7 +158,7 @@ Files over 1000 characters warn on stderr (call still runs). `QUICKYN_STUB_LLM=1
 
 ## SINE
 
-[sine.md](sine.md), [ADR-0014](adr/0014-sine-assistant.md). Plan-then-approve assistant (`:sine` or bare `sine`). Split frame: left top brand/art ([sine_image.txt](sine_image.txt)), left bottom agents/loops/files (Tab+↑↓+Enter opens a numbered file viewer; `e` opens the editor overlay), right top agent output, right bottom chat, status + command line. Editor also via `:edit [path]` / `:menu` → Editor (cwd picker + recent under `.edit_history.json`): numbered buffer + file-scoped AI chat, autosave, version ring under `.sine/edits/`, separate `editor_auto` (proposals vs immediate apply). Plans with one local `chat_text_max` call; verbs include `quickyn` for yes/no; user `approve` / `edit` / `cancel`. `auto` is a shell flag. Idle (while the screen is open) reads top commands from the cmdfreq JSON and rewrites `playbook.md`. Session under `/engram/user/.sine/` (skipped in hallucination). `ENGRAM_SINE_STUB=1` for CI. Dependency surface is ADR-0014 only.
+[sine.md](sine.md), [ADR-0014](adr/0014-sine-assistant.md). Plan-then-approve assistant (`:sine` or bare `sine`). Split frame with shared chrome (`:menu` → Theme → color and avatar independently): left top brand avatar (navi / coffee / laptop img2ascii or classic braille bunny — [ADR-0015](adr/0015-sine-brand-avatars.md), [import-sine-image.md](import-sine-image.md)), left bottom agents/loops/files (Tab+↑↓+Enter opens a numbered file viewer; `e` opens the editor overlay), right top agent output, right bottom chat, status + command line. Editor also via `:edit [path]` / `:menu` → Editor (cwd picker + recent under `.edit_history.json`): numbered buffer + file-scoped AI chat, autosave, version ring under `.sine/edits/`, separate `editor_auto` (proposals vs immediate apply). Plans with one local `chat_text_max` call; verbs include `quickyn` for yes/no; user `approve` / `edit` / `cancel`. `auto` is a shell flag. Idle (while the screen is open) reads top commands from the cmdfreq JSON and rewrites `playbook.md`. Session under `/engram/user/.sine/` (skipped in hallucination). `ENGRAM_SINE_STUB=1` for CI. Dependency surface is ADR-0014 only; brand conversion is ADR-0015.
 
 ## shomagent
 
@@ -197,7 +197,7 @@ A new server is an in-image stdio binary plus a `[[mcp_servers]]` entry. Empty `
 | `learn` | on demand via `load_skill` |
 | `ignore_llm_for_these_commands` | on demand; the shell also reads it as the TUI bypass list |
 
-`:menu` / `:m` on a color TTY: Help, Learn, Modes, Packages, Scripts, shomagent, shomloop, System, Web. Under shomagent: list agents, type a filename for `readwrite` / `dream seed` / `refine idea`, or pick an opened document for `ask` / `talk`. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. `:help` is the same map as text. Both stay available from the ready line.
+`:menu` / `:m` on a color TTY: Editor, Help, Learn, Modes, Packages, Scripts, shomagent, shomloop, System, Web, Theme. Theme has separate **color** (harbor / coffee / laptop / classic → `/engram/user/.theme`, `ENGRAM_THEME`) and **avatar** (navi / coffee mug / laptop / bunny → `/engram/user/.avatar`, `ENGRAM_AVATAR`) picks. Under shomagent: list agents, type a filename for `readwrite` / `dream seed` / `refine idea`, or pick an opened document for `ask` / `talk`. Under shomloop: new loop, logs, and per-run edit / disable / enable / delete. `:help` is the same map as text. Both stay available from the ready line.
 
 ## If you are changing the repository
 
@@ -246,6 +246,7 @@ You are the agent in Shomsky Linux, an Alpine container, talking to a person at 
 | Scheduled commands | [adr/0013](adr/0013-shomloop.md), [shomloop.md](shomloop.md) |
 | Framed chat | [chat.md](chat.md) |
 | SINE assistant | [sine.md](sine.md), [adr/0014](adr/0014-sine-assistant.md) |
+| SINE brand images | [import-sine-image.md](import-sine-image.md), [adr/0015](adr/0015-sine-brand-avatars.md) |
 | Modes, menu, tool protocol | [shell-modes.md](shell-modes.md) |
 | `:emerge` web terminal | [adr/0012](adr/0012-emerge-web-terminal.md), [shell-modes.md](shell-modes.md) |
 | `/engram` and skills | [engram.md](engram.md) |

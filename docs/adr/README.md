@@ -23,6 +23,7 @@ AI-assisted contribution rules.
 | [0012](0012-emerge-web-terminal.md) | :emerge web terminal | Accepted |
 | [0013](0013-shomloop.md) | shomloop scheduled commands | Accepted |
 | [0014](0014-sine-assistant.md) | SINE assistant | Accepted |
+| [0015](0015-sine-brand-avatars.md) | SINE brand avatars (img2ascii) | Accepted |
 
 How-to docs (modes, MCP usage, models, licensing inventory) stay under
-[`docs/`](../).
+[`docs/`](../). Brand import steps: [`import-sine-image.md`](../import-sine-image.md).

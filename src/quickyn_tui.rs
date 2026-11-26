@@ -664,14 +664,14 @@ fn draw(state: &TuiState) {
     let cols = cols.clamp(40, term::MAX_COLS);
     let rows = rows.clamp(12, term::MAX_ROWS);
 
-    let color = ui::color_enabled();
-    let r = "\x1b[0m";
-    let bold = if color { "\x1b[1m" } else { "" };
-    let dim = if color { "\x1b[2m" } else { "" };
-    let cyan = if color { "\x1b[36m" } else { "" };
-    let green = if color { "\x1b[32m" } else { "" };
-    let red = if color { "\x1b[31m" } else { "" };
-    let inv = if color { "\x1b[7m" } else { "" };
+    let ta = crate::chrome::theme_ansi();
+    let r = ta.reset.as_str();
+    let bold = ta.title.as_str();
+    let dim = ta.dim.as_str();
+    let cyan = ta.border.as_str();
+    let green = ta.accent.as_str();
+    let red = ta.danger.as_str();
+    let inv = ta.selection.as_str();
 
     // Full-bleed frame: title + body + footer. Borders take 3 cols (│ left │ mid │).
     let body_rows = rows.saturating_sub(2).max(8);

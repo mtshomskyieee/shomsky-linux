@@ -80,6 +80,7 @@ COPY crates ./crates
 # :emerge page + SINE art (include_str! from src/)
 COPY assets/emerge ./assets/emerge
 COPY assets/sine_image.txt ./assets/sine_image.txt
+COPY assets/brand/*.txt ./assets/brand/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     mkdir -p /out \

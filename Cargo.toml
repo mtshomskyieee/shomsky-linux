@@ -1,5 +1,8 @@
 [workspace]
 members = [".", "crates/engram-cmdfreq", "crates/shomagent", "crates/shomsky", "crates/quickyn", "crates/shomloop"]
+exclude = ["tools/img2ascii"]
+# Brand converter is offline-only:
+#   cargo run --manifest-path tools/img2ascii/Cargo.toml -- assets/brand
 resolver = "2"
 
 [package]

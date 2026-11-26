@@ -381,6 +381,14 @@ impl Repl {
             MenuAction::SetMode(mode) => {
                 Box::pin(self.handle_meta(&format!(":mode {}", mode.as_str()), Some(rl))).await
             }
+            MenuAction::SetTheme(theme) => {
+                println!("theme: {}", theme.name());
+                Ok(false)
+            }
+            MenuAction::SetAvatar(avatar) => {
+                println!("avatar: {}", avatar.name());
+                Ok(false)
+            }
             MenuAction::RunMeta(cmd) => Box::pin(self.handle_meta(&cmd, Some(rl))).await,
             MenuAction::InsertLine(s) => {
                 // Starters end with space or contain empty quotes → prefill buffer.
@@ -1685,7 +1693,7 @@ emerge:
                      ENGRAM_EMERGE=off disables the command (also 0|false|no)
 
 Feature menu (TTY):
-  :menu | :m         Slip into Help / Learn / Modes / Packages / Scripts / shomagent / shomloop / System / Web
+  :menu | :m         Slip into Editor / Help / Learn / Modes / … / Web / Theme
   ↑↓ · Tab · Enter   Navigate; Esc backs out; Esc Esc or q quits the menu
   menu → shomagent   list · readwrite/web/dream seed/refine · ask/talk · stop/end <agent>
   menu → shomloop    new loop · logs · Enter on a run: [e]dit [d]isable [n] enable [x] delete [l]ogs

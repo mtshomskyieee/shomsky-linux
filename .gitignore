@@ -21,3 +21,6 @@ dist/
 .engram-test-pkgs.*
 containers/prebuilt/
 *.bin
+
+# Standalone img2ascii build tree (outside workspace).
+tools/img2ascii/target/
