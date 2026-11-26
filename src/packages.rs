@@ -185,6 +185,76 @@ pub fn record_from_command(path: &Path, command: &str) {
         }
     }
     let _ = store.save(path);
+    sync_bin_shims(&store);
+}
+
+/// One-line summary of installed ledger packages for the agent system prompt.
+pub fn prompt_installed_summary(path: &Path) -> String {
+    let store = PackageStore::load(path).unwrap_or_default();
+    let names = store.installed_names();
+    if names.is_empty() {
+        return "Installed apk packages (ledger): (none yet — use shominstall / apk add).\n\
+                After install, call binaries by PATH name (`command -v NAME`). \
+                Never invent `/root/.local/bin/…` or `~/.local/bin/…` paths.\n"
+            .into();
+    }
+    let list = names.join(", ");
+    format!(
+        "Installed apk packages (ledger): {list}.\n\
+         Use these via PATH (`python3`, `curl`, …) — Alpine puts them under `/usr/bin`. \
+         Prefer `python3` for the python3 package; `python` may be a ~/bin shim to it. \
+         Never invent `/root/.local/bin/…` or pip `--user` absolute paths.\n"
+    )
+}
+
+/// Rewrite LLM-invented pip/user absolute paths to bare command names.
+pub fn sanitize_shell_command(command: &str) -> String {
+    let mut out = command.to_string();
+    // Longer paths first so python3 is not truncated to python.
+    for (from, to) in [
+        ("/root/.local/bin/python3", "python3"),
+        ("/root/.local/bin/python", "python"),
+        ("~/.local/bin/python3", "python3"),
+        ("~/.local/bin/python", "python"),
+        ("/home/root/.local/bin/python3", "python3"),
+        ("/home/root/.local/bin/python", "python"),
+    ] {
+        if out.contains(from) {
+            out = out.replace(from, to);
+        }
+    }
+    out
+}
+
+/// Ensure common aliases exist under `$ENGRAM_USER_DIR/bin` after installs
+/// (prepended to PATH by the entrypoint).
+pub fn sync_bin_shims(store: &PackageStore) {
+    let user_dir = std::env::var("ENGRAM_USER_DIR").unwrap_or_else(|_| "/engram/user".into());
+    let bin = Path::new(&user_dir).join("bin");
+    if let Err(e) = fs::create_dir_all(&bin) {
+        eprintln!("warning: could not create {}: {e}", bin.display());
+        return;
+    }
+    // python3 package → `python` shim when no real `python` is on the image.
+    if store
+        .packages
+        .get("python3")
+        .map(|e| e.status == PackageStatus::Installed)
+        .unwrap_or(false)
+    {
+        let python3 = Path::new("/usr/bin/python3");
+        let shim = bin.join("python");
+        if python3.is_file() && !Path::new("/usr/bin/python").is_file() {
+            let body = "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n";
+            if fs::write(&shim, body).is_ok() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&shim, fs::Permissions::from_mode(0o755));
+                }
+            }
+        }
+    }
 }
 
 fn skip_package_restore() -> bool {
@@ -225,6 +295,8 @@ fn reinstall_missing_inner(path: &Path) -> Result<()> {
         return Ok(());
     }
     let store = PackageStore::load(path)?;
+    // Refresh PATH shims even when every package is already present.
+    sync_bin_shims(&store);
     let names = store.installed_names();
     if names.is_empty() {
         return Ok(());
@@ -855,5 +927,61 @@ mod tests {
         store.record_remove("htop");
         store.record_install("curl");
         assert_eq!(store.installed_names(), vec!["curl", "neovim"]);
+    }
+
+    #[test]
+    fn sanitize_rewrites_local_bin_python() {
+        assert_eq!(
+            sanitize_shell_command("/root/.local/bin/python3 fun.py"),
+            "python3 fun.py"
+        );
+        assert_eq!(
+            sanitize_shell_command("/root/.local/bin/python fun.py"),
+            "python fun.py"
+        );
+        assert_eq!(
+            sanitize_shell_command("python3 fun.py"),
+            "python3 fun.py"
+        );
+    }
+
+    #[test]
+    fn prompt_summary_lists_installed() {
+        let path = tmp_path("prompt");
+        record_from_command(&path, "apk add python3 curl");
+        let s = prompt_installed_summary(&path);
+        assert!(s.contains("python3"), "{s}");
+        assert!(s.contains("curl"), "{s}");
+        assert!(s.contains("Never invent") || s.contains("never invent") || s.contains("/root/.local"), "{s}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn sync_bin_shims_writes_python_wrapper() {
+        let dir = std::env::temp_dir().join(format!(
+            "pkg-shim-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(dir.join("bin"));
+        let prev = std::env::var_os("ENGRAM_USER_DIR");
+        std::env::set_var("ENGRAM_USER_DIR", &dir);
+        let mut store = PackageStore::default();
+        store.record_install("python3");
+        sync_bin_shims(&store);
+        let shim = dir.join("bin/python");
+        // Only created when /usr/bin/python3 exists and /usr/bin/python does not.
+        if Path::new("/usr/bin/python3").is_file() && !Path::new("/usr/bin/python").is_file() {
+            assert!(shim.is_file(), "expected shim at {}", shim.display());
+            let body = fs::read_to_string(&shim).unwrap();
+            assert!(body.contains("python3"), "{body}");
+        }
+        match prev {
+            Some(v) => std::env::set_var("ENGRAM_USER_DIR", v),
+            None => std::env::remove_var("ENGRAM_USER_DIR"),
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }

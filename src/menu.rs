@@ -51,12 +51,15 @@ pub struct MenuContext {
     pub packages_path: PathBuf,
     pub web_history_path: PathBuf,
     pub web_history: Vec<crate::web_history::Visit>,
+    pub edit_history_path: PathBuf,
+    pub edit_history: Vec<crate::edit_history::EditVisit>,
     /// Live roster snapshot (may be empty if daemon is down).
     pub shomagent_members: Vec<ShomagentMemberBrief>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
+    Editor,
     Help,
     Learn,
     Modes,
@@ -70,7 +73,8 @@ pub enum Category {
 
 impl Category {
     /// Left column, alphabetical by label (case-insensitive).
-    pub const ALL: [Category; 9] = [
+    pub const ALL: [Category; 10] = [
+        Category::Editor,
         Category::Help,
         Category::Learn,
         Category::Modes,
@@ -84,6 +88,7 @@ impl Category {
 
     pub fn label(self) -> &'static str {
         match self {
+            Category::Editor => "Editor",
             Category::Help => "Help",
             Category::Learn => "Learn",
             Category::Modes => "Modes",
@@ -154,6 +159,9 @@ pub struct MenuState {
     web_clear_confirm: bool,
     web_history_path: PathBuf,
     web_history: Vec<crate::web_history::Visit>,
+    edit_clear_confirm: bool,
+    edit_history_path: PathBuf,
+    edit_history: Vec<crate::edit_history::EditVisit>,
     allow_root_mode: bool,
     mode: Mode,
     pending_learn: bool,
@@ -194,6 +202,10 @@ enum ItemKind {
     ClearWebHistory,
     /// Open `:web` already pointed at a saved URL.
     OpenWeb(String),
+    /// Confirm, then wipe `.edit_history.json`.
+    ClearEditHistory,
+    /// Open `:edit` on a recent path.
+    OpenEdit(String),
     /// A planned shomloop run. Enter asks how to manage it.
     Loop(LoopRef),
     InfoOnly,
@@ -238,6 +250,9 @@ impl MenuState {
             web_clear_confirm: false,
             web_history_path: ctx.web_history_path.clone(),
             web_history: ctx.web_history.clone(),
+            edit_clear_confirm: false,
+            edit_history_path: ctx.edit_history_path.clone(),
+            edit_history: ctx.edit_history.clone(),
             allow_root_mode: ctx.allow_root_mode,
             mode: ctx.mode,
             pending_learn: ctx.pending_learn,
@@ -253,6 +268,7 @@ impl MenuState {
     fn in_overlay(&self) -> bool {
         self.exit_confirm
             || self.web_clear_confirm
+            || self.edit_clear_confirm
             || self.saved_pick.is_some()
             || self.package_pick.is_some()
             || self.loop_pick.is_some()
@@ -270,6 +286,7 @@ impl MenuState {
             self.pending_learn,
             &self.packages_path,
             &self.web_history,
+            &self.edit_history,
         )
     }
 
@@ -339,6 +356,10 @@ impl MenuState {
             self.web_clear_confirm = false;
             return;
         }
+        if self.edit_clear_confirm {
+            self.edit_clear_confirm = false;
+            return;
+        }
         if self.saved_pick.is_some() {
             self.saved_pick = None;
             return;
@@ -376,6 +397,10 @@ impl MenuState {
         }
         if self.web_clear_confirm {
             self.web_clear_confirm = false;
+            return;
+        }
+        if self.edit_clear_confirm {
+            self.edit_clear_confirm = false;
             return;
         }
         if self.saved_pick.is_some() {
@@ -416,6 +441,10 @@ impl MenuState {
             self.web_clear_confirm = false;
             return None;
         }
+        if self.edit_clear_confirm {
+            self.edit_clear_confirm = false;
+            return None;
+        }
         if self.saved_pick.is_some() {
             self.saved_pick = None;
             return None;
@@ -446,6 +475,10 @@ impl MenuState {
         }
         if self.web_clear_confirm {
             self.confirm_web_clear();
+            return None;
+        }
+        if self.edit_clear_confirm {
+            self.confirm_edit_clear();
             return None;
         }
         if self.saved_pick.is_some() {
@@ -508,6 +541,11 @@ impl MenuState {
                 None
             }
             ItemKind::OpenWeb(url) => Some(MenuAction::RunMeta(format!(":web {url}"))),
+            ItemKind::ClearEditHistory => {
+                self.edit_clear_confirm = true;
+                None
+            }
+            ItemKind::OpenEdit(path) => Some(MenuAction::RunMeta(format!(":edit {path}"))),
             ItemKind::Loop(loop_ref) => {
                 self.loop_pick = Some(LoopPick {
                     id: loop_ref.id,
@@ -616,6 +654,13 @@ impl MenuState {
         self.web_clear_confirm = false;
         self.item_idx = 0;
     }
+
+    fn confirm_edit_clear(&mut self) {
+        let _ = crate::edit_history::clear(&self.edit_history_path);
+        self.edit_history.clear();
+        self.edit_clear_confirm = false;
+        self.item_idx = 0;
+    }
 }
 
 fn items_for(
@@ -625,8 +670,10 @@ fn items_for(
     pending_learn: bool,
     packages_path: &PathBuf,
     web_history: &[crate::web_history::Visit],
+    edit_history: &[crate::edit_history::EditVisit],
 ) -> Vec<Item> {
     match cat {
+        Category::Editor => editor_items(edit_history),
         Category::Modes => {
             let mut v = vec![
                 mode_item(Mode::Agent, mode),
@@ -683,7 +730,7 @@ fn items_for(
             },
             Item {
                 label: "this menu".into(),
-                detail: ":menu / :m — Help, Learn, Modes, Packages, Scripts, …".into(),
+                detail: ":menu / :m — Editor, Help, Learn, Modes, Packages, Scripts, …".into(),
                 kind: ItemKind::InfoOnly,
             },
         ],
@@ -725,6 +772,11 @@ fn items_for(
                 label: ":sine".into(),
                 detail: "SINE plan-then-approve assistant (roster, chat, idle playbook)".into(),
                 kind: ItemKind::RunMeta(":sine"),
+            },
+            Item {
+                label: ":edit".into(),
+                detail: "File editor + AI chat (picker if no path)".into(),
+                kind: ItemKind::RunMeta(":edit"),
             },
             Item {
                 label: ":model".into(),
@@ -819,6 +871,28 @@ fn shomloop_items() -> Vec<Item> {
     v
 }
 
+/// Digits `1`–`9` → category indices 0–8; `0` → index 9 (10th category).
+fn digit_category_index(c: char) -> Option<usize> {
+    let idx = match c {
+        '1' => 0,
+        '2' => 1,
+        '3' => 2,
+        '4' => 3,
+        '5' => 4,
+        '6' => 5,
+        '7' => 6,
+        '8' => 7,
+        '9' => 8,
+        '0' => 9,
+        _ => return None,
+    };
+    if idx < Category::ALL.len() {
+        Some(idx)
+    } else {
+        None
+    }
+}
+
 fn quote_freq(freq: &str) -> String {
     let mut out = String::from("\"");
     for c in freq.chars() {
@@ -861,6 +935,37 @@ fn web_items(history: &[crate::web_history::Visit]) -> Vec<Item> {
                 label,
                 detail: visit.url.clone(),
                 kind: ItemKind::OpenWeb(visit.url.clone()),
+            });
+        }
+    }
+    v
+}
+
+fn editor_items(history: &[crate::edit_history::EditVisit]) -> Vec<Item> {
+    let mut v = vec![
+        Item {
+            label: "open editor".into(),
+            detail: "Pick a file or create one, then edit with AI chat".into(),
+            kind: ItemKind::RunMeta(":edit"),
+        },
+        Item {
+            label: "clear history".into(),
+            detail: "Forget recent edit paths".into(),
+            kind: ItemKind::ClearEditHistory,
+        },
+    ];
+    if history.is_empty() {
+        v.push(Item {
+            label: "(no recent files — open editor to start)".into(),
+            detail: "Paths are saved under .edit_history.json".into(),
+            kind: ItemKind::InfoOnly,
+        });
+    } else {
+        for visit in history {
+            v.push(Item {
+                label: visit.path.clone(),
+                detail: visit.path.clone(),
+                kind: ItemKind::OpenEdit(visit.path.clone()),
             });
         }
     }
@@ -1179,6 +1284,14 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 state.web_clear_confirm = false;
                 esc_armed = false;
             }
+            Key::Char('y') | Key::Char('Y') if state.edit_clear_confirm => {
+                state.confirm_edit_clear();
+                esc_armed = false;
+            }
+            Key::Char('n') | Key::Char('N') if state.edit_clear_confirm => {
+                state.edit_clear_confirm = false;
+                esc_armed = false;
+            }
             Key::Char('u') | Key::Char('U')
                 if state
                     .package_pick
@@ -1211,57 +1324,13 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 esc_armed = false;
                 let _ = state.confirm_saved(true);
             }
-            Key::Char('1') if state.shomagent_sub.is_none() => {
+            Key::Char(d)
+                if state.shomagent_sub.is_none()
+                    && !state.in_overlay()
+                    && digit_category_index(d).is_some() =>
+            {
                 esc_armed = false;
-                state.category_idx = 0;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('2') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 1;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('3') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 2;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('4') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 3;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('5') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 4;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('6') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 5;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('7') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 6;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('8') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 7;
-                state.item_idx = 0;
-                state.focus = Focus::Items;
-            }
-            Key::Char('9') if state.shomagent_sub.is_none() => {
-                esc_armed = false;
-                state.category_idx = 8;
+                state.category_idx = digit_category_index(d).unwrap();
                 state.item_idx = 0;
                 state.focus = Focus::Items;
             }
@@ -1275,7 +1344,8 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
 fn draw(state: &MenuState) {
     let (rows, cols) = term::term_size();
     let width = cols.clamp(40, 72).min(cols);
-    let height = 16usize.min(rows.saturating_sub(2)).max(13);
+    // Fit all categories (10) plus chrome; keep a usable item pane.
+    let height = 18usize.min(rows.saturating_sub(2)).max(14);
     let left = ((cols.saturating_sub(width)) / 2).max(1);
     let top = ((rows.saturating_sub(height)) / 2).max(1);
 
@@ -1357,6 +1427,8 @@ fn draw(state: &MenuState) {
         "Exit the shell? [y]es / [n]o / Esc".to_string()
     } else if state.web_clear_confirm {
         "Clear visit history? [y]es / [n]o / Esc".to_string()
+    } else if state.edit_clear_confirm {
+        "Clear edit history? [y]es / [n]o / Esc".to_string()
     } else if let Some(name) = &state.saved_pick {
         format!("`{name}`  [r]un / [d]elete / Esc")
     } else if let Some(pick) = &state.loop_pick {
@@ -1506,6 +1578,8 @@ mod tests {
             packages_path: PathBuf::from("/engram/user/.packages.json"),
             web_history_path: PathBuf::from("/engram/user/.web_history.json"),
             web_history: vec![],
+            edit_history_path: PathBuf::from("/engram/user/.edit_history.json"),
+            edit_history: vec![],
             shomagent_members: vec![],
         }
     }
@@ -1543,6 +1617,9 @@ mod tests {
     #[test]
     fn categories_are_alphabetical() {
         assert_eq!(Category::Scripts.label(), "Scripts");
+        assert!(Category::ALL.contains(&Category::Editor));
+        assert_eq!(Category::Editor.label(), "Editor");
+        assert_eq!(Category::ALL.len(), 10);
         let labels: Vec<_> = Category::ALL
             .iter()
             .map(|c| c.label().to_ascii_lowercase())
@@ -1550,6 +1627,33 @@ mod tests {
         let mut sorted = labels.clone();
         sorted.sort();
         assert_eq!(labels, sorted);
+        assert_eq!(digit_category_index('1'), Some(0));
+        assert_eq!(digit_category_index('0'), Some(9));
+    }
+
+    #[test]
+    fn editor_items_open_and_recent() {
+        let mut c = ctx();
+        c.edit_history = vec![crate::edit_history::EditVisit {
+            path: "/engram/user/fun.py".into(),
+            visited_at: 1,
+        }];
+        let mut s = MenuState::new(&c);
+        s.category_idx = Category::Editor.index();
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert_eq!(labels[0], "open editor");
+        assert_eq!(labels[1], "clear history");
+        assert_eq!(labels[2], "/engram/user/fun.py");
+        s.item_idx = 0;
+        assert_eq!(s.activate(), Some(MenuAction::RunMeta(":edit".into())));
+        s.item_idx = 2;
+        assert_eq!(
+            s.activate(),
+            Some(MenuAction::RunMeta(":edit /engram/user/fun.py".into()))
+        );
+        s.item_idx = 1;
+        assert!(s.activate().is_none());
+        assert!(s.edit_clear_confirm);
     }
 
     #[test]

@@ -78,6 +78,11 @@ Prefer creating and editing files under `/engram/user` (agent-mode home;
 `cd ~` lands here). In root mode, `cd ~` goes to `/root`. In agent and root
 modes, `cd` changes the session working directory for later commands.
 
+After `shominstall` / `apk add`, binaries are on PATH under `/usr/bin` (and
+sometimes `/engram/user/bin` shims such as `python` → `python3`). Always run
+them by bare name (`command -v python3`, then `python3 script.py`). **Never**
+invent absolute paths under `/root/.local/bin` or `~/.local/bin`.
+
 ## Tool-use rules
 
 1. When the user asks what is on disk, call `list_dir` or `shell_exec` with `ls`.

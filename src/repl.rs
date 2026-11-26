@@ -348,6 +348,8 @@ impl Repl {
             packages_path: self.cfg.packages_path.clone(),
             web_history_path: crate::web_history::history_path(),
             web_history: crate::web_history::load(&crate::web_history::history_path()),
+            edit_history_path: crate::edit_history::history_path(),
+            edit_history: crate::edit_history::load(&crate::edit_history::history_path()),
             shomagent_members,
         }
     }
@@ -741,6 +743,24 @@ impl Repl {
                     Some(rest.to_string())
                 };
                 crate::sine_tui::run(&self.cfg, self.cwd.clone(), initial).await;
+            }
+            ":edit" => {
+                let rest = line.trim_start_matches(":edit").trim();
+                let path = if rest.is_empty() {
+                    crate::edit_picker::run(self.cwd.clone())
+                } else {
+                    let p = PathBuf::from(rest);
+                    Some(if p.is_absolute() {
+                        p
+                    } else {
+                        self.cwd.join(p)
+                    })
+                };
+                if let Some(path) = path {
+                    if let Err(e) = crate::sine_editor::run_for_path(&self.cfg, &path).await {
+                        eprintln!("edit: {e:#}");
+                    }
+                }
             }
             ":web" => {
                 let rest = line.trim_start_matches(":web").trim();
@@ -1168,7 +1188,24 @@ impl Repl {
         println!("{}", spinner::cancel_notice(key, what));
     }
 
+    /// Refresh the system message with the current package ledger (keeps chat).
+    fn refresh_agent_system_prompt(&mut self) {
+        if self.cfg.mode != Mode::Agent {
+            return;
+        }
+        let system = build_system_prompt(&self.cfg, &self.skills);
+        if let Some(first) = self.history.first_mut() {
+            if first.role == "system" {
+                first.content = Some(system);
+                return;
+            }
+        }
+        self.history.insert(0, ChatMessage::system(system));
+    }
+
     async fn run_llm(&mut self, line: &str) -> Result<()> {
+        // Pick up packages installed earlier in this session (shominstall / apk).
+        self.refresh_agent_system_prompt();
         let saved_history = self.history.clone();
         let saved_cwd = self.cwd.clone();
         self.history.push(ChatMessage::user(line));
@@ -1533,8 +1570,13 @@ fn build_agent_prompt(cfg: &Config, skills: &SkillStore) -> String {
          If you need filesystem facts, use tools rather than inventing paths.\n\
          A named `shominstall PKG` is already run as `apk add` before it reaches you. \
          Bare `shominstall` means ask which Alpine package to install. \
-         Do not execute `shominstall` and do not use BusyBox `install`.\n\n",
+         Do not execute `shominstall` and do not use BusyBox `install`.\n\
+         Agent HOME is `/engram/user` (not `/root`). PATH already includes \
+         `/engram/user/bin` and `/usr/bin`. After packages are installed, run them \
+         by bare name (`python3 fun.py`); never invent `/root/.local/bin/…`.\n\n",
     );
+    s.push_str(&crate::packages::prompt_installed_summary(&cfg.packages_path));
+    s.push('\n');
 
     match cfg.tool_style {
         ToolStyle::Text => {
@@ -1587,7 +1629,7 @@ fn truncate_args(s: &str, limit: usize) -> String {
 const HELP_TEXT: &str = "\
 Meta-commands:
   :help              Show this help
-  :menu | :m         Feature navigation hub (Help / Learn / Modes / Packages / Scripts / …)
+  :menu | :m         Feature navigation hub (Editor / Help / Learn / Modes / Packages / …)
   :sys | :uname      System identity (version, mode, model alias, model name, tools, llm) — also: uname
   :splash            Replay the startup splash (TTY; matrix intro if enabled)
   :mode [name]       Show or set mode (agent|hallucination|root)
@@ -1601,6 +1643,7 @@ Meta-commands:
   :quickyn           Split-screen yes/no TUI (question + file left; check/X right)
   :chat              Framed chat with the current model (ctx size, compactify, save)
   :sine [request]    SINE plan-then-approve assistant (also: bare sine)
+  :edit [path]       SINE file editor + AI chat (picker if no path; also :menu → Editor)
   :web [url]         Split text browser (page left, chat right; url + chat inputs)
   :emerge            Serve this session at http://localhost:1337 (Ctrl-C returns)
   :clear             Clear conversation history (hallucination: new session file)
@@ -1620,6 +1663,11 @@ sine:
   Ctrl-A / auto      Toggle autonomous run (footer shows ^A auto:on|off)
   Ctrl-K / clear     Clear chat, agent log, and pending plan
   approve/a edit/e cancel/q   Respond to a pending plan (e loads plan into the line)
+
+edit:
+  :edit [path]       Numbered buffer + AI chat (ADR-0014 editor). Missing path → picker
+                     (browse cwd or New file). Creates the file if needed. Esc saves.
+  menu → Editor      Open picker, recent files, clear edit history (.edit_history.json)
 
 web:
   :web [url]         Text browser TUI; chat side shows ctx used/buffer; spinner while loading or thinking

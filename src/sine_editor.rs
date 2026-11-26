@@ -14,6 +14,7 @@ use crate::llm::{ChatMessage, LlmClient};
 use crate::modes::Mode;
 use crate::sine_tui::{default_sine_dir, wrap_numbered_lines, ChatTurn};
 use crate::split_frame::{self, Key};
+use crate::term::RawGuard;
 use crate::ui;
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
@@ -44,6 +45,8 @@ Tiny single-line fixes only (op exactly replace OR delete OR insert_after):
 
 Rules:
 - Escape newlines inside JSON strings as \\n (never a raw line break in quotes).
+- Never use Python triple-quotes (\"\"\") inside JSON. content is ONLY the file
+  body — never wrap it in another {\"say\":...,\"content\":...} object.
 - Prefer \"content\" over \"edits\" for any multi-line or feature change.
 - Include content/edits ONLY when the operator asked to change the file.
 - Never claim you wrote the disk yourself; the shell applies the change.
@@ -442,21 +445,102 @@ fn sanitize_json_strings(input: &str) -> String {
     cleaned
 }
 
-fn extract_fenced_content(raw: &str) -> Option<String> {
+fn extract_fenced_block(raw: &str) -> Option<(String /*lang*/, String /*body*/)> {
     let start = raw.find("```")?;
     let after = &raw[start + 3..];
-    let body = if let Some(nl) = after.find('\n') {
-        &after[nl + 1..]
+    let (lang, body_start) = if let Some(nl) = after.find('\n') {
+        (after[..nl].trim().to_ascii_lowercase(), nl + 1)
     } else {
-        after
+        (String::new(), 0)
     };
+    let body = &after[body_start..];
     let end = body.find("```")?;
     let text = body[..end].trim_end_matches('\n').to_string();
     if text.is_empty() {
         None
     } else {
-        Some(text)
+        Some((lang, text))
     }
+}
+
+fn looks_like_editor_envelope(s: &str) -> bool {
+    let t = s.trim_start();
+    if !t.starts_with('{') {
+        return false;
+    }
+    let lower = t.to_ascii_lowercase();
+    lower.contains("\"say\"") && (lower.contains("\"content\"") || lower.contains("\"edits\""))
+}
+
+/// Pull say/content out of model replies that use Python triple-quotes or
+/// other almost-JSON shapes serde cannot parse.
+fn extract_loose_editor_reply(raw: &str) -> Option<EditorReply> {
+    if !looks_like_editor_envelope(raw) {
+        return None;
+    }
+    let say = extract_simple_json_string(raw, "say").unwrap_or_else(|| "applied".into());
+    if let Some(content) = extract_content_field_loose(raw) {
+        let content = content.trim_start_matches('\n').to_string();
+        if content.trim().is_empty() {
+            return None;
+        }
+        // Nested envelope accidentally stuffed into content — unwrap once.
+        let content = if looks_like_editor_envelope(&content) {
+            extract_content_field_loose(&content).unwrap_or(content)
+        } else {
+            content
+        };
+        return Some(EditorReply {
+            say,
+            content: Some(content),
+            edits: vec![],
+        });
+    }
+    None
+}
+
+fn extract_simple_json_string(s: &str, field: &str) -> Option<String> {
+    let key = format!("\"{field}\"");
+    let idx = s.find(&key)?;
+    let after = s[idx + key.len()..].trim_start().strip_prefix(':')?.trim_start();
+    let rest = after.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some(c) => out.push(c),
+                None => break,
+            }
+        } else if ch == '"' {
+            return Some(out);
+        } else {
+            out.push(ch);
+        }
+    }
+    None
+}
+
+fn extract_content_field_loose(s: &str) -> Option<String> {
+    let key = "\"content\"";
+    let idx = s.find(key)?;
+    let after = s[idx + key.len()..].trim_start().strip_prefix(':')?.trim_start();
+    if after.starts_with("\"\"\"") {
+        let rest = &after[3..];
+        let end = rest.find("\"\"\"")?;
+        return Some(rest[..end].trim_matches('\n').to_string());
+    }
+    if after.starts_with("'''") {
+        let rest = &after[3..];
+        let end = rest.find("'''")?;
+        return Some(rest[..end].trim_matches('\n').to_string());
+    }
+    extract_simple_json_string(s, "content")
 }
 
 fn parse_editor_reply(raw: &str) -> Result<EditorReply> {
@@ -468,12 +552,33 @@ fn parse_editor_reply(raw: &str) -> Result<EditorReply> {
         if let Ok(reply) = serde_json::from_str::<EditorReply>(&sanitized) {
             return Ok(normalize_reply_content(reply));
         }
+        if let Some(reply) = extract_loose_editor_reply(json) {
+            return Ok(normalize_reply_content(reply));
+        }
     }
-    // Last resort: a fenced code block as whole-file content.
-    if let Some(content) = extract_fenced_content(raw) {
+    if let Some(reply) = extract_loose_editor_reply(raw) {
+        return Ok(normalize_reply_content(reply));
+    }
+    // Fenced block: JSON/envelope fences are replies; other fences are file body.
+    if let Some((lang, body)) = extract_fenced_block(raw) {
+        if lang == "json" || looks_like_editor_envelope(&body) {
+            if let Ok(reply) = serde_json::from_str::<EditorReply>(&body) {
+                return Ok(normalize_reply_content(reply));
+            }
+            let sanitized = sanitize_json_strings(&body);
+            if let Ok(reply) = serde_json::from_str::<EditorReply>(&sanitized) {
+                return Ok(normalize_reply_content(reply));
+            }
+            if let Some(reply) = extract_loose_editor_reply(&body) {
+                return Ok(normalize_reply_content(reply));
+            }
+            return Err(anyhow!(
+                "parse editor reply: fenced JSON/envelope was not usable"
+            ));
+        }
         return Ok(EditorReply {
             say: "applied fenced content".into(),
-            content: Some(content),
+            content: Some(body),
             edits: vec![],
         });
     }
@@ -485,8 +590,30 @@ fn normalize_reply_content(mut reply: EditorReply) -> EditorReply {
         if c.contains('\\') && c.contains('n') && !c.contains('\n') {
             *c = c.replace("\\n", "\n").replace("\\t", "\t");
         }
+        // Safety: never write an editor JSON envelope into the buffer.
+        if looks_like_editor_envelope(c) {
+            if let Some(inner) = extract_content_field_loose(c) {
+                *c = inner;
+            }
+        }
     }
     reply
+}
+
+/// File body must never be our reply schema.
+fn unwrap_file_content(content: &str) -> String {
+    let mut text = content.to_string();
+    for _ in 0..3 {
+        if !looks_like_editor_envelope(&text) {
+            break;
+        }
+        if let Some(inner) = extract_content_field_loose(&text) {
+            text = inner;
+        } else {
+            break;
+        }
+    }
+    text
 }
 
 /// Strip UI apply notes from a displayed assistant turn for model history.
@@ -925,7 +1052,10 @@ impl EditorState {
     }
 
     fn undo(&mut self) {
-        let _ = self.flush_save();
+        // Persist dirty edits as a tip first, then step back.
+        if self.dirty {
+            let _ = self.flush_save();
+        }
         if let Some(text) = self.ring.undo().map(str::to_string) {
             self.buf = EditorBuffer::from_text(&text);
             self.buf.clamp_cursor();
@@ -935,7 +1065,8 @@ impl EditorState {
                 self.status = format!("undo write failed: {e:#}");
             } else {
                 self.dirty = false;
-                self.status = "undone".into();
+                let cur = self.ring.cursor.map(|c| c + 1).unwrap_or(0);
+                self.status = format!("undone · v{cur}/{}", self.ring.len().max(1));
             }
             self.note_activity();
         } else {
@@ -953,7 +1084,8 @@ impl EditorState {
                 self.status = format!("redo write failed: {e:#}");
             } else {
                 self.dirty = false;
-                self.status = "redone".into();
+                let cur = self.ring.cursor.map(|c| c + 1).unwrap_or(0);
+                self.status = format!("redone · v{cur}/{}", self.ring.len().max(1));
             }
             self.note_activity();
         } else {
@@ -975,8 +1107,19 @@ impl EditorState {
         Ok(())
     }
 
+    /// Snapshot the current buffer into the version ring if it is not already
+    /// the tip — so the next AI/user change can be undone.
+    fn checkpoint(&mut self) {
+        let text = self.buf.to_text();
+        self.ring.push(&text);
+        if self.allow_persist {
+            let _ = save_ring(&self.meta_dir, &self.ring);
+        }
+    }
+
     fn apply_content(&mut self, content: &str) {
-        let text = ensure_trailing_newline(content);
+        self.checkpoint();
+        let text = ensure_trailing_newline(&unwrap_file_content(content));
         self.buf = EditorBuffer::from_text(&text);
         self.buf.clamp_cursor();
         self.mark_edited();
@@ -986,6 +1129,7 @@ impl EditorState {
     }
 
     fn apply_reply_edits(&mut self, edits: &[LineEdit]) -> ApplyReport {
+        self.checkpoint();
         let report = apply_edits(&mut self.buf, edits);
         if report.applied > 0 {
             self.mark_edited();
@@ -1355,8 +1499,13 @@ fn draw(state: &EditorState) {
         ""
     };
     let busy = if state.busy { " · thinking…" } else { "" };
+    let ver = {
+        let n = state.ring.len().max(1);
+        let cur = state.ring.cursor.map(|c| c + 1).unwrap_or(1);
+        format!("v{cur}/{n}")
+    };
     let footer = format!(
-        "{dim} Esc · Tab · ^S send · ^A compact · auto:{auto} · ^K clear · ^Z/^Y · L{} C{}{}{} · {}{reset}",
+        "{dim} Esc · Tab · ^S send · ^A compact · auto:{auto} · ^K clear · ^Z undo ^Y redo · {ver} · L{} C{}{}{} · {}{reset}",
         state.buf.row + 1,
         state.buf.col + 1,
         pending,
@@ -1637,8 +1786,84 @@ fn handle_model_reply(state: &mut EditorState, reply: EditorReply, as_suggestion
 
 // ── Public entry ─────────────────────────────────────────────────────────────
 
+/// Ensure `path` exists (create empty file + parents if needed), record recent
+/// history (unless hallucination), then open the editor owning the TTY
+/// (raw mode + alt screen). Use this from `:edit` / the menu.
+pub async fn run_for_path(cfg: &Config, path: &Path) -> Result<()> {
+    ensure_file(path)?;
+    record_open(cfg, path);
+    run_inner(cfg, path, true).await
+}
+
+/// Open an existing path from inside SINE (parent already owns raw/alt screen).
+pub async fn run_embedded(cfg: &Config, path: &Path) -> Result<()> {
+    record_open(cfg, path);
+    run_inner(cfg, path, false).await
+}
+
+fn record_open(cfg: &Config, path: &Path) {
+    if cfg.mode != Mode::Hallucination {
+        let hist = crate::edit_history::history_path();
+        let _ = crate::edit_history::record(&hist, path);
+    }
+}
+
+fn ensure_file(path: &Path) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    if path.exists() && !path.is_file() {
+        return Err(anyhow!("{} is not a regular file", path.display()));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+    }
+    if !path.exists() {
+        std::fs::write(path, "")
+            .with_context(|| format!("creating {}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// Run the editor overlay until Esc. Returns Ok(()) on normal close.
-pub async fn run(cfg: &Config, path: &Path) -> Result<()> {
+///
+/// When `owns_tty` is true (standalone `:edit`), enter raw mode and the alt
+/// screen. When false (opened from SINE with `e`), the parent already holds
+/// those — only paint and read keys.
+async fn run_inner(cfg: &Config, path: &Path, owns_tty: bool) -> Result<()> {
+    let _guard = if owns_tty {
+        let guard = RawGuard::enter();
+        if !guard.active() {
+            return Err(anyhow!(
+                "could not enter raw mode — try :edit from a real TTY"
+            ));
+        }
+        {
+            let mut out = io::stdout().lock();
+            let _ = write!(out, "\x1b[?1049h\x1b[?25h");
+            let _ = out.flush();
+        }
+        split_frame::set_bracketed_paste(true);
+        Some(guard)
+    } else {
+        None
+    };
+
+    let result = run_loop(cfg, path).await;
+
+    if owns_tty {
+        split_frame::set_bracketed_paste(false);
+        let mut out = io::stdout().lock();
+        let _ = write!(out, "\x1b[?1049l\x1b[?25h\x1b[0m");
+        let _ = out.flush();
+    }
+    result
+}
+
+async fn run_loop(cfg: &Config, path: &Path) -> Result<()> {
     let allow_persist = cfg.mode != Mode::Hallucination;
     let mut state = EditorState::open(path, allow_persist)?;
     state.relayout();
@@ -1942,6 +2167,14 @@ async fn send_composer(
         state.note_activity();
         return;
     }
+    if lower == "undo" {
+        state.undo();
+        return;
+    }
+    if lower == "redo" {
+        state.redo();
+        return;
+    }
     if lower == "compact" || lower == "compactify" {
         start_compactify(cfg, state, pending_job);
         return;
@@ -2176,6 +2409,27 @@ mod tests {
     }
 
     #[test]
+    fn ensure_file_creates_missing_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "sine-ed-ensure-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("nested").join("new.py");
+        assert!(!path.exists());
+        ensure_file(&path).unwrap();
+        assert!(path.is_file());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        // Idempotent on existing file.
+        std::fs::write(&path, "keep\n").unwrap();
+        ensure_file(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn content_rewrite_and_sanitized_json_parse() {
         let dir = std::env::temp_dir().join(format!(
             "sine-ed-content-{}",
@@ -2299,6 +2553,65 @@ mod tests {
         assert_eq!(state_lines[0], "def phi(n):");
         assert!(!state_lines.iter().skip(1).any(|l| l == "def phi(n): return n"));
         assert_eq!(state_lines.len(), split_lines(new_file).len());
+    }
+
+    #[test]
+    fn triple_quoted_envelope_does_not_write_json_to_file() {
+        let raw = r#"{
+ "say": "implemented fib",
+ "content": """
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        print(a)
+        a, b = b, a + b
+
+fib(10)
+"""
+}"#;
+        let reply = parse_editor_reply(raw).unwrap();
+        assert_eq!(reply.say, "implemented fib");
+        let content = reply.content.unwrap();
+        assert!(content.starts_with("def fib(n):"), "{content}");
+        assert!(!content.trim_start().starts_with('{'));
+        assert!(!content.contains("\"say\""));
+
+        let fenced = format!("```\n{raw}\n```");
+        let from_fence = parse_editor_reply(&fenced).unwrap();
+        let c2 = from_fence.content.unwrap();
+        assert!(c2.starts_with("def fib(n):"), "{c2}");
+        assert!(!looks_like_editor_envelope(&c2));
+    }
+
+    #[test]
+    fn unwrap_nested_envelope_on_apply() {
+        let dir = std::env::temp_dir().join(format!(
+            "sine-ed-unwrap-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.py");
+        std::fs::write(&path, "old\n").unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ENGRAM_SINE_DIR", dir.join(".sine"));
+        let mut state = EditorState::open(&path, true).unwrap();
+        let envelope = "{\n \"say\": \"x\",\n \"content\": \"\"\"\nhello()\n\"\"\"\n}";
+        let note = state.apply_reply_changes(&EditorReply {
+            say: "x".into(),
+            content: Some(envelope.into()),
+            edits: vec![],
+        });
+        assert!(note.contains("rewrote"));
+        assert_eq!(state.buf.lines[0], "hello()");
+        assert!(!state.buf.lines[0].starts_with('{'));
+        // Undo restores the pre-AI buffer.
+        state.undo();
+        assert_eq!(state.buf.lines[0], "old");
+        std::env::remove_var("ENGRAM_SINE_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

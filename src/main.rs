@@ -1,6 +1,8 @@
 mod chat_tui;
 mod completer;
 mod config;
+mod edit_history;
+mod edit_picker;
 mod emerge;
 mod halluc_fs;
 mod halluc_session;

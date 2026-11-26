@@ -53,12 +53,15 @@ or `files clear` / `refresh files` and press Enter / Ctrl-S.
 ## Editor
 
 Full-screen overlay (left = numbered editable file, right = AI conversation).
-Open with **e** from the files list (empty draft) or from the read-only viewer.
-Esc autosaves and returns to the four-pane screen. The chat header shows the
-same style of context meter as `:chat` / SINE (`ctx N tok · est P%`): chars/4
-over the editor system prompt, chat transcript, pending suggestion, and the
-file slice attached on the next model call, against `ENGRAM_CONTEXT_TOKENS`.
-**Ctrl-K** / compactify drop that meter the same way they shrink the transcript.
+Open with **`:edit [path]`** from the shell (no path → cwd picker with **New file**),
+**`:menu` → Editor** (recent paths + clear history), or **e** from the SINE files
+list / viewer. Missing paths are created empty. Opens record under
+`/engram/user/.edit_history.json` (skipped in hallucination). Esc autosaves and
+returns. The chat header shows the same style of context meter as `:chat` / SINE
+(`ctx N tok · est P%`): chars/4 over the editor system prompt, chat transcript,
+pending suggestion, and the file slice attached on the next model call, against
+`ENGRAM_CONTEXT_TOKENS`. **Ctrl-K** / compactify drop that meter the same way
+they shrink the transcript.
 
 | Control | Action |
 |---------|--------|
@@ -67,7 +70,7 @@ file slice attached on the next model call, against `ENGRAM_CONTEXT_TOKENS`.
 | Ctrl-S / Enter (composer has text) | Send to the model |
 | Ctrl-A | **Compactify** the editor chat into one summary turn (also: type `compact`) |
 | type `auto` | Toggle **editor** auto (independent of plan `auto`; letter `c` is always typed) |
-| Ctrl-Z / Ctrl-Y | Undo / redo through the version ring |
+| Ctrl-Z / Ctrl-Y | Undo / redo through the version ring (also: type `undo` / `redo`) |
 | Enter (empty composer, pending suggestion) | Accept proposed edits |
 | Ctrl-K | Dismiss pending suggestion, otherwise **clear** the editor chat context (file kept) |
 | type `clear` | Same as Ctrl-K clear |

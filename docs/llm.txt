@@ -68,7 +68,7 @@ Workspace (docs/adr/0002-rust-language-and-style.md):
 - quickyn          crates/quickyn/             yes/no + confidence CLI
 - shomloop         crates/shomloop/            scheduled commands, crontab, planned-run CSV
 
-engram-shell modules: main.rs (CLI, --once, --script, --self-test), config.rs, modes.rs, repl.rs, llm.rs, tools/, mcp/, skills.rs, ui.rs, menu.rs, spinner.rs, completer.rs, learn/, halluc_fs.rs, halluc_session.rs, quickyn_tui.rs, chat_tui.rs, web_tui.rs, emerge.rs, split_frame.rs, sine_tui.rs, sine_editor.rs.
+engram-shell modules: main.rs (CLI, --once, --script, --self-test), config.rs, modes.rs, repl.rs, llm.rs, tools/, mcp/, skills.rs, ui.rs, menu.rs, spinner.rs, completer.rs, learn/, halluc_fs.rs, halluc_session.rs, quickyn_tui.rs, chat_tui.rs, web_tui.rs, web_history.rs, edit_history.rs, edit_picker.rs, emerge.rs, split_frame.rs, sine_tui.rs, sine_editor.rs.
 
 Put new shell behavior in that map. Add a module or a workspace crate only when the boundary is real.
 
@@ -85,6 +85,7 @@ docs/engram.md
 - /engram/user/bin/                      Learned commands. Entrypoint prepends this to PATH.
 - /engram/user/.command_freq.json        Command counts for :top and cmdfreq.
 - /engram/user/.sine/                    SINE session.json, playbook.md, and edits/<path>/ version rings (agent/root; skipped in hallucination).
+- /engram/user/.edit_history.json        Recent paths from :edit / SINE editor (newest first).
 - /engram/user/.packages.json            Successful apk add / apk del ledger. Interactive shells commit matching apk files into shomskylinux:installed; each start reinstalls names still marked installed that are missing.
 - /engram/skills/                        Markdown skills copied from engram/skills/ at build.
 - /engram/models/                        GGUF volume shomsky-models.
@@ -175,7 +176,7 @@ SINE
 
 docs/sine.md
 docs/adr/0014-sine-assistant.md
-Plan-then-approve assistant (:sine or bare sine). Split frame: left top brand/art (docs/sine_image.txt), left bottom agents/loops/files (Tab+↑↓+Enter opens a numbered file viewer; e opens the editor overlay), right top agent output, right bottom chat, status + command line. Editor: numbered buffer + file-scoped AI chat, autosave, version ring under .sine/edits/, separate editor_auto (proposals vs immediate apply). Plans with one local chat_text_max call; verbs include quickyn for yes/no; user approve/edit/cancel. auto is a shell flag. Idle (while the screen is open) reads top commands from the cmdfreq JSON and rewrites playbook.md. Session under /engram/user/.sine/ (skipped in hallucination). ENGRAM_SINE_STUB=1 for CI. Dependency surface is ADR-0014 only.
+Plan-then-approve assistant (:sine or bare sine). Split frame: left top brand/art (docs/sine_image.txt), left bottom agents/loops/files (Tab+↑↓+Enter opens a numbered file viewer; e opens the editor overlay), right top agent output, right bottom chat, status + command line. Editor also via :edit [path] / :menu → Editor (cwd picker + recent under .edit_history.json): numbered buffer + file-scoped AI chat, autosave, version ring under .sine/edits/, separate editor_auto (proposals vs immediate apply). Plans with one local chat_text_max call; verbs include quickyn for yes/no; user approve/edit/cancel. auto is a shell flag. Idle (while the screen is open) reads top commands from the cmdfreq JSON and rewrites playbook.md. Session under /engram/user/.sine/ (skipped in hallucination). ENGRAM_SINE_STUB=1 for CI. Dependency surface is ADR-0014 only.
 
 
 SHOMAGENT
@@ -214,7 +215,7 @@ docs/engram.md
 Skills are markdown with YAML frontmatter: name, description, always_load.
 
 - shell                              always_load true. BusyBox vocabulary.
-- packages                           always_load true. apk add and apk del. Search when the binary name differs from the package. Ledger in .packages.json. Interactive shells persist installs in shomskylinux:installed.
+- packages                           always_load true. apk add and apk del. Search when the binary name differs from the package. Ledger in .packages.json (also injected into the agent system prompt). After install, use PATH names — never invent /root/.local/bin. python3 install may add a ~/bin/python shim. Interactive shells persist installs in shomskylinux:installed.
 - learn                              on demand via load_skill.
 - ignore_llm_for_these_commands      on demand. The shell also reads it as the TUI bypass list.
 

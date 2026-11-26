@@ -145,7 +145,9 @@ pub async fn execute_tool(
             // Models often emit BusyBox `install git` or `apt-get install git`.
             // Rewrite clear package requests; leave real BusyBox install alone.
             let rewritten = crate::packages::package_install_command(&original);
-            let command = rewritten.clone().unwrap_or(original);
+            let command = crate::packages::sanitize_shell_command(
+                &rewritten.clone().unwrap_or(original),
+            );
             match mode {
                 Mode::Agent | Mode::Root => {
                     if is_ignore_llm_command(&command, skills.ignore_llm_commands()) {

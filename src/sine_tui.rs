@@ -2189,7 +2189,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                     let path = viewer.path.clone();
                     state.viewer = None;
                     state.note_activity();
-                    if let Err(e) = crate::sine_editor::run(cfg, &path).await {
+                    if let Err(e) = crate::sine_editor::run_embedded(cfg, &path).await {
                         state.agent_note(&format!("editor: {e:#}"));
                     }
                     state.touch_file(&path);
@@ -2447,7 +2447,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
             {
                 if let Some(path) = state.selected_edit_path() {
                     state.note_activity();
-                    if let Err(e) = crate::sine_editor::run(cfg, &path).await {
+                    if let Err(e) = crate::sine_editor::run_embedded(cfg, &path).await {
                         state.agent_note(&format!("editor: {e:#}"));
                     }
                     state.touch_file(&path);
