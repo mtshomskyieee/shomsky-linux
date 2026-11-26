@@ -4,6 +4,8 @@ target
 **/*.gguf
 engram/models/**
 !engram/models/.gitkeep
+# Host-mounted user home (container UIDs); not part of the image build.
+engram/user
 docs
 *.md
 !README.md
@@ -13,3 +15,4 @@ docs
 agent-transcripts
 *.log
 dist
+tools/img2ascii/target

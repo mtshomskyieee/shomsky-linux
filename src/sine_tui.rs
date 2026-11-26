@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use shomagent::daemon::rpc;
 use shomagent::protocol::{Request, Response};
 
+use crate::chrome::{self, Avatar};
 use crate::config::Config;
 use crate::llm::{ChatMessage, LlmClient};
 use crate::modes::Mode;
@@ -20,9 +21,13 @@ use crate::split_frame::{self, Key, PaneFocus, Slot, SplitFrame};
 use crate::term::RawGuard;
 use crate::ui;
 
-/// Brand art for the left-top pane. Packaged copy of `docs/sine_image.txt`
-/// (docs/ is dockerignored; the image build copies `assets/`).
+/// Classic braille bunny (docs/sine_image.txt → assets/).
 const SINE_IMAGE: &str = include_str!("../assets/sine_image.txt");
+const BRAND_NAVI: &str = include_str!("../assets/brand/navi.txt");
+const BRAND_COFFEE_REST: &str = include_str!("../assets/brand/coffee-rest.txt");
+const BRAND_COFFEE_BUSY: &str = include_str!("../assets/brand/coffee-busy.txt");
+const BRAND_LAPTOP_REST: &str = include_str!("../assets/brand/laptop-rest.txt");
+const BRAND_LAPTOP_BUSY: &str = include_str!("../assets/brand/laptop-busy.txt");
 
 const PLAN_SYSTEM: &str = "\
 You are SINE, a planning assistant inside Shomsky Linux (BusyBox ash, Alpine).
@@ -844,7 +849,7 @@ impl SineState {
         frame.input_history = session.input_history.clone();
         frame.set_slot_lines(
             Slot::LeftTop,
-            SINE_IMAGE.lines().map(|l| l.to_string()).collect(),
+            render_brand_lines(chrome::active_avatar(), BrandEyes::Rest),
         );
         // restore logs
         if !session.agent_log.is_empty() {
@@ -1015,7 +1020,7 @@ impl SineState {
         } else {
             BrandEyes::Rest
         };
-        let mut lines = render_brand_lines(eyes);
+        let mut lines = render_brand_lines(chrome::active_avatar(), eyes);
         if busy {
             let label = match self.phase {
                 Phase::Planning => "planning",
@@ -1487,8 +1492,71 @@ fn spinner_glyph(elapsed: Duration) -> char {
     SPIN_FRAMES[i % SPIN_FRAMES.len()]
 }
 
-/// Brand art with resting, busy (bouncing), or error (`x`) eyes.
-fn render_brand_lines(eyes: BrandEyes) -> Vec<String> {
+/// Resting avatar art for menu previews (`:menu` → Theme).
+pub fn preview_avatar_lines(avatar: Avatar) -> Vec<String> {
+    render_brand_lines(avatar, BrandEyes::Rest)
+}
+
+/// Brand art for the active avatar. Classic keeps bouncing/error eyes; image
+/// avatars swap rest/busy pictures (and tint on error / NO_COLOR strips SGR).
+fn render_brand_lines(avatar: Avatar, eyes: BrandEyes) -> Vec<String> {
+    match avatar {
+        Avatar::Classic => render_classic_brand(eyes),
+        Avatar::Navi => {
+            let mut lines = art_lines(BRAND_NAVI);
+            apply_image_eyes(&mut lines, eyes, false);
+            lines
+        }
+        Avatar::Coffee => {
+            let src = match eyes {
+                BrandEyes::Busy(_) => BRAND_COFFEE_BUSY,
+                _ => BRAND_COFFEE_REST,
+            };
+            let mut lines = art_lines(src);
+            apply_image_eyes(&mut lines, eyes, matches!(eyes, BrandEyes::Busy(_)));
+            lines
+        }
+        Avatar::Laptop => {
+            let src = match eyes {
+                BrandEyes::Busy(_) => BRAND_LAPTOP_BUSY,
+                _ => BRAND_LAPTOP_REST,
+            };
+            let mut lines = art_lines(src);
+            apply_image_eyes(&mut lines, eyes, matches!(eyes, BrandEyes::Busy(_)));
+            lines
+        }
+    }
+}
+
+fn art_lines(src: &str) -> Vec<String> {
+    let raw: Vec<String> = src.lines().map(|l| l.to_string()).collect();
+    if ui::color_enabled() {
+        raw
+    } else {
+        raw.into_iter().map(|l| chrome::strip_ansi(&l)).collect()
+    }
+}
+
+fn apply_image_eyes(lines: &mut [String], eyes: BrandEyes, busy_swapped: bool) {
+    let _ = busy_swapped;
+    match eyes {
+        BrandEyes::Rest | BrandEyes::Busy(_) => {}
+        BrandEyes::Error => {
+            // Retint whole picture with danger color when color is on.
+            if !ui::color_enabled() {
+                return;
+            }
+            let danger = chrome::palette().danger.sgr();
+            let reset = "\x1b[0m";
+            for line in lines.iter_mut() {
+                let plain = chrome::strip_ansi(line);
+                *line = format!("{danger}{plain}{reset}");
+            }
+        }
+    }
+}
+
+fn render_classic_brand(eyes: BrandEyes) -> Vec<String> {
     let mut lines: Vec<String> = SINE_IMAGE.lines().map(|l| l.to_string()).collect();
     match eyes {
         BrandEyes::Rest => {}
@@ -1497,7 +1565,6 @@ fn render_brand_lines(eyes: BrandEyes) -> Vec<String> {
             set_char_at(&mut lines, EYE_ROW, EYE_RIGHT_COL, 'x');
         }
         BrandEyes::Busy(elapsed) => {
-            // Clear resting o cells first so the glance leaves a blank socket.
             set_char_at(&mut lines, EYE_ROW, EYE_LEFT_COL, BRAILLE_BLANK);
             set_char_at(&mut lines, EYE_ROW, EYE_RIGHT_COL, BRAILLE_BLANK);
             let (lr, lc, rr, rc) = eye_pose_cells(elapsed, &lines);
@@ -2727,7 +2794,7 @@ mod tests {
 
     #[test]
     fn brand_rest_keeps_packaged_eyes() {
-        let lines = render_brand_lines(BrandEyes::Rest);
+        let lines = render_brand_lines(Avatar::Classic, BrandEyes::Rest);
         assert_eq!(char_at(&lines, EYE_ROW, EYE_LEFT_COL), Some('o'));
         assert_eq!(char_at(&lines, EYE_ROW, EYE_RIGHT_COL), Some('o'));
     }
@@ -2735,24 +2802,51 @@ mod tests {
     #[test]
     fn brand_busy_moves_eyes_onto_blank_cells() {
         // Pose index 1 = up (after one EYE_POSE_TICK).
-        let lines = render_brand_lines(BrandEyes::Busy(EYE_POSE_TICK));
+        let lines = render_brand_lines(Avatar::Classic, BrandEyes::Busy(EYE_POSE_TICK));
         assert_eq!(char_at(&lines, EYE_ROW, EYE_LEFT_COL), Some(BRAILLE_BLANK));
         assert_eq!(char_at(&lines, EYE_ROW, EYE_RIGHT_COL), Some(BRAILLE_BLANK));
         assert_eq!(char_at(&lines, EYE_ROW - 1, EYE_LEFT_COL), Some('o'));
         assert_eq!(char_at(&lines, EYE_ROW - 1, EYE_RIGHT_COL), Some('o'));
         // Both pupils land on blank face interior (no border ink).
-        let rest = render_brand_lines(BrandEyes::Rest);
+        let rest = render_brand_lines(Avatar::Classic, BrandEyes::Rest);
         assert!(cell_is_blank(&rest, EYE_ROW - 1, EYE_LEFT_COL));
         assert!(cell_is_blank(&rest, EYE_ROW - 1, EYE_RIGHT_COL));
     }
 
     #[test]
     fn brand_error_replaces_eyes_with_x() {
-        let lines = render_brand_lines(BrandEyes::Error);
+        let lines = render_brand_lines(Avatar::Classic, BrandEyes::Error);
         assert_eq!(char_at(&lines, EYE_ROW, EYE_LEFT_COL), Some('x'));
         assert_eq!(char_at(&lines, EYE_ROW, EYE_RIGHT_COL), Some('x'));
         let face = &lines[EYE_ROW];
         assert!(!face.contains('o'), "error face must not keep resting o: {face}");
+    }
+
+    #[test]
+    fn brand_navi_is_nonempty_without_eye_row() {
+        let lines = render_brand_lines(Avatar::Navi, BrandEyes::Rest);
+        assert!(!lines.is_empty());
+        assert!(lines.iter().any(|l| chrome::visible_len(l) > 0));
+        // Navi art is wider than the bunny eye grid; do not require EYE_ROW.
+        assert!(lines.len() >= 8);
+    }
+
+    #[test]
+    fn brand_coffee_busy_differs_from_rest() {
+        let rest = render_brand_lines(Avatar::Coffee, BrandEyes::Rest);
+        let busy = render_brand_lines(Avatar::Coffee, BrandEyes::Busy(Duration::from_secs(1)));
+        let rest_plain: Vec<_> = rest.iter().map(|l| chrome::strip_ansi(l)).collect();
+        let busy_plain: Vec<_> = busy.iter().map(|l| chrome::strip_ansi(l)).collect();
+        assert_ne!(rest_plain, busy_plain);
+    }
+
+    #[test]
+    fn brand_laptop_busy_differs_from_rest() {
+        let rest = render_brand_lines(Avatar::Laptop, BrandEyes::Rest);
+        let busy = render_brand_lines(Avatar::Laptop, BrandEyes::Busy(Duration::from_secs(1)));
+        let rest_plain: Vec<_> = rest.iter().map(|l| chrome::strip_ansi(l)).collect();
+        let busy_plain: Vec<_> = busy.iter().map(|l| chrome::strip_ansi(l)).collect();
+        assert_ne!(rest_plain, busy_plain);
     }
 
     #[test]

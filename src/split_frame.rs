@@ -8,8 +8,8 @@
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
+use crate::chrome::{self, Canvas, Rect, Style};
 use crate::term;
-use crate::ui;
 
 /// Where `publish` appends lines. An unsplit side treats `Left`/`LeftTop` (and
 /// `Right`/`RightTop`) as the same leaf.
@@ -436,7 +436,8 @@ impl SlotMap {
 impl SplitFrame {
     /// Build the SINE-shaped layout: left top/bottom + right top/bottom.
     pub fn sine_layout() -> Self {
-        let left_top = Leaf::new("left_top").with_header("SINE");
+        // No pane header — outer frame is titled "sine"; brand art fills the pane.
+        let left_top = Leaf::new("left_top");
         // Roster is top-anchored (agents → loops → files); do not follow the
         // files tail the way agent/chat follow new lines.
         let mut left_bottom = Leaf::new("left_bottom").with_header("agents / loops / files");
@@ -783,58 +784,61 @@ impl SplitFrame {
         let (term_rows, term_cols) = term::term_size();
         let cols = term_cols.clamp(40, term::MAX_COLS);
         let rows = term_rows.clamp(10, term::MAX_ROWS);
+        let pal = chrome::palette();
+        let border = pal.border;
+        let title_st = pal.title;
+        let dim = pal.dim;
+        let text = pal.text;
+        let accent = pal.accent;
+
+        // Inner content width (inside outer frame).
+        let inner_w = cols.saturating_sub(2).max(8);
         let prefix = &self.prompt;
         let prefix_w = prefix.chars().count();
-        let input_w = cols.saturating_sub(prefix_w).max(1);
+        let input_w = inner_w.saturating_sub(prefix_w).max(1);
         let visual = wrap_composer_lines(&self.input, input_w);
         let composer_rows = visual.len().clamp(1, COMPOSER_MAX_ROWS);
         let lay = FrameLayout::compute_sized(&self.root, rows, cols, composer_rows);
-        let color = ui::color_enabled();
-        let r = "\x1b[0m";
-        let bold = if color { "\x1b[1m" } else { "" };
-        let dim = if color { "\x1b[2m" } else { "" };
-        let cyan = if color { "\x1b[36m" } else { "" };
-        let inv = if color { "\x1b[7m" } else { "" };
 
-        let mut buf = String::with_capacity(lay.rows * lay.cols * 2);
-        use std::fmt::Write as _;
-        let _ = write!(buf, "\x1b[2J\x1b[H");
+        let mut canvas = Canvas::new(cols, rows);
+        let outer = Rect::new(0, 0, cols, rows);
+        let footer = self.footer.clone().unwrap_or_else(|| {
+            "Esc exit · ^S send · Enter newline/send · Tab focus · Ctrl-arrows resize".into()
+        });
+        canvas.frame(outer, "sine", &footer, border, title_st);
 
-        paint_node(
-            &mut buf,
+        // Pane body rect (inside frame, above status + composer).
+        let body = Rect::new(1, 1, lay.body_cols, lay.body_rows);
+        paint_node_canvas(
+            &mut canvas,
             &self.root,
-            &lay,
-            1,
-            1,
-            lay.cols,
-            lay.body_rows,
-            cyan,
+            body,
+            border,
             dim,
-            bold,
-            inv,
-            r,
+            title_st,
+            text,
+            pal.border_focus,
             self.pane_focus,
         );
 
-        let status_y = lay.body_rows + 1;
+        let status_y = 1 + lay.body_rows;
         let status = self.status.clone().unwrap_or_default();
         let focus_mark = self.pane_focus.label();
         let status_line = if status.is_empty() {
-            format!("{dim} tab focus:{focus_mark} · ^←^→ split · ^↑^↓ pane {r}")
+            format!(" tab focus:{focus_mark} · ^←^→ split · ^↑^↓ pane ")
         } else {
-            format!("{dim}{status} · focus:{focus_mark}{r}")
+            format!(" {status} · focus:{focus_mark} ")
         };
-        let _ = write!(
-            buf,
-            "\x1b[{status_y};1H{}",
-            pad_visible(&status_line, lay.cols)
-        );
+        canvas.fill_row(1, status_y, inner_w, &status_line, dim);
 
         let (cursor_row, cursor_col) = cursor_visual_pos(&self.input, self.cursor, input_w);
         let scroll = composer_scroll(visual.len(), cursor_row, composer_rows);
         let composer_y0 = status_y + 1;
         for row in 0..composer_rows {
             let y = composer_y0 + row;
+            if y >= rows.saturating_sub(1) {
+                break;
+            }
             let line_idx = scroll + row;
             let line = visual.get(line_idx).map(String::as_str).unwrap_or("");
             let cell = if line_idx == 0 {
@@ -842,61 +846,52 @@ impl SplitFrame {
             } else {
                 format!("{:width$}{line}", "", width = prefix_w)
             };
-            let _ = write!(
-                buf,
-                "\x1b[{y};1H{cyan}{bold}{}{r}",
-                pad_visible(&cell, lay.cols)
-            );
-        }
-        // Footer help row (keys / auto).
-        let foot_y = lay.rows;
-        if foot_y > composer_y0 + composer_rows - 1 {
-            let footer = self.footer.clone().unwrap_or_else(|| {
-                "Esc exit · ^S send · Enter newline/send · Tab focus · Ctrl-arrows resize"
-                    .into()
-            });
-            let _ = write!(
-                buf,
-                "\x1b[{foot_y};1H{dim}{}{r}",
-                pad_visible(&footer, lay.cols)
-            );
+            canvas.fill_row(1, y, inner_w, &cell, accent);
         }
 
-        let cursor_screen_row = composer_y0 + cursor_row.saturating_sub(scroll);
-        let screen_col = 1 + prefix_w + cursor_col;
+        canvas.flush();
+
+        // Place hardware cursor on the composer.
+        let cursor_screen_row = composer_y0 + cursor_row.saturating_sub(scroll) + 1; // 1-based
+        let screen_col = 2 + prefix_w + cursor_col; // 1-based, past left border
+        let mut out = io::stdout().lock();
         let _ = write!(
-            buf,
+            out,
             "\x1b[?25h\x1b[{cursor_screen_row};{screen_col}H"
         );
-
-        let mut out = io::stdout().lock();
-        let _ = out.write_all(buf.as_bytes());
         let _ = out.flush();
     }
 }
 
 #[derive(Debug, Clone)]
 struct FrameLayout {
+    #[allow(dead_code)]
     cols: usize,
+    #[allow(dead_code)]
     rows: usize,
+    /// Inner width available to panes (cols − 2 for outer frame).
+    body_cols: usize,
     body_rows: usize,
-    /// leaf id → (x, y, w, h) 1-based screen coords
+    /// leaf id → (x, y, w, h) 0-based canvas coords
     panes: Vec<(String, usize, usize, usize, usize)>,
 }
 
 impl FrameLayout {
     fn compute_sized(root: &Node, rows: usize, cols: usize, composer_rows: usize) -> Self {
         let composer_rows = composer_rows.clamp(1, COMPOSER_MAX_ROWS);
-        // body + status + composer + footer
-        let chrome = 2 + composer_rows;
+        // outer top + outer bottom + status + composer
+        let chrome = 2 + 1 + composer_rows;
         let body_rows = rows.saturating_sub(chrome).max(3);
+        let body_cols = cols.saturating_sub(2).max(8);
         let mut lay = Self {
             cols,
             rows,
+            body_cols,
             body_rows,
             panes: Vec::new(),
         };
-        lay.collect(root, 1, 1, cols, body_rows);
+        // Panes start at (1,1) inside the outer frame.
+        lay.collect(root, 1, 1, body_cols, body_rows);
         lay
     }
 
@@ -936,7 +931,6 @@ impl FrameLayout {
             .find(|(pid, ..)| pid == id)
             .map(|(_, _, _, w, h)| (*w, *h))
     }
-
 }
 
 fn leaf_is_focused(leaf: &Leaf, focus: PaneFocus) -> bool {
@@ -949,36 +943,30 @@ fn leaf_is_focused(leaf: &Leaf, focus: PaneFocus) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_node(
-    buf: &mut String,
+fn paint_node_canvas(
+    canvas: &mut Canvas,
     node: &Node,
-    _lay: &FrameLayout,
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    cyan: &str,
-    dim: &str,
-    bold: &str,
-    inv: &str,
-    reset: &str,
+    rect: Rect,
+    border: Style,
+    dim: Style,
+    title: Style,
+    text: Style,
+    focus_border: Style,
     focus: PaneFocus,
 ) {
-    use std::fmt::Write as _;
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
     match node {
         Node::Leaf(leaf) => {
-            paint_leaf(
-                buf,
+            paint_leaf_canvas(
+                canvas,
                 leaf,
-                x,
-                y,
-                w,
-                h,
-                cyan,
+                rect,
                 dim,
-                bold,
-                inv,
-                reset,
+                title,
+                text,
+                focus_border,
                 leaf_is_focused(leaf, focus),
             );
         }
@@ -987,37 +975,31 @@ fn paint_node(
             left,
             right,
         } => {
-            let left_w = ((w as f32) * ratio).round() as usize;
-            let left_w = left_w.clamp(8, w.saturating_sub(8).max(8));
-            let right_w = w.saturating_sub(left_w + 1).max(1);
-            let div_x = x + left_w;
-            for row in 0..h {
-                let gy = y + row;
-                let ch = if row == 0 {
-                    "┬"
-                } else if row + 1 == h {
-                    "┴"
-                } else {
-                    "│"
-                };
-                let _ = write!(buf, "\x1b[{gy};{div_x}H{cyan}{ch}{reset}");
-            }
-            paint_node(
-                buf, left, _lay, x, y, left_w, h, cyan, dim, bold, inv, reset, focus,
-            );
-            paint_node(
-                buf,
-                right,
-                _lay,
-                x + left_w + 1,
-                y,
-                right_w,
-                h,
-                cyan,
+            let left_w = ((rect.w as f32) * *ratio).round() as usize;
+            let left_w = left_w.clamp(8, rect.w.saturating_sub(8).max(8));
+            let right_w = rect.w.saturating_sub(left_w + 1).max(1);
+            let div_x = rect.x + left_w;
+            canvas.split_col(rect, div_x, border);
+            paint_node_canvas(
+                canvas,
+                left,
+                Rect::new(rect.x, rect.y, left_w, rect.h),
+                border,
                 dim,
-                bold,
-                inv,
-                reset,
+                title,
+                text,
+                focus_border,
+                focus,
+            );
+            paint_node_canvas(
+                canvas,
+                right,
+                Rect::new(rect.x + left_w + 1, rect.y, right_w, rect.h),
+                border,
+                dim,
+                title,
+                text,
+                focus_border,
                 focus,
             );
         }
@@ -1026,28 +1008,31 @@ fn paint_node(
             top,
             bottom,
         } => {
-            let top_h = ((h as f32) * ratio).round() as usize;
-            let top_h = top_h.clamp(2, h.saturating_sub(2).max(2));
-            let bottom_h = h.saturating_sub(top_h + 1).max(1);
-            let div_y = y + top_h;
-            let line = "─".repeat(w);
-            let _ = write!(buf, "\x1b[{div_y};{x}H{cyan}{line}{reset}");
-            paint_node(
-                buf, top, _lay, x, y, w, top_h, cyan, dim, bold, inv, reset, focus,
-            );
-            paint_node(
-                buf,
-                bottom,
-                _lay,
-                x,
-                y + top_h + 1,
-                w,
-                bottom_h,
-                cyan,
+            let top_h = ((rect.h as f32) * *ratio).round() as usize;
+            let top_h = top_h.clamp(2, rect.h.saturating_sub(2).max(2));
+            let bottom_h = rect.h.saturating_sub(top_h + 1).max(1);
+            let div_y = rect.y + top_h;
+            canvas.split_row(rect, div_y, border);
+            paint_node_canvas(
+                canvas,
+                top,
+                Rect::new(rect.x, rect.y, rect.w, top_h),
+                border,
                 dim,
-                bold,
-                inv,
-                reset,
+                title,
+                text,
+                focus_border,
+                focus,
+            );
+            paint_node_canvas(
+                canvas,
+                bottom,
+                Rect::new(rect.x, rect.y + top_h + 1, rect.w, bottom_h),
+                border,
+                dim,
+                title,
+                text,
+                focus_border,
                 focus,
             );
         }
@@ -1055,41 +1040,31 @@ fn paint_node(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_leaf(
-    buf: &mut String,
+fn paint_leaf_canvas(
+    canvas: &mut Canvas,
     leaf: &Leaf,
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    cyan: &str,
-    dim: &str,
-    bold: &str,
-    inv: &str,
-    reset: &str,
+    rect: Rect,
+    dim: Style,
+    title: Style,
+    text: Style,
+    focus_border: Style,
     focused: bool,
 ) {
-    use std::fmt::Write as _;
-    if w == 0 || h == 0 {
+    if rect.w == 0 || rect.h == 0 {
         return;
     }
-
-    let mut content_y = y;
-    let mut content_h = h;
+    let mut content_y = rect.y;
+    let mut content_h = rect.h;
+    let head_style = if focused { focus_border } else { title };
 
     if let Some(header) = &leaf.header {
-        let title = format!(" {header} ");
-        let dash_n = w.saturating_sub(title.chars().count());
-        let line = if focused {
-            format!("{inv}{bold}{title}{reset}{cyan}{}{reset}", "─".repeat(dash_n))
-        } else {
-            format!("{bold}{title}{reset}{cyan}{}{reset}", "─".repeat(dash_n))
-        };
-        let _ = write!(
-            buf,
-            "\x1b[{content_y};{x}H{cyan}{}",
-            pad_visible(&line, w)
-        );
+        let label = format!(" {header} ");
+        let used = label.chars().count().min(rect.w);
+        let mut line: String = label.chars().take(used).collect();
+        while line.chars().count() < rect.w {
+            line.push('─');
+        }
+        canvas.fill_row(rect.x, content_y, rect.w, &line, head_style);
         content_y += 1;
         content_h = content_h.saturating_sub(1);
     }
@@ -1100,7 +1075,7 @@ fn paint_leaf(
 
     let body_h = content_h.max(1);
     let display: Vec<String> = if leaf.wrap {
-        wrap_pane_lines(&leaf.lines, w)
+        wrap_pane_lines(&leaf.lines, rect.w)
     } else {
         leaf.lines.clone()
     };
@@ -1112,20 +1087,14 @@ fn paint_leaf(
     };
     for row in 0..body_h {
         let gy = content_y + row;
-        let text = display.get(start + row).cloned().unwrap_or_default();
-        let cell = if leaf.wrap {
-            // Already soft-wrapped to `w`; pad only.
-            text
-        } else {
-            truncate_visible(&text, w)
-        };
-        let _ = write!(buf, "\x1b[{gy};{x}H{}", pad_visible(&cell, w));
+        let line = display.get(start + row).cloned().unwrap_or_default();
+        // Brand art and other panes may carry baked SGR.
+        canvas.put_ansi_row(rect.x, gy, rect.w, &line, text);
     }
 
     if let Some(footer) = &leaf.footer {
-        let gy = y + h - 1;
-        let cell = format!("{dim}{}{reset}", truncate_visible(footer, w));
-        let _ = write!(buf, "\x1b[{gy};{x}H{}", pad_visible(&cell, w));
+        let gy = rect.y + rect.h - 1;
+        canvas.fill_row(rect.x, gy, rect.w, footer, dim);
     }
 }
 
@@ -1136,6 +1105,7 @@ pub fn clamp_ratio(r: f32) -> f32 {
     r.clamp(RATIO_MIN, RATIO_MAX)
 }
 
+#[allow(dead_code)] // public helper; canvas path is preferred for new chrome
 pub fn pad_visible(s: &str, width: usize) -> String {
     let visible = strip_ansi_len(s);
     if visible >= width {

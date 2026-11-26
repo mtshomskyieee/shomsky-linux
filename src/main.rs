@@ -1,4 +1,5 @@
 mod chat_tui;
+mod chrome;
 mod completer;
 mod config;
 mod edit_history;
@@ -84,6 +85,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let _ = crate::chrome::load_theme();
     let mut cfg = Config::load(&cli.config)
         .with_context(|| format!("loading config from {}", cli.config.display()))?;
 

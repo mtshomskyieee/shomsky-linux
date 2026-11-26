@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::chrome::{self, Avatar, Canvas, Rect, Theme};
 use crate::modes::Mode;
 use crate::packages::PackageStatus;
 use crate::term::{self, RawGuard};
@@ -17,6 +18,8 @@ use crate::ui;
 pub enum MenuAction {
     Dismiss,
     SetMode(Mode),
+    SetTheme(Theme),
+    SetAvatar(Avatar),
     RunMeta(String),
     InsertLine(String),
     ExitShell,
@@ -69,11 +72,13 @@ pub enum Category {
     Shomloop,
     System,
     Web,
+    /// After Web so digits 1–9 / 0 keep their old targets.
+    Theme,
 }
 
 impl Category {
-    /// Left column, alphabetical by label (case-insensitive).
-    pub const ALL: [Category; 10] = [
+    /// Left column: first ten alphabetical, Theme last (no digit jump).
+    pub const ALL: [Category; 11] = [
         Category::Editor,
         Category::Help,
         Category::Learn,
@@ -84,6 +89,7 @@ impl Category {
         Category::Shomloop,
         Category::System,
         Category::Web,
+        Category::Theme,
     ];
 
     pub fn label(self) -> &'static str {
@@ -98,6 +104,7 @@ impl Category {
             Category::Shomloop => "shomloop",
             Category::System => "System",
             Category::Web => "Web",
+            Category::Theme => "Theme",
         }
     }
 
@@ -167,6 +174,12 @@ pub struct MenuState {
     pending_learn: bool,
     packages_path: PathBuf,
     shomagent_members: Vec<ShomagentMemberBrief>,
+    /// Theme active when Theme category was entered (Esc restores).
+    theme_backup: Option<Theme>,
+    /// Preview theme while browsing Theme items (before Enter).
+    theme_preview: Option<Theme>,
+    /// Avatar active when Theme category was entered (Esc restores).
+    avatar_backup: Option<Avatar>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +221,10 @@ enum ItemKind {
     OpenEdit(String),
     /// A planned shomloop run. Enter asks how to manage it.
     Loop(LoopRef),
+    /// Persist and apply a TUI color theme.
+    SetTheme(Theme),
+    /// Persist and apply a `:sine` avatar.
+    SetAvatar(Avatar),
     InfoOnly,
 }
 
@@ -258,6 +275,9 @@ impl MenuState {
             pending_learn: ctx.pending_learn,
             packages_path: ctx.packages_path.clone(),
             shomagent_members: ctx.shomagent_members.clone(),
+            theme_backup: None,
+            theme_preview: None,
+            avatar_backup: None,
         }
     }
 
@@ -300,6 +320,7 @@ impl MenuState {
         } else {
             self.focus
         };
+        let was_theme = self.category() == Category::Theme;
         match focus {
             Focus::Categories => {
                 if self.category_idx == 0 {
@@ -308,6 +329,7 @@ impl MenuState {
                     self.category_idx -= 1;
                 }
                 self.item_idx = 0;
+                self.on_category_change(was_theme);
             }
             Focus::Items => {
                 let n = self.items().len();
@@ -319,6 +341,7 @@ impl MenuState {
                 } else {
                     self.item_idx -= 1;
                 }
+                self.preview_theme_selection();
             }
         }
     }
@@ -332,10 +355,12 @@ impl MenuState {
         } else {
             self.focus
         };
+        let was_theme = self.category() == Category::Theme;
         match focus {
             Focus::Categories => {
                 self.category_idx = (self.category_idx + 1) % Category::ALL.len();
                 self.item_idx = 0;
+                self.on_category_change(was_theme);
             }
             Focus::Items => {
                 let n = self.items().len();
@@ -343,7 +368,16 @@ impl MenuState {
                     return;
                 }
                 self.item_idx = (self.item_idx + 1) % n;
+                self.preview_theme_selection();
             }
+        }
+    }
+
+    fn on_category_change(&mut self, was_theme: bool) {
+        if self.category() == Category::Theme {
+            self.enter_theme_category();
+        } else if was_theme {
+            self.restore_theme_backup();
         }
     }
 
@@ -387,6 +421,9 @@ impl MenuState {
         let n = self.items().len();
         if self.item_idx >= n {
             self.item_idx = n.saturating_sub(1);
+        }
+        if self.category() == Category::Theme {
+            self.enter_theme_category();
         }
     }
 
@@ -462,10 +499,52 @@ impl MenuState {
             return None;
         }
         if self.focus == Focus::Items {
+            if self.category() == Category::Theme {
+                self.restore_theme_backup();
+            }
             self.focus = Focus::Categories;
             return None;
         }
+        self.restore_theme_backup();
         Some(MenuAction::Dismiss)
+    }
+
+    fn restore_theme_backup(&mut self) {
+        if let Some(t) = self.theme_backup.take() {
+            chrome::set_active(t);
+        }
+        if let Some(a) = self.avatar_backup.take() {
+            chrome::set_active_avatar(a);
+        }
+        self.theme_preview = None;
+    }
+
+    /// Enter Theme category: remember color + avatar to restore on Esc; preview selection.
+    fn enter_theme_category(&mut self) {
+        if self.theme_backup.is_none() {
+            self.theme_backup = Some(chrome::active());
+        }
+        if self.avatar_backup.is_none() {
+            self.avatar_backup = Some(chrome::active_avatar());
+        }
+        self.preview_theme_selection();
+    }
+
+    fn preview_theme_selection(&mut self) {
+        if self.category() != Category::Theme {
+            return;
+        }
+        let items = self.items();
+        match items.get(self.item_idx).map(|i| &i.kind) {
+            Some(ItemKind::SetTheme(t)) => {
+                chrome::set_active(*t);
+                self.theme_preview = Some(*t);
+            }
+            Some(ItemKind::SetAvatar(a)) => {
+                chrome::set_active_avatar(*a);
+            }
+            _ => {}
+        }
     }
 
     /// Enter / confirm on the current selection.
@@ -495,6 +574,9 @@ impl MenuState {
         }
         if self.focus == Focus::Categories {
             self.focus = Focus::Items;
+            if self.category() == Category::Theme {
+                self.enter_theme_category();
+            }
             return None;
         }
         let items = self.items();
@@ -554,6 +636,17 @@ impl MenuState {
                 });
                 None
             }
+            ItemKind::SetTheme(t) => {
+                let _ = chrome::save_theme(*t);
+                self.theme_backup = None;
+                self.theme_preview = None;
+                Some(MenuAction::SetTheme(*t))
+            }
+            ItemKind::SetAvatar(a) => {
+                let _ = chrome::save_avatar(*a);
+                self.avatar_backup = None;
+                Some(MenuAction::SetAvatar(*a))
+            }
             ItemKind::InfoOnly => None,
         }
     }
@@ -595,7 +688,8 @@ impl MenuState {
     }
 
     /// Double-Esc while open: always quit the menu.
-    pub fn force_dismiss(&self) -> MenuAction {
+    pub fn force_dismiss(&mut self) -> MenuAction {
+        self.restore_theme_backup();
         MenuAction::Dismiss
     }
 
@@ -730,10 +824,11 @@ fn items_for(
             },
             Item {
                 label: "this menu".into(),
-                detail: ":menu / :m — Editor, Help, Learn, Modes, Packages, Scripts, …".into(),
+                detail: ":menu / :m — Editor, Help, Learn, Modes, …, Web, Theme".into(),
                 kind: ItemKind::InfoOnly,
             },
         ],
+        Category::Theme => theme_items(),
         Category::System => vec![
             Item {
                 label: ":sys".into(),
@@ -937,6 +1032,38 @@ fn web_items(history: &[crate::web_history::Visit]) -> Vec<Item> {
                 kind: ItemKind::OpenWeb(visit.url.clone()),
             });
         }
+    }
+    v
+}
+
+fn theme_items() -> Vec<Item> {
+    let active = chrome::active();
+    let avatar = chrome::active_avatar();
+    let mut v = vec![Item {
+        label: "── color ──".into(),
+        detail: "Chrome palette (borders, selection, accents)".into(),
+        kind: ItemKind::InfoOnly,
+    }];
+    for t in Theme::ALL {
+        let mark = if t == active { " ●" } else { "" };
+        v.push(Item {
+            label: format!("  {}{mark}", t.name()),
+            detail: t.detail().into(),
+            kind: ItemKind::SetTheme(t),
+        });
+    }
+    v.push(Item {
+        label: "── avatar ──".into(),
+        detail: ":sine left-top brand art (independent of color)".into(),
+        kind: ItemKind::InfoOnly,
+    });
+    for a in Avatar::ALL {
+        let mark = if a == avatar { " ●" } else { "" };
+        v.push(Item {
+            label: format!("  {}{mark}", a.label()),
+            detail: a.detail().into(),
+            kind: ItemKind::SetAvatar(a),
+        });
     }
     v
 }
@@ -1330,9 +1457,11 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                     && digit_category_index(d).is_some() =>
             {
                 esc_armed = false;
+                let was_theme = state.category() == Category::Theme;
                 state.category_idx = digit_category_index(d).unwrap();
                 state.item_idx = 0;
                 state.focus = Focus::Items;
+                state.on_category_change(was_theme);
             }
             _ => {
                 esc_armed = false;
@@ -1343,87 +1472,152 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
 
 fn draw(state: &MenuState) {
     let (rows, cols) = term::term_size();
-    let width = cols.clamp(40, 72).min(cols);
-    // Fit all categories (10) plus chrome; keep a usable item pane.
-    let height = 18usize.min(rows.saturating_sub(2)).max(14);
-    let left = ((cols.saturating_sub(width)) / 2).max(1);
-    let top = ((rows.saturating_sub(height)) / 2).max(1);
+    let cols = cols.clamp(40, term::MAX_COLS);
+    let rows = rows.clamp(12, term::MAX_ROWS);
+    let pal = chrome::palette();
+    let border = pal.border;
+    let title_st = pal.title;
+    let dim = pal.dim;
+    let text = pal.text;
+    let sel = pal.selection();
+    let bold = title_st;
 
-    let color = ui::color_enabled();
-    let bold = if color { "\x1b[1m" } else { "" };
-    let dim = if color { "\x1b[2m" } else { "" };
-    let inv = if color { "\x1b[7m" } else { "" };
-    let cyan = if color { "\x1b[36m" } else { "" };
-    let r = ui::reset();
-
-    let items = state.items();
-    let cat_w = 14usize;
-    let item_w = width.saturating_sub(cat_w + 3);
-
-    let mut buf = String::with_capacity(width * height * 4);
-    use std::fmt::Write as _;
-
-    let _ = write!(buf, "\x1b[2J\x1b[H");
-
-    // Title
-    let title = " Shomsky menu ";
-    let _ = write!(
-        buf,
-        "\x1b[{};{}H{cyan}┌{bold}{title}{r}{cyan}{line}┐{r}",
-        top,
-        left,
-        line = "─".repeat(width.saturating_sub(title.chars().count() + 1))
+    let mut canvas = Canvas::new(cols, rows);
+    let outer = Rect::new(0, 0, cols, rows);
+    canvas.frame(
+        outer,
+        "shomsky menu",
+        "↑↓ · Tab · Enter · Esc back · Esc Esc quit",
+        border,
+        title_st,
     );
 
-    let body_rows = height.saturating_sub(4);
-    for row in 0..body_rows {
-        let y = top + 1 + row;
-        let _ = write!(buf, "\x1b[{y};{left}H{cyan}│{r}");
+    let cat_w = 14usize.min(cols.saturating_sub(20)).max(10);
+    // Inner area: row 1..rows-2, col 1..cols-2
+    let inner = outer.inner();
+    // Detail row + detail rule take 2 rows at bottom of inner.
+    let list_h = inner.h.saturating_sub(2).max(4);
+    let show_avatar_preview = state.category() == Category::Theme && cols >= 80;
+    // Brand art is up to 48 cols; keep a usable item list beside it.
+    let preview_w = if show_avatar_preview {
+        48usize.min(inner.w.saturating_sub(cat_w + 14)).max(28)
+    } else {
+        0
+    };
+    let mid_w = inner.w.saturating_sub(cat_w + 1 + if preview_w > 0 { preview_w + 1 } else { 0 });
+    let div_x = inner.x + cat_w;
+    let preview_div_x = if preview_w > 0 {
+        Some(div_x + 1 + mid_w)
+    } else {
+        None
+    };
+    let list_rect = Rect::new(inner.x, inner.y, inner.w, list_h + 1); // include detail rule row
+    canvas.split_col(list_rect, div_x, border);
+    if let Some(px) = preview_div_x {
+        canvas.split_col(list_rect, px, border);
+    }
+    let detail_rule_y = inner.y + list_h;
+    canvas.split_row(
+        Rect::new(inner.x, inner.y, inner.w, list_h + 1),
+        detail_rule_y,
+        border,
+    );
 
-        // Category column
-        let cat_text = if row < Category::ALL.len() {
+    let items = state.items();
+    let item_w = mid_w.max(8);
+    let item_x = div_x + 1;
+    let body_rows = list_h;
+
+    for row in 0..body_rows {
+        let y = inner.y + row;
+        // Categories
+        if row < Category::ALL.len() {
             let c = Category::from_index(row);
             let selected = row == state.category_idx;
             let focused = state.focus == Focus::Categories && selected;
             let label = format!(" {}", c.label());
-            let padded = pad_visible(&label, cat_w);
-            if focused {
-                format!("{inv}{padded}{r}")
+            let style = if focused {
+                sel
             } else if selected {
-                format!("{bold}{padded}{r}")
+                bold
             } else {
-                format!("{dim}{padded}{r}")
-            }
+                dim
+            };
+            canvas.fill_row(inner.x, y, cat_w, &label, style);
         } else {
-            " ".repeat(cat_w)
-        };
-        buf.push_str(&cat_text);
-        let _ = write!(buf, "{cyan}│{r}");
+            canvas.fill_row(inner.x, y, cat_w, "", text);
+        }
 
-        // Item column. Scroll so a long Scripts list keeps the selection visible.
+        // Items
         let item_offset = state.item_idx.saturating_sub(body_rows.saturating_sub(1));
-        let item_text = if let Some(item) = items.get(row + item_offset) {
+        if let Some(item) = items.get(row + item_offset) {
             let selected = row + item_offset == state.item_idx;
             let focused = state.focus == Focus::Items && selected;
-            let label = format!(" {}", item.label);
-            let padded = pad_visible(&label, item_w);
-            if focused {
-                format!("{inv}{padded}{r}")
+            let mark = if focused { "▶" } else { " " };
+            let label = format!("{mark}{}", item.label);
+            let style = if focused {
+                sel
             } else if selected {
-                format!("{bold}{padded}{r}")
+                bold
             } else {
-                padded
-            }
+                text
+            };
+            canvas.fill_row(item_x, y, item_w, &label, style);
         } else {
-            " ".repeat(item_w)
-        };
-        buf.push_str(&item_text);
-        let _ = write!(buf, "{cyan}│{r}");
+            canvas.fill_row(item_x, y, item_w, "", text);
+        }
     }
 
-    // Detail + separator
-    let detail_y = top + 1 + body_rows;
-    let detail = if state.exit_confirm {
+    // Live avatar preview while browsing Theme (updates as ↑↓ moves).
+    if let Some(px) = preview_div_x {
+        let preview_x = px + 1;
+        let avatar = theme_preview_avatar(state, &items);
+        let art = crate::sine_tui::preview_avatar_lines(avatar);
+        let head = format!(" {}", avatar.label());
+        canvas.fill_row(preview_x, inner.y, preview_w, &head, title_st);
+        for (i, line) in art.iter().enumerate() {
+            let y = inner.y + 1 + i;
+            if y >= detail_rule_y {
+                break;
+            }
+            canvas.put_ansi_row(preview_x, y, preview_w, line, text);
+        }
+    }
+
+    let detail = menu_detail(state, &items);
+    let detail_y = detail_rule_y + 1;
+    if detail_y < rows.saturating_sub(1) {
+        canvas.fill_row(inner.x, detail_y, inner.w, &format!(" {detail}"), dim);
+    }
+
+    // Overlay confirms (floating box)
+    if state.in_overlay() {
+        let lines = [detail.as_str()];
+        canvas.overlay(
+            outer,
+            (inner.w * 3 / 4).max(24).min(inner.w),
+            5,
+            "confirm",
+            &lines,
+            pal.overlay_border,
+            title_st,
+            text,
+        );
+    }
+
+    canvas.flush();
+}
+
+/// Avatar shown in the Theme preview pane for the highlighted row.
+fn theme_preview_avatar(state: &MenuState, items: &[Item]) -> Avatar {
+    match items.get(state.item_idx).map(|i| &i.kind) {
+        Some(ItemKind::SetAvatar(a)) => *a,
+        _ => chrome::active_avatar(),
+    }
+}
+
+fn menu_detail(state: &MenuState, items: &[Item]) -> String {
+    if state.exit_confirm {
         "Exit the shell? [y]es / [n]o / Esc".to_string()
     } else if state.web_clear_confirm {
         "Clear visit history? [y]es / [n]o / Esc".to_string()
@@ -1467,48 +1661,7 @@ fn draw(state: &MenuState) {
             .get(state.item_idx)
             .map(|i| i.detail.clone())
             .unwrap_or_default()
-    };
-    let _ = write!(
-        buf,
-        "\x1b[{detail_y};{left}H{cyan}├{}┤{r}",
-        "─".repeat(width.saturating_sub(2))
-    );
-    let detail_y2 = detail_y + 1;
-    let _ = write!(
-        buf,
-        "\x1b[{detail_y2};{left}H{cyan}│{r}{dim} {}{r}{cyan}│{r}",
-        pad_visible(&detail, width.saturating_sub(3))
-    );
-
-    // Footer
-    let foot_y = detail_y2 + 1;
-    let footer = " ↑↓ · Tab · Enter · Esc back · Esc Esc quit ";
-    let _ = write!(
-        buf,
-        "\x1b[{foot_y};{left}H{cyan}└{dim}{}{r}{cyan}┘{r}",
-        pad_visible(footer, width.saturating_sub(2))
-    );
-
-    let mut out = io::stdout().lock();
-    let _ = out.write_all(buf.as_bytes());
-    let _ = out.flush();
-}
-
-fn pad_visible(s: &str, width: usize) -> String {
-    let mut out = String::new();
-    let mut n = 0;
-    for ch in s.chars() {
-        if n >= width {
-            break;
-        }
-        out.push(ch);
-        n += 1;
     }
-    while n < width {
-        out.push(' ');
-        n += 1;
-    }
-    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1619,16 +1772,76 @@ mod tests {
         assert_eq!(Category::Scripts.label(), "Scripts");
         assert!(Category::ALL.contains(&Category::Editor));
         assert_eq!(Category::Editor.label(), "Editor");
-        assert_eq!(Category::ALL.len(), 10);
-        let labels: Vec<_> = Category::ALL
+        assert_eq!(Category::ALL.len(), 11);
+        assert_eq!(Category::Theme.label(), "Theme");
+        // First ten stay alphabetical; Theme is appended (no digit jump).
+        let labels: Vec<_> = Category::ALL[..10]
             .iter()
             .map(|c| c.label().to_ascii_lowercase())
             .collect();
         let mut sorted = labels.clone();
         sorted.sort();
         assert_eq!(labels, sorted);
+        assert_eq!(Category::ALL[10], Category::Theme);
         assert_eq!(digit_category_index('1'), Some(0));
         assert_eq!(digit_category_index('0'), Some(9));
+        assert!(digit_category_index('0').unwrap() < Category::Theme.index());
+    }
+
+    #[test]
+    fn theme_preview_avatar_follows_highlight() {
+        chrome::set_active_avatar(Avatar::Navi);
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Theme.index();
+        s.focus = Focus::Items;
+        let items = s.items();
+        // Highlight laptop avatar row.
+        s.item_idx = items
+            .iter()
+            .position(|i| matches!(i.kind, ItemKind::SetAvatar(Avatar::Laptop)))
+            .unwrap();
+        assert_eq!(theme_preview_avatar(&s, &items), Avatar::Laptop);
+        // Color row keeps the active avatar for the preview pane.
+        s.item_idx = items
+            .iter()
+            .position(|i| matches!(i.kind, ItemKind::SetTheme(Theme::Coffee)))
+            .unwrap();
+        assert_eq!(theme_preview_avatar(&s, &items), Avatar::Navi);
+    }
+
+    #[test]
+    fn theme_category_lists_palettes_and_avatars() {
+        let _g = chrome::theme_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("shomsky-menu-theme-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("ENGRAM_USER_DIR", &dir);
+        std::env::remove_var("ENGRAM_THEME");
+        std::env::remove_var("ENGRAM_AVATAR");
+        chrome::set_active(Theme::Harbor);
+        chrome::set_active_avatar(Avatar::Navi);
+        let mut s = MenuState::new(&ctx());
+        s.category_idx = Category::Theme.index();
+        let labels: Vec<_> = s.items().iter().map(|i| i.label.clone()).collect();
+        assert!(labels.iter().any(|l| l.contains("color")));
+        assert!(labels.iter().any(|l| l.contains("avatar")));
+        assert!(labels.iter().any(|l| l.contains("harbor")));
+        assert!(labels.iter().any(|l| l.contains("navi")));
+        assert!(labels.iter().any(|l| l.contains("coffee mug")));
+        // color coffee is index 2 (0=── color ──, 1=harbor, 2=coffee)
+        s.item_idx = 2;
+        s.focus = Focus::Items;
+        assert_eq!(s.activate(), Some(MenuAction::SetTheme(Theme::Coffee)));
+        assert_eq!(chrome::active(), Theme::Coffee);
+        // avatar laptop: 0 color hdr, 1-4 colors, 5 avatar hdr, 6 navi, 7 coffee, 8 laptop
+        s.item_idx = 8;
+        assert_eq!(s.activate(), Some(MenuAction::SetAvatar(Avatar::Laptop)));
+        assert_eq!(chrome::active_avatar(), Avatar::Laptop);
+        // Color stayed coffee — avatar is independent.
+        assert_eq!(chrome::active(), Theme::Coffee);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("ENGRAM_USER_DIR");
     }
 
     #[test]

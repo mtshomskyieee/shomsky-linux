@@ -4,6 +4,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::chrome::{self, Canvas, Rect};
 use crate::quickyn_tui::FileBrowser;
 use crate::term::{self, RawGuard};
 use crate::ui;
@@ -176,31 +177,39 @@ pub fn run(cwd: PathBuf) -> Option<PathBuf> {
 
 fn draw(state: &PickerState) {
     let (rows, cols) = term::term_size();
-    let color = ui::color_enabled();
-    let bold = if color { "\x1b[1m" } else { "" };
-    let dim = if color { "\x1b[2m" } else { "" };
-    let inv = if color { "\x1b[7m" } else { "" };
-    let cyan = if color { "\x1b[36m" } else { "" };
-    let r = ui::reset();
+    let cols = cols.clamp(40, term::MAX_COLS);
+    let rows = rows.clamp(8, term::MAX_ROWS);
+    let pal = chrome::palette();
+    let border = pal.border;
+    let title_st = pal.title;
+    let dim = pal.dim;
+    let text = pal.text;
+    let sel = pal.selection();
+    let bold = title_st;
 
-    let mut buf = String::with_capacity(rows * cols);
-    use std::fmt::Write as _;
-    let _ = write!(buf, "\x1b[2J\x1b[H");
+    let mut canvas = Canvas::new(cols, rows);
+    let outer = Rect::new(0, 0, cols, rows);
+    let footer = match &state.mode {
+        Mode::NewName { .. } => "Enter create · Esc cancel",
+        Mode::Browse => "↑↓ · type filter · Enter open · Esc quit",
+    };
+    canvas.frame(outer, "edit — pick a file", footer, border, title_st);
+    let inner = outer.inner();
 
-    let title = " :edit — pick a file ";
-    let _ = write!(
-        buf,
-        "{cyan}┌{bold}{title}{r}{cyan}{}┐{r}\r\n",
-        "─".repeat(cols.saturating_sub(title.chars().count() + 2).min(60))
+    let dir = truncate(
+        &state.browser.dir.display().to_string(),
+        inner.w.saturating_sub(6),
     );
-    let dir = truncate(&state.browser.dir.display().to_string(), cols.saturating_sub(8));
-    let _ = write!(buf, "{dim} dir {r}{dir}\r\n");
+    canvas.fill_row(inner.x, inner.y, inner.w, &format!(" dir {dir}"), dim);
 
     match &state.mode {
         Mode::NewName { buf: name } => {
-            let _ = write!(
-                buf,
-                "\r\n{bold} New file name:{r} {name}_\r\n\r\n{dim} Enter create · Esc cancel{r}\r\n"
+            canvas.fill_row(
+                inner.x,
+                inner.y + 2,
+                inner.w,
+                &format!(" New file name: {name}_"),
+                bold,
             );
         }
         Mode::Browse => {
@@ -209,9 +218,10 @@ fn draw(state: &PickerState) {
             } else {
                 format!(" filter:{}", state.browser.filter)
             };
-            let _ = write!(buf, "{dim}↑↓ · type filter · Enter open · Esc quit{filter}{r}\r\n");
+            canvas.fill_row(inner.x, inner.y + 1, inner.w, &filter, dim);
 
-            let body = rows.saturating_sub(6).max(8);
+            let body = inner.h.saturating_sub(3).max(4);
+            let list_y0 = inner.y + 2;
             let offset = state.selected.saturating_sub(body.saturating_sub(1));
             for row in 0..body {
                 let idx = offset + row;
@@ -228,21 +238,20 @@ fn draw(state: &PickerState) {
                         format!("        {}", e.name)
                     }
                 };
-                let line = truncate(&label, cols.saturating_sub(2));
-                if idx == state.selected {
-                    let _ = write!(buf, "{inv}{line}{r}\r\n");
+                let line = truncate(&label, inner.w);
+                let style = if idx == state.selected {
+                    sel
                 } else if idx == 0 {
-                    let _ = write!(buf, "{bold}{line}{r}\r\n");
+                    bold
                 } else {
-                    let _ = write!(buf, "{line}\r\n");
-                }
+                    text
+                };
+                canvas.fill_row(inner.x, list_y0 + row, inner.w, &line, style);
             }
         }
     }
 
-    let mut out = io::stdout().lock();
-    let _ = out.write_all(buf.as_bytes());
-    let _ = out.flush();
+    canvas.flush();
 }
 
 fn truncate(s: &str, max: usize) -> String {

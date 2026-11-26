@@ -1085,11 +1085,11 @@ fn draw(state: &TuiState) {
     let page_w = lay.page_w;
     let chat_w = lay.chat_w;
 
-    let color = ui::color_enabled();
-    let reset = "\x1b[0m";
-    let cyan = if color { "\x1b[36m" } else { "" };
-    let dim = if color { "\x1b[2m" } else { "" };
-    let inv = if color { "\x1b[7m" } else { "" };
+    let ta = crate::chrome::theme_ansi();
+    let reset = ta.reset.as_str();
+    let cyan = ta.border.as_str();
+    let dim = ta.dim.as_str();
+    let inv = ta.selection.as_str();
 
     let page_h = state.view_h_for(body, Focus::Url);
     let chat_h = state.view_h_for(body, Focus::Chat);

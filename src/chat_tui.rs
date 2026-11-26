@@ -751,12 +751,12 @@ fn layout() -> Layout {
 fn draw(state: &TuiState) {
     let lay = layout();
 
-    let color = ui::color_enabled();
-    let r = "\x1b[0m";
-    let bold = if color { "\x1b[1m" } else { "" };
-    let dim = if color { "\x1b[2m" } else { "" };
-    let cyan = if color { "\x1b[36m" } else { "" };
-    let inv = if color { "\x1b[7m" } else { "" };
+    let ta = crate::chrome::theme_ansi();
+    let r = ta.reset.as_str();
+    let bold = ta.title.as_str();
+    let dim = ta.dim.as_str();
+    let cyan = ta.border.as_str();
+    let inv = ta.selection.as_str();
 
     let mut buf = String::with_capacity(lay.rows * lay.cols * 2);
     use std::fmt::Write as _;

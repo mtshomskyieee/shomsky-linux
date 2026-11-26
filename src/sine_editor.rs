@@ -9,6 +9,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::chrome::{self, Canvas, Rect};
 use crate::config::Config;
 use crate::llm::{ChatMessage, LlmClient};
 use crate::modes::Mode;
@@ -1416,8 +1417,8 @@ fn wrap_plain(text: &str, width: usize) -> Vec<String> {
 }
 
 fn file_body_rows(term_rows: usize) -> usize {
-    // title + footer
-    term_rows.saturating_sub(2).max(1)
+    // outer top + outer bottom + pane header
+    term_rows.saturating_sub(3).max(1)
 }
 
 /// Find the display row index for a 1-based source line and column.
@@ -1492,104 +1493,36 @@ fn draw(state: &EditorState) {
     let (term_rows, cols) = crate::term::term_size();
     let cols = cols.clamp(40, crate::term::MAX_COLS);
     let term_rows = term_rows.clamp(8, crate::term::MAX_ROWS);
-    let left_w = left_cols(cols);
-    // Column layout: [left_w file][1 divider][right_w chat]
-    let right_w = cols.saturating_sub(left_w + 1).max(16);
-    let div_x = left_w + 1;
-    let right_x = left_w + 2;
-    let body = file_body_rows(term_rows);
-    let color = ui::color_enabled();
+    let pal = chrome::palette();
+    let border = pal.border;
+    let title_st = pal.title;
+    let dim = pal.dim;
+    let text = pal.text;
+    let accent = pal.accent;
+    let rev = if ui::color_enabled() {
+        "\x1b[7m"
+    } else {
+        ""
+    };
     let reset = "\x1b[0m";
-    let cyan = if color { "\x1b[36m" } else { "" };
-    let dim = if color { "\x1b[2m" } else { "" };
-    let bold = if color { "\x1b[1m" } else { "" };
-    let rev = if color { "\x1b[7m" } else { "" };
 
-    let mut buf = String::with_capacity(term_rows * cols * 2);
-    use std::fmt::Write as _;
-    let _ = write!(buf, "\x1b[2J\x1b[H\x1b[?25l");
+    // Inner width / split (inside outer frame).
+    let inner_w = cols.saturating_sub(2).max(16);
+    let left_w = left_cols(inner_w);
+    let right_w = inner_w.saturating_sub(left_w + 1).max(12);
+    let div_x = 1 + left_w; // absolute canvas x of divider
+    let right_x = div_x + 1;
+    // Body rows between top border and bottom border.
+    let body = term_rows.saturating_sub(2).max(1);
 
-    // Title
+    let mut canvas = Canvas::new(cols, term_rows);
+    let outer = Rect::new(0, 0, cols, term_rows);
+
     let auto = if state.auto { "on" } else { "off" };
     let focus = match state.focus {
         EditorFocus::File => "file",
         EditorFocus::Chat => "chat",
     };
-    let prefix = " editor ── ";
-    let max_path = left_w
-        .saturating_sub(prefix.chars().count() + 1)
-        .max(8);
-    let path = split_frame::truncate_visible(&state.path.display().to_string(), max_path);
-    let title_left = format!("{prefix}{path} ");
-    let dash = left_w.saturating_sub(title_left.chars().count());
-    let left_title = format!(
-        "{cyan}{bold}{}{reset}{cyan}{}{reset}",
-        title_left,
-        "─".repeat(dash)
-    );
-    let ctx = state.context_label();
-    let right_head = format!(" chat ── {ctx} · auto:{auto} · focus:{focus} ");
-    let right_title = format!(
-        "{cyan}{bold}{}{reset}{cyan}{}{reset}",
-        right_head,
-        "─".repeat(right_w.saturating_sub(right_head.chars().count()))
-    );
-    let _ = write!(
-        buf,
-        "\x1b[1;1H{}",
-        split_frame::truncate_visible(&left_title, left_w.saturating_sub(1).max(1))
-    );
-    let _ = write!(buf, "\x1b[1;{div_x}H{cyan}┬{reset}");
-    let _ = write!(
-        buf,
-        "\x1b[1;{right_x}H{}\x1b[K",
-        split_frame::truncate_visible(&right_title, right_w.saturating_sub(1).max(1))
-    );
-
-    // File body with reverse-video cursor (soft-wrapped via wrap_numbered_lines)
-    let cursor_disp = display_row_for_cursor(&state.rows, state.buf.row + 1, state.buf.col);
-    let start = state.scroll;
-    for i in 0..body {
-        let y = i + 2;
-        let row_idx = start + i;
-        let line = state.rows.get(row_idx).cloned().unwrap_or_default();
-        let painted = if row_idx == cursor_disp && state.focus == EditorFocus::File {
-            paint_cursor_on_row(&line, state.buf.row + 1, state.buf.col, rev, reset)
-        } else {
-            line
-        };
-        let cell = split_frame::truncate_visible(&painted, left_w.saturating_sub(1).max(1));
-        let _ = write!(buf, "\x1b[{y};1H{cell}\x1b[K");
-        let _ = write!(buf, "\x1b[{y};{div_x}H{cyan}│{reset}");
-    }
-
-    // Chat body (leave last body row for composer); wrap to pane width
-    let chat_body = body.saturating_sub(1).max(1);
-    let chat_lines = render_chat_lines(state, right_w.saturating_sub(1).max(8));
-    let chat_max_scroll = chat_lines.len().saturating_sub(chat_body);
-    let chat_start = chat_max_scroll.saturating_sub(state.chat_scroll);
-    for i in 0..chat_body {
-        let y = i + 2;
-        let line = chat_lines
-            .get(chat_start + i)
-            .cloned()
-            .unwrap_or_default();
-        let cell = split_frame::truncate_visible(&line, right_w.saturating_sub(1).max(1));
-        let _ = write!(buf, "\x1b[{y};{right_x}H{cell}\x1b[K");
-    }
-
-    // Composer on last body row of the right pane
-    let composer_y = 1 + body;
-    let prompt = if state.focus == EditorFocus::Chat {
-        format!("> {}_", state.composer)
-    } else {
-        format!("> {}", state.composer)
-    };
-    let cell = split_frame::truncate_visible(&prompt, right_w.saturating_sub(1).max(1));
-    let _ = write!(buf, "\x1b[{composer_y};{div_x}H{cyan}│{reset}");
-    let _ = write!(buf, "\x1b[{composer_y};{right_x}H{cell}\x1b[K");
-
-    // Footer
     let pending = if state.pending.is_some() {
         " · Enter accept · ^K dismiss"
     } else {
@@ -1602,7 +1535,7 @@ fn draw(state: &EditorState) {
         format!("v{cur}/{n}")
     };
     let footer = format!(
-        "{dim} Esc · Tab · ^S send · ^A compact · auto:{auto} · ^K clear · ^Z undo ^Y redo · {ver} · L{} C{}{}{} · {}{reset}",
+        "Esc · Tab · ^S · ^A · auto:{auto} · ^K · ^Z/^Y · {ver} · L{} C{}{}{} · {}",
         state.buf.row + 1,
         state.buf.col + 1,
         pending,
@@ -1613,15 +1546,85 @@ fn draw(state: &EditorState) {
             &state.status
         }
     );
-    let _ = write!(
-        buf,
-        "\x1b[{term_rows};1H{}\x1b[K",
-        split_frame::truncate_visible(&footer, cols.saturating_sub(1).max(1))
-    );
+    canvas.frame(outer, "edit", &footer, border, title_st);
 
-    let mut out = io::stdout().lock();
-    let _ = out.write_all(buf.as_bytes());
-    let _ = out.flush();
+    let pane_rect = Rect::new(1, 1, inner_w, body);
+    canvas.split_col(pane_rect, div_x, border);
+
+    // Pane headers on first body row
+    let path = split_frame::truncate_visible(
+        &state.path.display().to_string(),
+        left_w.saturating_sub(10).max(4),
+    );
+    let left_head = format!(" editor ── {path} ");
+    let mut left_line = left_head.clone();
+    while left_line.chars().count() < left_w {
+        left_line.push('─');
+    }
+    canvas.fill_row(1, 1, left_w, &left_line, title_st);
+
+    let ctx = state.context_label();
+    let right_head = format!(" chat ── {ctx} · auto:{auto} · focus:{focus} ");
+    let mut right_line = right_head.clone();
+    while right_line.chars().count() < right_w {
+        right_line.push('─');
+    }
+    canvas.fill_row(right_x, 1, right_w, &right_line, title_st);
+
+    // File body (below header; above last row reserved for nothing on left)
+    let file_h = body.saturating_sub(1).max(1);
+    let cursor_disp = display_row_for_cursor(&state.rows, state.buf.row + 1, state.buf.col);
+    let start = state.scroll;
+    for i in 0..file_h {
+        let y = 2 + i;
+        if y >= term_rows.saturating_sub(1) {
+            break;
+        }
+        let row_idx = start + i;
+        let line = state.rows.get(row_idx).cloned().unwrap_or_default();
+        let painted = if row_idx == cursor_disp && state.focus == EditorFocus::File {
+            paint_cursor_on_row(&line, state.buf.row + 1, state.buf.col, rev, reset)
+        } else {
+            line
+        };
+        canvas.put_ansi_row(1, y, left_w, &painted, text);
+    }
+
+    // Chat body (leave last body row for composer); rule above composer
+    let chat_body = body.saturating_sub(2).max(1);
+    let composer_rule_y = 1 + chat_body + 1; // header + chat lines
+    let composer_y = composer_rule_y;
+    // Horizontal rule above composer across right pane only
+    if composer_y > 1 && composer_y < term_rows.saturating_sub(1) {
+        canvas.split_row(
+            Rect::new(right_x, 1, right_w, body),
+            composer_y.saturating_sub(1).max(2),
+            border,
+        );
+    }
+
+    let chat_lines = render_chat_lines(state, right_w.max(8));
+    let chat_max_scroll = chat_lines.len().saturating_sub(chat_body);
+    let chat_start = chat_max_scroll.saturating_sub(state.chat_scroll);
+    for i in 0..chat_body {
+        let y = 2 + i;
+        let line = chat_lines
+            .get(chat_start + i)
+            .cloned()
+            .unwrap_or_default();
+        canvas.fill_row(right_x, y, right_w, &line, text);
+    }
+
+    let prompt = if state.focus == EditorFocus::Chat {
+        format!("> {}_", state.composer)
+    } else {
+        format!("> {}", state.composer)
+    };
+    if composer_y < term_rows.saturating_sub(1) {
+        canvas.fill_row(right_x, composer_y, right_w, &prompt, accent);
+    }
+
+    canvas.flush();
 }
 
 fn paint_cursor_on_row(
