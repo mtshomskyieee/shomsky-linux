@@ -93,37 +93,58 @@ impl PickerState {
     }
 }
 
+/// Raw + alt screen; always leaves the alt buffer on Drop.
+struct PickerTtyGuard {
+    _raw: RawGuard,
+}
+
+impl PickerTtyGuard {
+    fn enter() -> Option<Self> {
+        let raw = RawGuard::enter();
+        if !raw.active() {
+            return None;
+        }
+        {
+            let mut out = io::stdout().lock();
+            let _ = write!(out, "\x1b[?1049h\x1b[?25h");
+            let _ = out.flush();
+        }
+        Some(Self { _raw: raw })
+    }
+}
+
+impl Drop for PickerTtyGuard {
+    fn drop(&mut self) {
+        let mut out = io::stdout().lock();
+        let _ = write!(out, "\x1b[?1049l\x1b[?25h\x1b[0m");
+        let _ = out.flush();
+    }
+}
+
 /// Returns a chosen path, or `None` if the user cancelled.
 pub fn run(cwd: PathBuf) -> Option<PathBuf> {
     if !(io::stdout().is_terminal() && ui::color_enabled()) {
         println!("edit: interactive picker only — use :edit <path>");
         return None;
     }
-    let guard = RawGuard::enter();
-    if !guard.active() {
+    let Some(_guard) = PickerTtyGuard::enter() else {
         println!("edit: could not enter raw mode — try :edit from a real TTY");
         return None;
-    }
-
-    {
-        let mut out = io::stdout().lock();
-        let _ = write!(out, "\x1b[?1049h\x1b[?25h");
-        let _ = out.flush();
-    }
+    };
 
     let mut state = PickerState::new(cwd);
-    let chosen = loop {
+    loop {
         draw(&state);
         match poll_key(Duration::from_millis(50)) {
             Some(Key::Esc) | Some(Key::CtrlC) => match &state.mode {
                 Mode::NewName { .. } => {
                     state.mode = Mode::Browse;
                 }
-                Mode::Browse => break None,
+                Mode::Browse => return None,
             },
             Some(Key::Enter) => {
                 if let Some(path) = state.activate() {
-                    break Some(path);
+                    return Some(path);
                 }
             }
             Some(Key::Up) if matches!(state.mode, Mode::Browse) => state.move_up(),
@@ -150,15 +171,7 @@ pub fn run(cwd: PathBuf) -> Option<PathBuf> {
             },
             _ => {}
         }
-    };
-
-    {
-        let mut out = io::stdout().lock();
-        let _ = write!(out, "\x1b[?1049l\x1b[?25h\x1b[0m");
-        let _ = out.flush();
     }
-    drop(guard);
-    chosen
 }
 
 fn draw(state: &PickerState) {
@@ -283,16 +296,23 @@ fn decode_key(first: u8, stdin: &mut impl Read) -> Key {
         b'\r' | b'\n' => Key::Enter,
         0x08 | 0x7f => Key::Backspace,
         0x1b => {
+            // Settle so CSI tails of arrow keys are not mistaken for bare Esc
+            // (same pattern as chat_tui / split_frame).
+            std::thread::sleep(Duration::from_millis(20));
             let mut rest = [0u8; 8];
             let n = stdin.read(&mut rest).unwrap_or(0);
-            if n >= 2 && rest[0] == b'[' {
-                match rest[1] {
-                    b'A' => return Key::Up,
-                    b'B' => return Key::Down,
-                    _ => {}
-                }
+            if n == 0 {
+                return Key::Esc;
             }
-            if n == 0 || rest[0] == 0x1b {
+            if rest[0] == b'[' && n >= 2 {
+                return match rest[1] {
+                    b'A' => Key::Up,
+                    b'B' => Key::Down,
+                    b'C' | b'D' => Key::Other,
+                    _ => Key::Other,
+                };
+            }
+            if rest[0] == 0x1b {
                 return Key::Esc;
             }
             Key::Other

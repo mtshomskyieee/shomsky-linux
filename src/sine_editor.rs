@@ -388,7 +388,9 @@ fn extract_json_object(raw: &str) -> Option<&str> {
     }
 }
 
-/// Escape raw newlines/tabs that small models leave inside JSON string literals.
+/// Escape raw newlines/tabs that small models leave inside JSON string literals,
+/// then drop trailing commas — but never touch commas that live inside strings
+/// (e.g. code containing `",}"`).
 fn sanitize_json_strings(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 16);
     let mut in_string = false;
@@ -424,12 +426,41 @@ fn sanitize_json_strings(input: &str) -> String {
             }
         }
     }
-    // Trailing commas before } or ]
+    // Trailing commas before } or ], tracking string state so code like `",}"`
+    // inside a JSON string value is left alone.
     let mut cleaned = String::with_capacity(out.len());
     let chars: Vec<char> = out.chars().collect();
     let mut i = 0;
+    let mut in_str = false;
+    let mut esc = false;
     while i < chars.len() {
-        if chars[i] == ',' {
+        let ch = chars[i];
+        if esc {
+            cleaned.push(ch);
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if ch == '\\' {
+                cleaned.push(ch);
+                esc = true;
+            } else if ch == '"' {
+                cleaned.push(ch);
+                in_str = false;
+            } else {
+                cleaned.push(ch);
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '"' {
+            cleaned.push(ch);
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if ch == ',' {
             let mut j = i + 1;
             while j < chars.len() && chars[j].is_whitespace() {
                 j += 1;
@@ -439,7 +470,7 @@ fn sanitize_json_strings(input: &str) -> String {
                 continue;
             }
         }
-        cleaned.push(chars[i]);
+        cleaned.push(ch);
         i += 1;
     }
     cleaned
@@ -627,6 +658,30 @@ fn chat_say_for_model(text: &str) -> &str {
 /// Models often stuff a whole-file rewrite into `replace` on line 1. That path
 /// inserts extra lines without removing the rest → duplicated buffer. Coerce
 /// those (and prefer `content` over `edits`) before apply.
+/// When the model only saw a truncated window, drop whole-file `content` so
+/// unseen lines cannot be wiped. Keep line `edits` (they target known lines).
+fn guard_truncated_file_content(mut reply: EditorReply, truncated: bool) -> EditorReply {
+    if !truncated {
+        return reply;
+    }
+    if reply
+        .content
+        .as_ref()
+        .map(|c| !c.trim().is_empty())
+        .unwrap_or(false)
+    {
+        reply.content = None;
+        let note = "(refused whole-file rewrite: only a slice of the file was in the prompt — use line edits)";
+        if reply.say.trim().is_empty() {
+            reply.say = note.into();
+        } else if !reply.say.contains("refused whole-file") {
+            reply.say.push('\n');
+            reply.say.push_str(note);
+        }
+    }
+    reply
+}
+
 fn coerce_reply_for_apply(mut reply: EditorReply, line_count: usize) -> EditorReply {
     if reply
         .content
@@ -667,7 +722,7 @@ fn build_editor_user_payload(
     user_msg: Option<&str>,
     auto_suggest: bool,
 ) -> String {
-    let file_part = state.numbered_for_prompt();
+    let (file_part, truncated) = state.numbered_for_prompt();
     let mode = if state.auto { "auto" } else { "manual" };
 
     // History: drop the trailing user turn when it is this send's ask.
@@ -723,10 +778,18 @@ path: {}\ncursor_line: {}\nmode: {}\n\nfile:\n{file_part}\n",
     } else if auto_suggest {
         user.push_str("\noperator: (quiet — offer one small suggestion if useful)\n");
     }
-    user.push_str(
-        "\nReply with ONE JSON object. For feature/fix asks, put the COMPLETE new file in \
+    if truncated {
+        user.push_str(
+            "\nIMPORTANT: The file above is a TRUNCATED window (not the whole file). \
+Do NOT use \"content\" (a whole-file rewrite would destroy unseen lines). \
+Use only \"edits\" with exact line numbers from the window shown.\n",
+        );
+    } else {
+        user.push_str(
+            "\nReply with ONE JSON object. For feature/fix asks, put the COMPLETE new file in \
 \"content\" (no duplicates, no leftover stubs).\n",
-    );
+        );
+    }
     user
 }
 
@@ -815,17 +878,35 @@ impl VersionRing {
     }
 }
 
+/// Stable, collision-resistant directory name for a path.
+/// Non-safe bytes become `_HH` so `/foo/bar` and `/foo_bar` never collide.
 fn encode_path_key(path: &Path) -> String {
-    path.to_string_lossy()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    let raw = path.to_string_lossy();
+    let mut out = String::with_capacity(raw.len() * 2);
+    for b in raw.as_bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' => out.push(*b as char),
+            // Underscore is escaped so it cannot collide with our `_HH` encoding.
+            b'_' => out.push_str("_5f"),
+            _ => out.push_str(&format!("_{b:02x}")),
+        }
+    }
+    // Keep filesystem names bounded; fold a long key into a stable FNV suffix.
+    const MAX: usize = 160;
+    if out.len() <= MAX {
+        return out;
+    }
+    let digest = fnv1a64(out.as_bytes());
+    format!("{}_{digest:016x}", &out[..MAX.saturating_sub(17)])
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn edit_meta_dir(sine_dir: &Path, path: &Path) -> PathBuf {
@@ -884,6 +965,9 @@ enum EditorJobResult {
     Reply {
         reply: Result<EditorReply>,
         as_suggest: bool,
+        /// Buffer generation when the request was snapped; if the live buffer
+        /// moved on, apply becomes a pending suggestion instead of a rewrite.
+        buf_epoch: u64,
     },
     Compactify(Result<String>),
 }
@@ -899,6 +983,9 @@ struct EditorState {
     allow_persist: bool,
     meta_dir: PathBuf,
     dirty: bool,
+    /// Bumped on every buffer mutation so in-flight model replies can detect
+    /// that the operator typed while the job was running.
+    buf_epoch: u64,
     last_edit: Instant,
     scroll: usize,
     wrap_cols: usize,
@@ -950,6 +1037,7 @@ impl EditorState {
             allow_persist,
             meta_dir,
             dirty: false,
+            buf_epoch: 0,
             last_edit: Instant::now(),
             scroll: 0,
             wrap_cols: left_w,
@@ -968,8 +1056,13 @@ impl EditorState {
         self.suggest_done = false;
     }
 
+    fn bump_epoch(&mut self) {
+        self.buf_epoch = self.buf_epoch.wrapping_add(1);
+    }
+
     fn mark_edited(&mut self) {
         self.dirty = true;
+        self.bump_epoch();
         self.last_edit = Instant::now();
         self.note_activity();
         self.relayout();
@@ -1059,6 +1152,7 @@ impl EditorState {
         if let Some(text) = self.ring.undo().map(str::to_string) {
             self.buf = EditorBuffer::from_text(&text);
             self.buf.clamp_cursor();
+            self.bump_epoch();
             self.dirty = true;
             self.relayout();
             if let Err(e) = self.write_disk_only(&text) {
@@ -1078,6 +1172,7 @@ impl EditorState {
         if let Some(text) = self.ring.redo().map(str::to_string) {
             self.buf = EditorBuffer::from_text(&text);
             self.buf.clamp_cursor();
+            self.bump_epoch();
             self.dirty = true;
             self.relayout();
             if let Err(e) = self.write_disk_only(&text) {
@@ -1215,15 +1310,17 @@ impl EditorState {
         }
     }
 
-    fn numbered_for_prompt(&self) -> String {
+    /// Numbered file text for the model, plus whether it is a truncated window.
+    /// Truncated prompts must not accept whole-file `content` rewrites.
+    fn numbered_for_prompt(&self) -> (String, bool) {
         let full = self.buf.to_text();
         if full.chars().count() <= FILE_PROMPT_CHARS {
-            return number_plain(&full);
+            return (number_plain(&full), false);
         }
         let start = self.buf.row.saturating_sub(40);
         let end = (self.buf.row + 40).min(self.buf.lines.len().saturating_sub(1));
         let mut out = format!(
-            "(showing lines {}-{} of {})\n",
+            "(showing lines {}-{} of {} — TRUNCATED; do not rewrite whole file)\n",
             start + 1,
             end + 1,
             self.buf.lines.len()
@@ -1231,7 +1328,7 @@ impl EditorState {
         for (i, line) in self.buf.lines[start..=end].iter().enumerate() {
             out.push_str(&format!("{:>4}│ {}\n", start + i + 1, line));
         }
-        out
+        (out, true)
     }
 
     /// Working-memory estimate for the editor (chars/4), same window as `:chat`.
@@ -1249,7 +1346,7 @@ impl EditorState {
             n += role.chars().count() + turn.text.chars().count();
         }
         n += self.path.display().to_string().chars().count();
-        n += self.numbered_for_prompt().chars().count();
+        n += self.numbered_for_prompt().0.chars().count();
         if let Some(p) = &self.pending {
             n += p.say.chars().count();
             if let Some(c) = &p.content {
@@ -1683,6 +1780,7 @@ async fn call_editor_model(
     } else {
         EDITOR_SYSTEM_MANUAL
     };
+    let truncated = state.numbered_for_prompt().1;
     let user = build_editor_user_payload(state, user_msg, auto_suggest);
     let messages = vec![
         ChatMessage::system(system),
@@ -1695,10 +1793,11 @@ async fn call_editor_model(
         .await
         .context("editor model call")?;
     let line_count = state.buf.lines.len();
+    let finish = |reply: EditorReply| {
+        coerce_reply_for_apply(guard_truncated_file_content(reply, truncated), line_count)
+    };
     match parse_editor_reply(&raw) {
-        Ok(reply) if !reply_needs_repair(&reply) => {
-            Ok(coerce_reply_for_apply(reply, line_count))
-        }
+        Ok(reply) if !reply_needs_repair(&reply) => Ok(finish(reply)),
         first => {
             // Repair on parse failure or schema-parrot / bad ops.
             let mut repair = messages;
@@ -1715,9 +1814,9 @@ async fn call_editor_model(
                 .await
                 .context("editor repair call")?;
             match parse_editor_reply(&fixed) {
-                Ok(reply) => Ok(coerce_reply_for_apply(reply, line_count)),
+                Ok(reply) => Ok(finish(reply)),
                 Err(e2) => match first {
-                    Ok(bad) => Ok(coerce_reply_for_apply(bad, line_count)),
+                    Ok(bad) => Ok(finish(bad)),
                     Err(e1) => Err(anyhow!("{e1:#}; repair also failed: {e2:#}")),
                 },
             }
@@ -1748,17 +1847,29 @@ async fn call_compactify(cfg: &Config, chat: &[ChatTurn]) -> Result<String> {
     Ok(text)
 }
 
-fn handle_model_reply(state: &mut EditorState, reply: EditorReply, as_suggestion: bool) {
+fn handle_model_reply(
+    state: &mut EditorState,
+    reply: EditorReply,
+    as_suggestion: bool,
+    buf_epoch: u64,
+) {
+    // Operator typed (or undid) while the model was thinking — never clobber.
+    let stale = buf_epoch != state.buf_epoch;
+    let as_suggestion = as_suggestion || (stale && reply.has_changes());
+
     if as_suggestion {
         if !reply.has_changes() && reply.say.trim().is_empty() {
             state.status = "no suggestion".into();
             return;
         }
-        let say = if reply.say.is_empty() {
+        let mut say = if reply.say.is_empty() {
             "suggestion ready".into()
         } else {
             reply.say.clone()
         };
+        if stale && reply.has_changes() {
+            say.push_str("\n(buffer changed while thinking — Enter to accept, ^K dismiss)");
+        }
         state.pending = Some(PendingProposal {
             say: say.clone(),
             content: reply.content.clone(),
@@ -1828,15 +1939,15 @@ fn ensure_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Run the editor overlay until Esc. Returns Ok(()) on normal close.
-///
-/// When `owns_tty` is true (standalone `:edit`), enter raw mode and the alt
-/// screen. When false (opened from SINE with `e`), the parent already holds
-/// those — only paint and read keys.
-async fn run_inner(cfg: &Config, path: &Path, owns_tty: bool) -> Result<()> {
-    let _guard = if owns_tty {
-        let guard = RawGuard::enter();
-        if !guard.active() {
+/// Owns raw mode + alt screen; always leaves the alt buffer on Drop (even panic).
+struct EditorTtyGuard {
+    _raw: RawGuard,
+}
+
+impl EditorTtyGuard {
+    fn enter() -> Result<Self> {
+        let raw = RawGuard::enter();
+        if !raw.active() {
             return Err(anyhow!(
                 "could not enter raw mode — try :edit from a real TTY"
             ));
@@ -1847,20 +1958,32 @@ async fn run_inner(cfg: &Config, path: &Path, owns_tty: bool) -> Result<()> {
             let _ = out.flush();
         }
         split_frame::set_bracketed_paste(true);
-        Some(guard)
-    } else {
-        None
-    };
+        Ok(Self { _raw: raw })
+    }
+}
 
-    let result = run_loop(cfg, path).await;
-
-    if owns_tty {
+impl Drop for EditorTtyGuard {
+    fn drop(&mut self) {
         split_frame::set_bracketed_paste(false);
         let mut out = io::stdout().lock();
         let _ = write!(out, "\x1b[?1049l\x1b[?25h\x1b[0m");
         let _ = out.flush();
+        // RawGuard restores stty after this Drop body when `_raw` is dropped.
     }
-    result
+}
+
+/// Run the editor overlay until Esc. Returns Ok(()) on normal close.
+///
+/// When `owns_tty` is true (standalone `:edit`), enter raw mode and the alt
+/// screen. When false (opened from SINE with `e`), the parent already holds
+/// those — only paint and read keys.
+async fn run_inner(cfg: &Config, path: &Path, owns_tty: bool) -> Result<()> {
+    let _guard = if owns_tty {
+        Some(EditorTtyGuard::enter()?)
+    } else {
+        None
+    };
+    run_loop(cfg, path).await
 }
 
 async fn run_loop(cfg: &Config, path: &Path) -> Result<()> {
@@ -1880,8 +2003,12 @@ async fn run_loop(cfg: &Config, path: &Path) -> Result<()> {
             if handle.is_finished() {
                 state.busy = false;
                 match handle.await {
-                    Ok(EditorJobResult::Reply { reply: Ok(reply), as_suggest }) => {
-                        handle_model_reply(&mut state, reply, as_suggest);
+                    Ok(EditorJobResult::Reply {
+                        reply: Ok(reply),
+                        as_suggest,
+                        buf_epoch,
+                    }) => {
+                        handle_model_reply(&mut state, reply, as_suggest, buf_epoch);
                         state.note_activity();
                     }
                     Ok(EditorJobResult::Reply { reply: Err(e), .. }) => {
@@ -1926,6 +2053,7 @@ async fn run_loop(cfg: &Config, path: &Path) -> Result<()> {
             let snap_row = state.buf.row;
             let snap_text = state.buf.to_text();
             let snap_chat = state.chat.clone();
+            let snap_epoch = state.buf_epoch;
             let handle = tokio::spawn(async move {
                 let mut pseudo = EditorState {
                     path: snap_path,
@@ -1938,6 +2066,7 @@ async fn run_loop(cfg: &Config, path: &Path) -> Result<()> {
                     allow_persist: false,
                     meta_dir: PathBuf::new(),
                     dirty: false,
+                    buf_epoch: snap_epoch,
                     last_edit: Instant::now(),
                     scroll: 0,
                     wrap_cols: 40,
@@ -1953,6 +2082,7 @@ async fn run_loop(cfg: &Config, path: &Path) -> Result<()> {
                 EditorJobResult::Reply {
                     reply: call_editor_model(&cfg_c, &pseudo, None, true).await,
                     as_suggest: true,
+                    buf_epoch: snap_epoch,
                 }
             });
             pending_job = Some(handle);
@@ -2192,6 +2322,7 @@ async fn send_composer(
     let snap_row = state.buf.row;
     let snap_text = state.buf.to_text();
     let snap_chat = state.chat.clone();
+    let snap_epoch = state.buf_epoch;
     let user_msg = text.clone();
     let handle = tokio::spawn(async move {
         let mut pseudo = EditorState {
@@ -2205,6 +2336,7 @@ async fn send_composer(
             allow_persist: false,
             meta_dir: PathBuf::new(),
             dirty: false,
+            buf_epoch: snap_epoch,
             last_edit: Instant::now(),
             scroll: 0,
             wrap_cols: 40,
@@ -2220,6 +2352,7 @@ async fn send_composer(
         EditorJobResult::Reply {
             reply: call_editor_model(&cfg_c, &pseudo, Some(&user_msg), as_suggest).await,
             as_suggest,
+            buf_epoch: snap_epoch,
         }
     });
     *pending_job = Some(handle);
@@ -2630,6 +2763,145 @@ fib(10)
         );
         assert_eq!(reply.content.as_deref(), Some("only\n"));
         assert!(reply.edits.is_empty());
+    }
+
+    #[test]
+    fn sanitize_keeps_commas_inside_strings() {
+        // Trailing-comma strip must not eat `,}` that lives inside a string value.
+        let messy = "{\"say\":\"x\",\"content\":\"code with ,} inside\",\"edits\":[]}";
+        let parsed = parse_editor_reply(messy).unwrap();
+        assert_eq!(parsed.content.as_deref(), Some("code with ,} inside"));
+
+        // Still drops a real trailing comma after a string value.
+        let trailing = "{\"say\":\"ok\",\"content\":\"a\",}";
+        let parsed2 = parse_editor_reply(trailing).unwrap();
+        assert_eq!(parsed2.content.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn encode_path_key_avoids_slash_underscore_collision() {
+        let a = encode_path_key(Path::new("/foo/bar"));
+        let b = encode_path_key(Path::new("/foo_bar"));
+        assert_ne!(a, b, "keys collided: {a}");
+        assert!(a.contains("_2f") || a.contains("2f"), "{a}");
+        assert!(b.contains("_5f") || b.contains("foo"), "{b}");
+    }
+
+    #[test]
+    fn stale_buf_epoch_forces_suggestion() {
+        let dir = std::env::temp_dir().join(format!(
+            "sine-ed-epoch-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.py");
+        std::fs::write(&path, "old\n").unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ENGRAM_SINE_DIR", dir.join(".sine"));
+        let mut state = EditorState::open(&path, true).unwrap();
+        let epoch_at_send = state.buf_epoch;
+        state.buf.insert_char('X');
+        state.mark_edited();
+        assert_ne!(state.buf_epoch, epoch_at_send);
+
+        handle_model_reply(
+            &mut state,
+            EditorReply {
+                say: "rewrote".into(),
+                content: Some("new\n".into()),
+                edits: vec![],
+            },
+            false, // would have applied immediately
+            epoch_at_send,
+        );
+        assert!(state.pending.is_some());
+        assert_eq!(state.buf.lines[0], "Xold"); // not clobbered
+        assert!(state.status.contains("pending"));
+
+        std::env::remove_var("ENGRAM_SINE_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn truncated_prompt_drops_whole_file_content() {
+        let reply = guard_truncated_file_content(
+            EditorReply {
+                say: "rewrote".into(),
+                content: Some("tiny\n".into()),
+                edits: vec![LineEdit {
+                    line: 5,
+                    op: "replace".into(),
+                    text: Some("kept".into()),
+                }],
+            },
+            true,
+        );
+        assert!(reply.content.is_none());
+        assert_eq!(reply.edits.len(), 1);
+        assert!(reply.say.contains("refused whole-file"));
+
+        let kept = guard_truncated_file_content(
+            EditorReply {
+                say: "ok".into(),
+                content: Some("full file\n".into()),
+                edits: vec![],
+            },
+            false,
+        );
+        assert_eq!(kept.content.as_deref(), Some("full file\n"));
+    }
+
+    #[test]
+    fn large_file_prompt_is_truncated_and_forbids_content() {
+        let dir = std::env::temp_dir().join(format!(
+            "sine-ed-trunc-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.txt");
+        // Exceed FILE_PROMPT_CHARS with many short lines.
+        let mut body = String::new();
+        for i in 0..2_000 {
+            body.push_str(&format!("line-{i}-xxxxxxxx\n"));
+        }
+        assert!(body.chars().count() > FILE_PROMPT_CHARS);
+        std::fs::write(&path, &body).unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ENGRAM_SINE_DIR", dir.join(".sine"));
+        let mut state = EditorState::open(&path, true).unwrap();
+        state.buf.row = 100;
+        let (part, truncated) = state.numbered_for_prompt();
+        assert!(truncated);
+        assert!(part.contains("TRUNCATED"));
+        assert!(!part.contains("line-0-"));
+        assert!(part.contains("line-100-"));
+
+        let payload = build_editor_user_payload(&state, Some("fix tip"), false);
+        assert!(payload.contains("Do NOT use \"content\""));
+        assert!(!payload.contains("COMPLETE new file in \"content\""));
+
+        // Applying a guarded reply must not shrink the buffer.
+        let before = state.buf.lines.len();
+        let guarded = guard_truncated_file_content(
+            EditorReply {
+                say: "oops".into(),
+                content: Some("only tip\n".into()),
+                edits: vec![],
+            },
+            true,
+        );
+        let note = state.apply_reply_changes(&guarded);
+        assert!(!note.contains("rewrote"));
+        assert_eq!(state.buf.lines.len(), before);
+
+        std::env::remove_var("ENGRAM_SINE_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
