@@ -167,6 +167,15 @@ pub fn looks_like_shell_command(line: &str) -> bool {
         "shomsky",
         "quickyn",
         "shomloop",
+        // Interpreters / package managers commonly installed via shominstall.
+        "python",
+        "python3",
+        "pip",
+        "pip3",
+        "node",
+        "npm",
+        "ruby",
+        "perl",
     ];
     CMDS.contains(&cmd)
 }
@@ -195,6 +204,8 @@ mod tests {
         assert!(looks_like_shell_command("cat file.txt"));
         assert!(looks_like_shell_command("git status"));
         assert!(looks_like_shell_command("git add ."));
+        assert!(looks_like_shell_command("python fun.py"));
+        assert!(looks_like_shell_command("python3 fun.py"));
         assert!(!looks_like_shell_command("what is in /etc?"));
         assert!(!looks_like_shell_command("please list the files"));
     }

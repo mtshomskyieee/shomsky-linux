@@ -16,7 +16,7 @@ use shomagent::protocol::{Request, Response};
 use crate::config::Config;
 use crate::llm::{ChatMessage, LlmClient};
 use crate::modes::Mode;
-use crate::split_frame::{self, ColumnFocus, Key, Slot, SplitFrame};
+use crate::split_frame::{self, Key, PaneFocus, Slot, SplitFrame};
 use crate::term::RawGuard;
 use crate::ui;
 
@@ -99,6 +99,10 @@ also say \"right now\" / \"test\": you MUST include (1) write job script, (2) ch
 - Prefer a durable script path under /engram/user/ (survives for cron); avoid \
 relying on /tmp for the scheduled job body.
 - For yes/no use verb quickyn (not shell).
+- Local file edits: prefer a heredoc write (`cat > path <<'EOF'…EOF`), not \
+grep -v rewrites or shomagent ask on a file path.
+- Inside JSON string values, escape every double-quote as \\\" (shell may still \
+use single quotes).
 - Output ONLY one JSON object. No markdown fences. Prefer few steps.";
 
 /// Max completion tokens for a SINE plan. 512 truncates multi-step web plans
@@ -225,8 +229,12 @@ pub fn estimate_sine_tokens(session: &SineSession) -> usize {
 
 pub fn parse_plan_json(raw: &str) -> Result<SinePlan> {
     let json_str = extract_json_object(raw).unwrap_or(raw).trim();
-    let mut plan: SinePlan = serde_json::from_str(json_str)
-        .with_context(|| format!("deserialize sine plan; raw={raw}"))?;
+    let mut plan = deserialize_sine_plan(json_str).with_context(|| {
+        format!(
+            "deserialize sine plan; raw={}",
+            truncate_for_err(raw, 240)
+        )
+    })?;
     if plan.steps.is_empty() && plan.summary.trim().is_empty() {
         bail!("empty plan");
     }
@@ -236,6 +244,212 @@ pub fn parse_plan_json(raw: &str) -> Result<SinePlan> {
     }
     plan.steps = steps;
     Ok(plan)
+}
+
+fn truncate_for_err(s: &str, max: usize) -> String {
+    let t = s.trim();
+    let count = t.chars().count();
+    if count <= max {
+        return t.to_string();
+    }
+    format!("{}…", t.chars().take(max).collect::<String>())
+}
+
+fn deserialize_sine_plan(json_str: &str) -> Result<SinePlan> {
+    match serde_json::from_str::<SinePlan>(json_str) {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            // Models emit shell-ish `\;` and bare `"` inside "command" values.
+            let repaired = repair_invalid_json_escapes(json_str);
+            let repaired = repair_command_field_quotes(&repaired);
+            let repaired = sanitize_trailing_commas(&repaired);
+            match serde_json::from_str::<SinePlan>(&repaired) {
+                Ok(p) => Ok(p),
+                Err(_) => Err(e).context("after escape/quote repair"),
+            }
+        }
+    }
+}
+
+/// Escape raw `"` inside `"command":"..."` values. Models write
+/// `"command":"grep -v "print""` and the inner quotes end the string early.
+fn repair_command_field_quotes(json: &str) -> String {
+    let bytes = json.as_bytes();
+    let mut out = String::with_capacity(json.len() + 8);
+    let mut i = 0;
+    while i < bytes.len() {
+        // Match "command" key (with surrounding quotes already in input).
+        if i + 9 <= bytes.len() && &bytes[i..i + 9] == b"\"command\"" {
+            out.push_str("\"command\"");
+            i += 9;
+            // Copy whitespace + colon + whitespace up to the opening quote.
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b':' {
+                out.push(':');
+                i += 1;
+            }
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            if i >= bytes.len() || bytes[i] != b'"' {
+                continue;
+            }
+            out.push('"');
+            i += 1;
+            // Escape bare quotes until a quote that really ends the value
+            // (followed by whitespace then `,` or `}`).
+            while i < bytes.len() {
+                let c = bytes[i];
+                if c == b'\\' {
+                    out.push('\\');
+                    if i + 1 < bytes.len() {
+                        out.push(bytes[i + 1] as char);
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                    continue;
+                }
+                if c == b'"' {
+                    let mut j = i + 1;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let ends = j >= bytes.len()
+                        || bytes[j] == b','
+                        || bytes[j] == b'}';
+                    if ends {
+                        out.push('"');
+                        i += 1;
+                        break;
+                    }
+                    out.push_str("\\\"");
+                    i += 1;
+                    continue;
+                }
+                out.push(c as char);
+                i += 1;
+            }
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Inside JSON strings, turn unknown `\` escapes into `\\` so shell-ish
+/// commands (`\;`, `\ `, `\(`, …) still deserialize.
+fn repair_invalid_json_escapes(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if !in_string {
+            out.push(c as char);
+            if c == b'"' {
+                in_string = true;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' {
+            out.push('"');
+            in_string = false;
+            i += 1;
+            continue;
+        }
+        if c == b'\\' {
+            if i + 1 >= bytes.len() {
+                out.push_str("\\\\");
+                i += 1;
+                continue;
+            }
+            let next = bytes[i + 1];
+            match next {
+                b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {
+                    out.push('\\');
+                    out.push(next as char);
+                    i += 2;
+                }
+                b'u' => {
+                    let hex_ok = i + 5 < bytes.len()
+                        && bytes[i + 2..=i + 5].iter().all(|b| b.is_ascii_hexdigit());
+                    if hex_ok {
+                        out.push_str(&s[i..i + 6]);
+                        i += 6;
+                    } else {
+                        out.push_str("\\\\");
+                        i += 1;
+                    }
+                }
+                _ => {
+                    out.push_str("\\\\");
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    out
+}
+
+/// Drop trailing commas before `}` / `]`, outside of strings.
+fn sanitize_trailing_commas(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut cleaned = String::with_capacity(input.len());
+    let mut i = 0;
+    let mut in_str = false;
+    let mut esc = false;
+    while i < chars.len() {
+        let ch = chars[i];
+        if esc {
+            cleaned.push(ch);
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if ch == '\\' {
+                cleaned.push(ch);
+                esc = true;
+            } else if ch == '"' {
+                cleaned.push(ch);
+                in_str = false;
+            } else {
+                cleaned.push(ch);
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '"' {
+            cleaned.push(ch);
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if ch == ',' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
+                i += 1;
+                continue;
+            }
+        }
+        cleaned.push(ch);
+        i += 1;
+    }
+    cleaned
 }
 
 /// Rewrite common LLM mistakes (`"verb":"shomagent web"`, `"shomagent ask"`, …)
@@ -733,6 +947,11 @@ impl SineState {
         }
     }
 
+    /// Path for the editor overlay (selected touched file), if any.
+    fn selected_edit_path(&self) -> Option<PathBuf> {
+        self.selected_file().map(PathBuf::from)
+    }
+
     /// Restart the idle countdown (user activity or end of a fielded request).
     fn note_activity(&mut self) {
         self.quiet_since = Instant::now();
@@ -775,7 +994,7 @@ impl SineState {
         ));
         // Bottom menu: keys + current auto state (Ctrl-A toggles).
         self.frame.footer = Some(format!(
-            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · ^R files · Tab left=files · ↑↓ · a/e/q"
+            "Esc exit · ^S send · Enter newline/send/open · ^A auto:{auto} · ^K clear · ^R files · Tab focus · ↑↓ scroll · a/e/q"
         ));
         // Live meter on the agent pane header (same estimate as :chat).
         self.frame
@@ -976,15 +1195,30 @@ async fn refresh_roster(state: &mut SineState) {
     lines.push("shomloops:".into());
     match shomloop::list_runs() {
         Ok(runs) => {
-            if runs.is_empty() {
-                lines.push("  (none)".into());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let mut upcoming: Vec<(i64, String)> = Vec::new();
+            for r in runs.into_iter().filter(|r| r.enabled) {
+                let Some(fire) = shomloop::next_fire(&r.cron, now) else {
+                    continue;
+                };
+                if fire - now > shomloop::SOON_HORIZON_SECS {
+                    continue;
+                }
+                let until = shomloop::format_until(fire, now);
+                upcoming.push((
+                    fire,
+                    format!("  #{} {}  {}  {}", r.id, until, r.frequency, r.command),
+                ));
+            }
+            upcoming.sort_by_key(|(fire, _)| *fire);
+            if upcoming.is_empty() {
+                lines.push("  (none in the next 24h)".into());
             } else {
-                for r in runs {
-                    let mark = if r.enabled { "+" } else { "-" };
-                    lines.push(format!(
-                        "  {mark}#{} {} {}",
-                        r.id, r.frequency, r.command
-                    ));
+                for (_, line) in upcoming {
+                    lines.push(line);
                 }
             }
         }
@@ -1007,7 +1241,7 @@ async fn refresh_roster(state: &mut SineState) {
     }
     lines.push("files:".into());
     if state.session.touched_files.is_empty() {
-        lines.push("  (none — Tab left, ↑↓ select, Enter open · ^R clear)".into());
+        lines.push("  (none — Tab files, ↑↓ select, Enter open · ^R clear)".into());
     } else {
         if state.file_select >= state.session.touched_files.len() {
             state.file_select = state.session.touched_files.len() - 1;
@@ -1020,7 +1254,10 @@ async fn refresh_roster(state: &mut SineState) {
     state
         .frame
         .set_leaf_header("left_bottom", "agents / loops / files");
-    state.frame.set_slot_lines(Slot::LeftBottom, lines);
+    // Keep scroll across refreshes so shomloops stay visible (do not snap to files).
+    state
+        .frame
+        .set_slot_lines_preserve_scroll(Slot::LeftBottom, lines);
     state.last_roster = Instant::now();
 }
 
@@ -1413,7 +1650,7 @@ impl FileViewer {
         // Parse the source line number from the first visible gutter (…N│).
         let top_src = first_gutter_lineno(self.rows.get(start).map(String::as_str).unwrap_or(""));
         let footer = format!(
-            "{dim} Esc close · ↑↓/PgUp/PgDn/Home/End · rows {}-{} / {}{}{reset}",
+            "{dim} Esc close · e edit · ↑↓/PgUp/PgDn/Home/End · rows {}-{} / {}{}{reset}",
             if self.rows.is_empty() { 0 } else { start + 1 },
             end,
             self.rows.len(),
@@ -1449,10 +1686,10 @@ fn first_gutter_lineno(row: &str) -> Option<usize> {
     }
 }
 
-/// Wrap file text for the viewer.
+/// Wrap file text for the viewer / editor.
 /// First visual row of each source line: `NNN│ text`
 /// Continuations keep a solid gutter: `   │ text`
-fn wrap_numbered_lines(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_numbered_lines(text: &str, width: usize) -> Vec<String> {
     let source: Vec<&str> = if text.is_empty() {
         vec![""]
     } else {
@@ -2153,7 +2390,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
     }
 
     loop {
-        // Full-screen file viewer takes over until Esc.
+        // Full-screen file viewer takes over until Esc (or `e` → editor).
         if let Some(viewer) = state.viewer.as_mut() {
             viewer.relayout();
             viewer.draw();
@@ -2161,6 +2398,17 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 Some(Key::Esc) | Some(Key::CtrlC) => {
                     state.viewer = None;
                     state.note_activity();
+                }
+                Some(Key::Char('e')) | Some(Key::Char('E')) => {
+                    let path = viewer.path.clone();
+                    state.viewer = None;
+                    state.note_activity();
+                    if let Err(e) = crate::sine_editor::run_embedded(cfg, &path).await {
+                        state.agent_note(&format!("editor: {e:#}"));
+                    }
+                    state.touch_file(&path);
+                    state.note_activity();
+                    state.refresh_status();
                 }
                 Some(Key::Up) => {
                     if let Some(v) = state.viewer.as_mut() {
@@ -2301,7 +2549,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 continue;
             }
             Some(Key::Enter) => {
-                if state.frame.column_focus == ColumnFocus::Left
+                if state.frame.pane_focus == PaneFocus::Files
                     && !state.session.touched_files.is_empty()
                     && state.frame.input.is_empty()
                 {
@@ -2314,7 +2562,7 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                     let line = state.frame.take_input();
                     handle_line(&mut state, &line, cfg, &mut pending).await;
                 } else if state.frame.input.is_empty() {
-                    // Empty right-focus Enter: no-op (do not insert a stray blank).
+                    // Empty Enter off the composer: no-op (do not insert a stray blank).
                     state.note_activity();
                 } else {
                     state.frame.insert_newline();
@@ -2364,38 +2612,63 @@ pub async fn run(cfg: &Config, cwd: PathBuf, initial: Option<String>) {
                 state.frame.clear_input();
                 state.note_activity();
             }
-            Some(Key::Up) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+            Some(Key::Up) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(-1);
                     let _ = refresh_roster(&mut state).await;
-                } else {
-                    state.frame.history_up();
                 }
-            }
-            Some(Key::Down) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+                PaneFocus::Agent | PaneFocus::Chat => {
+                    state.frame.scroll_focused(-1);
+                }
+                PaneFocus::Input => state.frame.history_up(),
+            },
+            Some(Key::Down) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(1);
                     let _ = refresh_roster(&mut state).await;
-                } else {
-                    state.frame.history_down();
                 }
-            }
+                PaneFocus::Agent | PaneFocus::Chat => {
+                    state.frame.scroll_focused(1);
+                }
+                PaneFocus::Input => state.frame.history_down(),
+            },
             Some(Key::Left) => state.frame.move_cursor_left(),
             Some(Key::Right) => state.frame.move_cursor_right(),
-            Some(Key::PageUp) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+            Some(Key::PageUp) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(-5);
                     let _ = refresh_roster(&mut state).await;
-                } else {
+                }
+                PaneFocus::Agent | PaneFocus::Chat => {
                     state.frame.scroll_focused(-8);
                 }
-            }
-            Some(Key::PageDown) => {
-                if state.frame.column_focus == ColumnFocus::Left {
+                PaneFocus::Input => {}
+            },
+            Some(Key::PageDown) => match state.frame.pane_focus {
+                PaneFocus::Files => {
                     state.move_file_select(5);
                     let _ = refresh_roster(&mut state).await;
-                } else {
+                }
+                PaneFocus::Agent | PaneFocus::Chat => {
                     state.frame.scroll_focused(8);
+                }
+                PaneFocus::Input => {}
+            },
+            Some(Key::Char('e')) | Some(Key::Char('E'))
+                if state.frame.pane_focus == PaneFocus::Files
+                    && state.frame.input.is_empty()
+                    && !state.session.touched_files.is_empty() =>
+            {
+                if let Some(path) = state.selected_edit_path() {
+                    state.note_activity();
+                    if let Err(e) = crate::sine_editor::run_embedded(cfg, &path).await {
+                        state.agent_note(&format!("editor: {e:#}"));
+                    }
+                    state.touch_file(&path);
+                    state.note_activity();
+                    state.refresh_status();
+                } else {
+                    state.agent_note("(no file selected)");
                 }
             }
             Some(Key::Char(c)) => {
@@ -2679,6 +2952,46 @@ mod tests {
         let raw = "here\n```json\n{\"summary\":\"a\",\"steps\":[]}\n```\n";
         let plan = parse_plan_json(raw).unwrap();
         assert_eq!(plan.summary, "a");
+    }
+
+    #[test]
+    fn parse_plan_repairs_bare_quotes_in_command() {
+        // LLM often leaves "print" unescaped inside the command string.
+        let raw = r#"{
+  "summary": "Add a hello world print statement in hello_world.py",
+  "steps": [
+    {
+      "verb": "shell",
+      "args": {
+        "command": "sh -c 'cat hello_world.py | grep -v "print" > hello_world.py'"
+      }
+    },
+    {
+      "verb": "shell",
+      "args": {
+        "command": "shomagent ask 0 \"Add a 'print' statement to hello_world.py\""
+      }
+    },
+    {
+      "verb": "shell",
+      "args": {
+        "command": "shomagent stop 0"
+      }
+    }
+  ]
+}"#;
+        let plan = parse_plan_json(raw).unwrap();
+        assert_eq!(plan.steps.len(), 3);
+        let cmd = plan.steps[0].args.get("command").and_then(|v| v.as_str()).unwrap();
+        assert!(cmd.contains("grep -v \"print\""), "cmd={cmd}");
+    }
+
+    #[test]
+    fn parse_plan_repairs_shell_backslash_escapes() {
+        let raw = r#"{"summary":"x","steps":[{"verb":"shell","args":{"command":"find . -name \*.py \; "}}]}"#;
+        let plan = parse_plan_json(raw).unwrap();
+        let cmd = plan.steps[0].args.get("command").and_then(|v| v.as_str()).unwrap();
+        assert!(cmd.contains(r"\*.py"), "cmd={cmd}");
     }
 
     #[test]

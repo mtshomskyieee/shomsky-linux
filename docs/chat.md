@@ -29,7 +29,8 @@ update after each turn and after compactify.
 |-----|--------|
 | Enter | Send the input line (or compactify when that control is focused) |
 | Tab | Focus the compactify control |
-| `c` | Compactify (empty input, or when the control is focused) |
+| `c` | Compactify only when the compactify control is focused (never steals `c` from the input) |
+| Ctrl-A | Compactify |
 | ↑ / ↓ | Scroll the transcript one line |
 | PgUp / PgDn | Scroll a page |
 | ← / → | Move in the input |

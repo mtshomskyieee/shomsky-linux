@@ -66,6 +66,12 @@ with `"command":"apk add neovim"` when using `<tool_call>`.
      curl pkgs.alpinelinux.org for that name. Still absent → say so
 2. apk add PKG
 3. Verify: apk info -e PKG and command -v the binary
+4. **Use the binary via PATH** — Alpine installs under `/usr/bin` (e.g.
+   `python3`). Prefer bare names: `python3 fun.py`, not absolute guesses.
+   Never invent `/root/.local/bin/…` or `~/.local/bin/…` (pip `--user`
+   priors). Agent HOME is `/engram/user`; after `python3` is installed a
+   `python` shim may exist under `/engram/user/bin`. The system prompt lists
+   ledger packages marked installed — trust that list.
 
 Editors and other TUI names in `ignore_llm_for_these_commands` (`nvim`,
 `vim`, …) are typed by the user on the real TTY — never `shell_exec` them.

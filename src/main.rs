@@ -1,6 +1,8 @@
 mod chat_tui;
 mod completer;
 mod config;
+mod edit_history;
+mod edit_picker;
 mod emerge;
 mod halluc_fs;
 mod halluc_session;
@@ -13,6 +15,7 @@ mod modes;
 mod packages;
 mod quickyn_tui;
 mod repl;
+mod sine_editor;
 mod sine_tui;
 mod skills;
 mod spinner;
