@@ -41,10 +41,12 @@ line (or **open** the selected file when focus is **files** and the draft is emp
 **Ctrl-A** toggle auto · **Ctrl-K** clear context (not Ctrl-L — hosts often
 eat Ctrl-L as form-feed) · **Ctrl-R** clear the files list (drop prior-session
 paths and reset the touch baseline; session/playbook/plan reappear if present) ·
-**Tab** cycles focus (`input` → `files` → `agent` → `chat`) · ↑↓ walk input
-history on input, select a file on files, or scroll agent/chat · PageUp/PageDown
-scroll agent/chat (or jump files) · Ctrl-Left/Right vertical split ·
-Ctrl-Up/Down pane split (left pair when files-focused, right pair otherwise).
+**Tab** cycles focus (`input` → `files` → `agent` → `chat`); the focused
+section uses the theme selection bar (`▸` on pane headers, or the composer when
+focus is input) · ↑↓ walk input history on input, select a file on files, or
+scroll agent/chat · PageUp/PageDown scroll agent/chat (or jump files) ·
+Ctrl-Left/Right vertical split · Ctrl-Up/Down pane split (left pair when
+files-focused, right pair otherwise).
 Bracketed paste keeps newlines in the composer (does not auto-send). Typed
 characters always go to the command line (except bare `e` / `E` on files with
 an empty draft). You can also type `auto`, `clear`,

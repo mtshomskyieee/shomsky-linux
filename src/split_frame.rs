@@ -790,6 +790,8 @@ impl SplitFrame {
         let dim = pal.dim;
         let text = pal.text;
         let accent = pal.accent;
+        let selection = pal.selection();
+        let input_focused = self.pane_focus == PaneFocus::Input;
 
         // Inner content width (inside outer frame).
         let inner_w = cols.saturating_sub(2).max(8);
@@ -817,7 +819,7 @@ impl SplitFrame {
             dim,
             title_st,
             text,
-            pal.border_focus,
+            selection,
             self.pane_focus,
         );
 
@@ -829,11 +831,15 @@ impl SplitFrame {
         } else {
             format!(" {status} · focus:{focus_mark} ")
         };
-        canvas.fill_row(1, status_y, inner_w, &status_line, dim);
+        // Status bar uses selection when a content pane owns focus so Tab is obvious.
+        let status_style = if input_focused { dim } else { selection };
+        canvas.fill_row(1, status_y, inner_w, &status_line, status_style);
 
         let (cursor_row, cursor_col) = cursor_visual_pos(&self.input, self.cursor, input_w);
         let scroll = composer_scroll(visual.len(), cursor_row, composer_rows);
         let composer_y0 = status_y + 1;
+        // Composer is the highlighted "section" while Tab focus is input.
+        let composer_style = if input_focused { selection } else { accent };
         for row in 0..composer_rows {
             let y = composer_y0 + row;
             if y >= rows.saturating_sub(1) {
@@ -846,7 +852,7 @@ impl SplitFrame {
             } else {
                 format!("{:width$}{line}", "", width = prefix_w)
             };
-            canvas.fill_row(1, y, inner_w, &cell, accent);
+            canvas.fill_row(1, y, inner_w, &cell, composer_style);
         }
 
         canvas.flush();
@@ -951,7 +957,7 @@ fn paint_node_canvas(
     dim: Style,
     title: Style,
     text: Style,
-    focus_border: Style,
+    focus_style: Style,
     focus: PaneFocus,
 ) {
     if rect.w == 0 || rect.h == 0 {
@@ -966,7 +972,7 @@ fn paint_node_canvas(
                 dim,
                 title,
                 text,
-                focus_border,
+                focus_style,
                 leaf_is_focused(leaf, focus),
             );
         }
@@ -988,7 +994,7 @@ fn paint_node_canvas(
                 dim,
                 title,
                 text,
-                focus_border,
+                focus_style,
                 focus,
             );
             paint_node_canvas(
@@ -999,7 +1005,7 @@ fn paint_node_canvas(
                 dim,
                 title,
                 text,
-                focus_border,
+                focus_style,
                 focus,
             );
         }
@@ -1021,7 +1027,7 @@ fn paint_node_canvas(
                 dim,
                 title,
                 text,
-                focus_border,
+                focus_style,
                 focus,
             );
             paint_node_canvas(
@@ -1032,11 +1038,26 @@ fn paint_node_canvas(
                 dim,
                 title,
                 text,
-                focus_border,
+                focus_style,
                 focus,
             );
         }
     }
+}
+
+/// Pane title rule. Focused panes get a `▸` marker; caller supplies selection style.
+fn pane_header_line(header: &str, width: usize, focused: bool) -> String {
+    let label = if focused {
+        format!(" ▸ {header} ")
+    } else {
+        format!(" {header} ")
+    };
+    let used = label.chars().count().min(width);
+    let mut line: String = label.chars().take(used).collect();
+    while line.chars().count() < width {
+        line.push('─');
+    }
+    line
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1047,7 +1068,7 @@ fn paint_leaf_canvas(
     dim: Style,
     title: Style,
     text: Style,
-    focus_border: Style,
+    focus_style: Style,
     focused: bool,
 ) {
     if rect.w == 0 || rect.h == 0 {
@@ -1055,15 +1076,11 @@ fn paint_leaf_canvas(
     }
     let mut content_y = rect.y;
     let mut content_h = rect.h;
-    let head_style = if focused { focus_border } else { title };
+    // title and border_focus match in every palette — use selection for focus.
+    let head_style = if focused { focus_style } else { title };
 
     if let Some(header) = &leaf.header {
-        let label = format!(" {header} ");
-        let used = label.chars().count().min(rect.w);
-        let mut line: String = label.chars().take(used).collect();
-        while line.chars().count() < rect.w {
-            line.push('─');
-        }
+        let line = pane_header_line(header, rect.w, focused);
         canvas.fill_row(rect.x, content_y, rect.w, &line, head_style);
         content_y += 1;
         content_h = content_h.saturating_sub(1);
@@ -1729,6 +1746,32 @@ mod tests {
         assert_eq!(frame.pane_focus, PaneFocus::Chat);
         frame.cycle_pane_focus();
         assert_eq!(frame.pane_focus, PaneFocus::Input);
+    }
+
+    #[test]
+    fn focused_pane_header_gets_marker() {
+        let rest = pane_header_line("agent", 20, false);
+        let focused = pane_header_line("agent", 20, true);
+        assert!(rest.starts_with(" agent "));
+        assert!(!rest.contains('▸'));
+        assert!(focused.starts_with(" ▸ agent "));
+        assert_eq!(rest.chars().count(), 20);
+        assert_eq!(focused.chars().count(), 20);
+    }
+
+    #[test]
+    fn leaf_focus_maps_tab_targets() {
+        let frame = SplitFrame::sine_layout();
+        let files = frame.leaf("left_bottom").unwrap();
+        let agent = frame.leaf("right_top").unwrap();
+        let chat = frame.leaf("right_bottom").unwrap();
+        let brand = frame.leaf("left_top").unwrap();
+        assert!(leaf_is_focused(files, PaneFocus::Files));
+        assert!(!leaf_is_focused(files, PaneFocus::Agent));
+        assert!(leaf_is_focused(agent, PaneFocus::Agent));
+        assert!(leaf_is_focused(chat, PaneFocus::Chat));
+        assert!(!leaf_is_focused(brand, PaneFocus::Input));
+        assert!(!leaf_is_focused(brand, PaneFocus::Files));
     }
 
     #[test]
