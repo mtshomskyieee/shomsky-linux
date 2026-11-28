@@ -21,14 +21,28 @@ pub enum Theme {
     Coffee,
     Laptop,
     Classic,
+    FrutigerAeroGreen,
+    FrutigerAeroOrange,
+    Rainbow,
+    CottonCandy,
+    Purple,
+    HackerGreen,
+    HackerAmber,
 }
 
 impl Theme {
-    pub const ALL: [Theme; 4] = [
+    pub const ALL: [Theme; 11] = [
         Theme::Harbor,
         Theme::Coffee,
         Theme::Laptop,
         Theme::Classic,
+        Theme::FrutigerAeroGreen,
+        Theme::FrutigerAeroOrange,
+        Theme::Rainbow,
+        Theme::CottonCandy,
+        Theme::Purple,
+        Theme::HackerGreen,
+        Theme::HackerAmber,
     ];
 
     pub fn name(self) -> &'static str {
@@ -37,6 +51,13 @@ impl Theme {
             Theme::Coffee => "coffee",
             Theme::Laptop => "laptop",
             Theme::Classic => "classic",
+            Theme::FrutigerAeroGreen => "frutiger-aero-green",
+            Theme::FrutigerAeroOrange => "frutiger-aero-orange",
+            Theme::Rainbow => "rainbow",
+            Theme::CottonCandy => "cotton-candy",
+            Theme::Purple => "purple",
+            Theme::HackerGreen => "hacker-green",
+            Theme::HackerAmber => "hacker-amber",
         }
     }
 
@@ -46,6 +67,13 @@ impl Theme {
             Theme::Coffee => "Warm amber chrome colors",
             Theme::Laptop => "Soft blue chrome colors",
             Theme::Classic => "Cyan chrome colors",
+            Theme::FrutigerAeroGreen => "Glossy aqua-green Frutiger Aero chrome",
+            Theme::FrutigerAeroOrange => "Sunset orange Frutiger Aero chrome",
+            Theme::Rainbow => "Vivid pink / cyan / yellow accents",
+            Theme::CottonCandy => "Pastel pink and sky-blue chrome",
+            Theme::Purple => "Violet chrome colors",
+            Theme::HackerGreen => "Matrix phosphor green on dark",
+            Theme::HackerAmber => "Amber CRT phosphor on dark",
         }
     }
 
@@ -55,6 +83,17 @@ impl Theme {
             "coffee" => Some(Theme::Coffee),
             "laptop" => Some(Theme::Laptop),
             "classic" => Some(Theme::Classic),
+            "frutiger-aero-green" | "aero-green" | "fruitger-aero-green" => {
+                Some(Theme::FrutigerAeroGreen)
+            }
+            "frutiger-aero-orange" | "aero-orange" | "fruitger-aero-orange" => {
+                Some(Theme::FrutigerAeroOrange)
+            }
+            "rainbow" => Some(Theme::Rainbow),
+            "cotton-candy" | "cottoncandy" => Some(Theme::CottonCandy),
+            "purple" | "violet" => Some(Theme::Purple),
+            "hacker-green" | "matrix" => Some(Theme::HackerGreen),
+            "hacker-amber" | "amber" => Some(Theme::HackerAmber),
             _ => None,
         }
     }
@@ -108,6 +147,90 @@ impl Theme {
                 selection_fg: Style::default(),
                 selection_bg: Style::ansi(7),
                 overlay_border: Style::ansi(33),
+            },
+            Theme::FrutigerAeroGreen => Palette {
+                border: Style::fg256(80),
+                border_focus: Style::fg256(122).bold(),
+                title: Style::fg256(159).bold(),
+                dim: Style::fg256(246),
+                text: Style::fg256(255),
+                accent: Style::fg256(86),
+                danger: Style::fg256(203),
+                selection_fg: Style::fg256(232),
+                selection_bg: Style::bg256(79),
+                overlay_border: Style::fg256(195),
+            },
+            Theme::FrutigerAeroOrange => Palette {
+                border: Style::fg256(214),
+                border_focus: Style::fg256(221).bold(),
+                title: Style::fg256(230).bold(),
+                dim: Style::fg256(245),
+                text: Style::fg256(255),
+                accent: Style::fg256(208),
+                danger: Style::fg256(167),
+                selection_fg: Style::fg256(232),
+                selection_bg: Style::bg256(208),
+                overlay_border: Style::fg256(229),
+            },
+            Theme::Rainbow => Palette {
+                border: Style::fg256(201),
+                border_focus: Style::fg256(213).bold(),
+                title: Style::fg256(51).bold(),
+                dim: Style::fg256(245),
+                text: Style::fg256(255),
+                accent: Style::fg256(226),
+                danger: Style::fg256(196),
+                selection_fg: Style::fg256(232),
+                selection_bg: Style::bg256(165),
+                overlay_border: Style::fg256(219),
+            },
+            Theme::CottonCandy => Palette {
+                border: Style::fg256(218),
+                border_focus: Style::fg256(225).bold(),
+                title: Style::fg256(183).bold(),
+                dim: Style::fg256(246),
+                text: Style::fg256(255),
+                accent: Style::fg256(117),
+                danger: Style::fg256(203),
+                selection_fg: Style::fg256(232),
+                selection_bg: Style::bg256(212),
+                overlay_border: Style::fg256(225),
+            },
+            Theme::Purple => Palette {
+                border: Style::fg256(141),
+                border_focus: Style::fg256(183).bold(),
+                title: Style::fg256(183).bold(),
+                dim: Style::fg256(245),
+                text: Style::fg256(254),
+                accent: Style::fg256(147),
+                danger: Style::fg256(203),
+                selection_fg: Style::fg256(231),
+                selection_bg: Style::bg256(98),
+                overlay_border: Style::fg256(189),
+            },
+            Theme::HackerGreen => Palette {
+                border: Style::fg256(40),
+                border_focus: Style::fg256(46).bold(),
+                title: Style::fg256(82).bold(),
+                dim: Style::fg256(239),
+                text: Style::fg256(48),
+                accent: Style::fg256(40),
+                danger: Style::fg256(196),
+                selection_fg: Style::fg256(22),
+                selection_bg: Style::bg256(40),
+                overlay_border: Style::fg256(82),
+            },
+            Theme::HackerAmber => Palette {
+                border: Style::fg256(178),
+                border_focus: Style::fg256(214).bold(),
+                title: Style::fg256(220).bold(),
+                dim: Style::fg256(239),
+                text: Style::fg256(184),
+                accent: Style::fg256(214),
+                danger: Style::fg256(196),
+                selection_fg: Style::fg256(232),
+                selection_bg: Style::bg256(136),
+                overlay_border: Style::fg256(220),
             },
         }
     }
@@ -247,14 +370,18 @@ pub enum Avatar {
     Navi,
     Coffee,
     Laptop,
+    Mana,
+    Leaf,
     Classic,
 }
 
 impl Avatar {
-    pub const ALL: [Avatar; 4] = [
+    pub const ALL: [Avatar; 6] = [
         Avatar::Navi,
         Avatar::Coffee,
         Avatar::Laptop,
+        Avatar::Mana,
+        Avatar::Leaf,
         Avatar::Classic,
     ];
 
@@ -263,6 +390,8 @@ impl Avatar {
             Avatar::Navi => "navi",
             Avatar::Coffee => "coffee",
             Avatar::Laptop => "laptop",
+            Avatar::Mana => "mana",
+            Avatar::Leaf => "leaf",
             Avatar::Classic => "classic",
         }
     }
@@ -272,6 +401,8 @@ impl Avatar {
             Avatar::Navi => "navi eye",
             Avatar::Coffee => "coffee mug",
             Avatar::Laptop => "laptop",
+            Avatar::Mana => "mana flame",
+            Avatar::Leaf => "leaf",
             Avatar::Classic => "braille bunny",
         }
     }
@@ -281,6 +412,8 @@ impl Avatar {
             Avatar::Navi => ":sine avatar — navi eye (img2ascii)",
             Avatar::Coffee => ":sine avatar — coffee mug rest/busy poses",
             Avatar::Laptop => ":sine avatar — laptop rest/busy poses",
+            Avatar::Mana => ":sine avatar — mana flame rest/busy poses",
+            Avatar::Leaf => ":sine avatar — leaf rest/busy poses",
             Avatar::Classic => ":sine avatar — braille bunny with bouncing eyes",
         }
     }
@@ -290,6 +423,8 @@ impl Avatar {
             "navi" | "harbor" => Some(Avatar::Navi), // harbor was the old bundled name
             "coffee" => Some(Avatar::Coffee),
             "laptop" => Some(Avatar::Laptop),
+            "mana" | "mana-flame" | "flame" => Some(Avatar::Mana),
+            "leaf" => Some(Avatar::Leaf),
             "classic" | "bunny" => Some(Avatar::Classic),
             _ => None,
         }
@@ -941,8 +1076,26 @@ mod tests {
         assert_eq!(Theme::parse("COFFEE"), Some(Theme::Coffee));
         assert_eq!(Theme::parse("laptop"), Some(Theme::Laptop));
         assert_eq!(Theme::parse("classic"), Some(Theme::Classic));
+        assert_eq!(
+            Theme::parse("frutiger-aero-green"),
+            Some(Theme::FrutigerAeroGreen)
+        );
+        assert_eq!(
+            Theme::parse("aero-orange"),
+            Some(Theme::FrutigerAeroOrange)
+        );
+        assert_eq!(Theme::parse("rainbow"), Some(Theme::Rainbow));
+        assert_eq!(Theme::parse("cotton-candy"), Some(Theme::CottonCandy));
+        assert_eq!(Theme::parse("purple"), Some(Theme::Purple));
+        assert_eq!(Theme::parse("hacker-green"), Some(Theme::HackerGreen));
+        assert_eq!(Theme::parse("hacker-amber"), Some(Theme::HackerAmber));
         assert_eq!(Theme::parse("nope"), None);
         assert_eq!(Theme::parse(""), None);
+        assert_eq!(Avatar::parse("mana"), Some(Avatar::Mana));
+        assert_eq!(Avatar::parse("mana-flame"), Some(Avatar::Mana));
+        assert_eq!(Avatar::parse("leaf"), Some(Avatar::Leaf));
+        assert_eq!(Theme::ALL.len(), 11);
+        assert_eq!(Avatar::ALL.len(), 6);
     }
 
     #[test]

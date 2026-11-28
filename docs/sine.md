@@ -18,7 +18,7 @@ Generic chrome: `src/split_frame.rs`. SINE fills it as:
 
 | Pane | Content |
 |------|---------|
-| Left top | Brand avatar (`:menu` → Theme → avatar), independent of chrome color: **navi eye**, **coffee mug**, **laptop** (img2ascii), or **braille bunny** ([`sine_image.txt`](sine_image.txt)). Sources under `assets/brand/` + `assets/sine_image.txt`. Import / rest+busy: [import-sine-image.md](import-sine-image.md), [ADR-0015](adr/0015-sine-brand-avatars.md) |
+| Left top | Brand avatar (`:menu` → Theme → avatar), independent of chrome color: **navi eye**, **coffee mug**, **laptop**, **mana flame**, **leaf** (img2ascii), or **braille bunny** ([`sine_image.txt`](sine_image.txt)). Sources under `assets/brand/` + `assets/sine_image.txt`. Import / rest+busy: [import-sine-image.md](import-sine-image.md), [ADR-0015](adr/0015-sine-brand-avatars.md) |
 | Left bottom | agents / loops / files — roster, enabled shomloops due within 24h (with relative next-fire), then files this session touched; Tab to files, ↑↓ select, Enter opens a full-screen numbered/wrapped viewer (Esc closes; `e` opens the editor), empty draft + `e` opens the editor for the selected file |
 | Right top | Plans, step results, idle notes (line-wrapped); header shows live `ctx N tok · est P%`; Tab to agent, ↑↓ / PgUp/PgDn scroll |
 | Right bottom | Chat history (line-wrapped); same context meter in the chat header; Tab to chat, ↑↓ / PgUp/PgDn scroll |

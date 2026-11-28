@@ -28,6 +28,10 @@ const BRAND_COFFEE_REST: &str = include_str!("../assets/brand/coffee-rest.txt");
 const BRAND_COFFEE_BUSY: &str = include_str!("../assets/brand/coffee-busy.txt");
 const BRAND_LAPTOP_REST: &str = include_str!("../assets/brand/laptop-rest.txt");
 const BRAND_LAPTOP_BUSY: &str = include_str!("../assets/brand/laptop-busy.txt");
+const BRAND_MANA_REST: &str = include_str!("../assets/brand/mana-rest.txt");
+const BRAND_MANA_BUSY: &str = include_str!("../assets/brand/mana-busy.txt");
+const BRAND_LEAF_REST: &str = include_str!("../assets/brand/leaf-rest.txt");
+const BRAND_LEAF_BUSY: &str = include_str!("../assets/brand/leaf-busy.txt");
 
 const PLAN_SYSTEM: &str = "\
 You are SINE, a planning assistant inside Shomsky Linux (BusyBox ash, Alpine).
@@ -1525,6 +1529,24 @@ fn render_brand_lines(avatar: Avatar, eyes: BrandEyes) -> Vec<String> {
             apply_image_eyes(&mut lines, eyes, matches!(eyes, BrandEyes::Busy(_)));
             lines
         }
+        Avatar::Mana => {
+            let src = match eyes {
+                BrandEyes::Busy(_) => BRAND_MANA_BUSY,
+                _ => BRAND_MANA_REST,
+            };
+            let mut lines = art_lines(src);
+            apply_image_eyes(&mut lines, eyes, matches!(eyes, BrandEyes::Busy(_)));
+            lines
+        }
+        Avatar::Leaf => {
+            let src = match eyes {
+                BrandEyes::Busy(_) => BRAND_LEAF_BUSY,
+                _ => BRAND_LEAF_REST,
+            };
+            let mut lines = art_lines(src);
+            apply_image_eyes(&mut lines, eyes, matches!(eyes, BrandEyes::Busy(_)));
+            lines
+        }
     }
 }
 
@@ -2846,6 +2868,26 @@ mod tests {
         let busy = render_brand_lines(Avatar::Laptop, BrandEyes::Busy(Duration::from_secs(1)));
         let rest_plain: Vec<_> = rest.iter().map(|l| chrome::strip_ansi(l)).collect();
         let busy_plain: Vec<_> = busy.iter().map(|l| chrome::strip_ansi(l)).collect();
+        assert_ne!(rest_plain, busy_plain);
+    }
+
+    #[test]
+    fn brand_mana_busy_differs_from_rest() {
+        let rest = render_brand_lines(Avatar::Mana, BrandEyes::Rest);
+        let busy = render_brand_lines(Avatar::Mana, BrandEyes::Busy(Duration::from_secs(1)));
+        let rest_plain: Vec<_> = rest.iter().map(|l| chrome::strip_ansi(l)).collect();
+        let busy_plain: Vec<_> = busy.iter().map(|l| chrome::strip_ansi(l)).collect();
+        assert!(!rest_plain.is_empty());
+        assert_ne!(rest_plain, busy_plain);
+    }
+
+    #[test]
+    fn brand_leaf_busy_differs_from_rest() {
+        let rest = render_brand_lines(Avatar::Leaf, BrandEyes::Rest);
+        let busy = render_brand_lines(Avatar::Leaf, BrandEyes::Busy(Duration::from_secs(1)));
+        let rest_plain: Vec<_> = rest.iter().map(|l| chrome::strip_ansi(l)).collect();
+        let busy_plain: Vec<_> = busy.iter().map(|l| chrome::strip_ansi(l)).collect();
+        assert!(!rest_plain.is_empty());
         assert_ne!(rest_plain, busy_plain);
     }
 
