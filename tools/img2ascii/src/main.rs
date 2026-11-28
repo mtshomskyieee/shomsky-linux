@@ -66,8 +66,18 @@ struct Job {
     chroma: ChromaKey,
     /// Crop to chroma/feature bbox (padded) before cell resize — more face detail.
     crop_subject: bool,
-    /// Stamp angled dark sockets + bright pupils (leaf avatar).
-    stamp_scary_eyes: bool,
+    /// Optional face stamp after silhouette conversion.
+    eye_stamp: EyeStamp,
+}
+
+/// Hand-placed eyes on solid-block avatars (img2ascii loses face detail).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EyeStamp {
+    None,
+    /// Leaf: almond dark sockets + blue pupils (no brows).
+    Leaf,
+    /// Mana flame: round dark eyes + white glints (kawaii, no brows).
+    Mana,
 }
 
 const JOBS: &[Job] = &[
@@ -89,7 +99,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: 0.0,
         chroma: ChromaKey::None,
         crop_subject: false,
-        stamp_scary_eyes: false,
+        eye_stamp: EyeStamp::None,
     },
     // Cream mug ≈ cream studio floor — corner distance alone eats the body.
     Job {
@@ -109,7 +119,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: 0.04,
         chroma: ChromaKey::None,
         crop_subject: false,
-        stamp_scary_eyes: false,
+        eye_stamp: EyeStamp::None,
     },
     Job {
         src: "coffee-busy.jpg",
@@ -128,7 +138,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: 0.02,
         chroma: ChromaKey::None,
         crop_subject: false,
-        stamp_scary_eyes: false,
+        eye_stamp: EyeStamp::None,
     },
     Job {
         src: "laptop-rest.jpg",
@@ -147,7 +157,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: 0.0,
         chroma: ChromaKey::None,
         crop_subject: false,
-        stamp_scary_eyes: false,
+        eye_stamp: EyeStamp::None,
     },
     Job {
         src: "laptop-busy.jpg",
@@ -166,7 +176,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: 0.0,
         chroma: ChromaKey::None,
         crop_subject: false,
-        stamp_scary_eyes: false,
+        eye_stamp: EyeStamp::None,
     },
     // Soft bloom on gray/warm floors becomes muddy ░ — chroma-key + crop.
     // Block-only ramp: punctuation (@%*+=) reads as noise on this subject.
@@ -188,7 +198,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: -0.04,
         chroma: ChromaKey::Cyan,
         crop_subject: true,
-        stamp_scary_eyes: false,
+        eye_stamp: EyeStamp::Mana,
     },
     Job {
         src: "mana-busy.jpg",
@@ -207,7 +217,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: -0.04,
         chroma: ChromaKey::Cyan,
         crop_subject: true,
-        stamp_scary_eyes: false,
+        eye_stamp: EyeStamp::Mana,
     },
     // Green leaf on pale-green studio — chroma green + solid blocks.
     Job {
@@ -227,7 +237,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: 0.0,
         chroma: ChromaKey::Green,
         crop_subject: true,
-        stamp_scary_eyes: true,
+        eye_stamp: EyeStamp::Leaf,
     },
     Job {
         src: "leaf-busy.jpg",
@@ -246,7 +256,7 @@ const JOBS: &[Job] = &[
         ellipse_cy: 0.0,
         chroma: ChromaKey::Green,
         crop_subject: true,
-        stamp_scary_eyes: true,
+        eye_stamp: EyeStamp::Leaf,
     },
 ];
 
@@ -371,8 +381,10 @@ fn convert(path: &Path, job: &Job) -> Result<String, String> {
         }
         ChromaKey::Green => keep_largest_component(raw, job.cols, job.rows),
     };
-    if job.stamp_scary_eyes {
-        stamp_scary_leaf_eyes(&mut cells, job.cols, job.rows);
+    match job.eye_stamp {
+        EyeStamp::None => {}
+        EyeStamp::Leaf => stamp_leaf_eyes(&mut cells, job.cols, job.rows),
+        EyeStamp::Mana => stamp_mana_eyes(&mut cells, job.cols, job.rows),
     }
     let strengths: Vec<f32> = cells.iter().filter_map(|c| c.map(|(_, _, _, s)| s)).collect();
     let (lo, hi) = percentile_bounds(&strengths, 0.05, 0.95);
@@ -537,8 +549,8 @@ fn morph_erode(mask: &[bool], w: u32, h: u32, radius: i32) -> Vec<bool> {
     out
 }
 
-/// Carve two angled sockets with bright pupils into the leaf face.
-fn stamp_scary_leaf_eyes(cells: &mut [Option<(u8, u8, u8, f32)>], cols: u32, rows: u32) {
+/// Leaf eyes: almond dark sockets + blue pupils (no brows).
+fn stamp_leaf_eyes(cells: &mut [Option<(u8, u8, u8, f32)>], cols: u32, rows: u32) {
     let mut min_x = cols;
     let mut min_y = rows;
     let mut max_x = 0u32;
@@ -596,6 +608,61 @@ fn stamp_scary_leaf_eyes(cells: &mut [Option<(u8, u8, u8, f32)>], cols: u32, row
         put(cells, ex + inward, ey + 2, pupil);
         put(cells, ex, ey + 2, pupil);
         put(cells, ex + inward, ey + 1, glint);
+    }
+}
+
+/// Mana flame eyes: round dark sockets + white glints (kawaii, no brows).
+fn stamp_mana_eyes(cells: &mut [Option<(u8, u8, u8, f32)>], cols: u32, rows: u32) {
+    let mut min_x = cols;
+    let mut min_y = rows;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..rows {
+        for x in 0..cols {
+            if cells[(y * cols + x) as usize].is_some() {
+                found = true;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    if !found || max_x <= min_x + 8 || max_y <= min_y + 6 {
+        return;
+    }
+    let bw = max_x - min_x + 1;
+    let bh = max_y - min_y + 1;
+    // Face is centered on the flame ball.
+    let eye_y = min_y + (bh as f32 * 0.45).round() as u32;
+    let left_x = min_x + (bw as f32 * 0.36).round() as u32;
+    let right_x = min_x + (bw as f32 * 0.64).round() as u32;
+
+    let put = |cells: &mut [Option<(u8, u8, u8, f32)>], x: i32, y: i32, rgb: [u8; 3]| {
+        if x < 0 || y < 0 || x >= cols as i32 || y >= rows as i32 {
+            return;
+        }
+        cells[(y as u32 * cols + x as u32) as usize] = Some((rgb[0], rgb[1], rgb[2], 1.0));
+    };
+
+    let socket = [10u8, 20, 40]; // deep navy (reads on cyan body)
+    let glint = [255u8, 255, 255]; // white sparkle
+
+    for ex in [left_x as i32, right_x as i32] {
+        let ey = eye_y as i32;
+        // Round 5×5 disk (skip corners for circle look).
+        for dy in -2i32..=2 {
+            for dx in -2i32..=2 {
+                if dx.abs() == 2 && dy.abs() == 2 {
+                    continue;
+                }
+                put(cells, ex + dx, ey + dy, socket);
+            }
+        }
+        // Classic kawaii glint: upper-left of each eye.
+        put(cells, ex - 1, ey - 1, glint);
+        put(cells, ex - 1, ey, glint);
     }
 }
 
