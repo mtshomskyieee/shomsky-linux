@@ -381,14 +381,6 @@ impl Repl {
             MenuAction::SetMode(mode) => {
                 Box::pin(self.handle_meta(&format!(":mode {}", mode.as_str()), Some(rl))).await
             }
-            MenuAction::SetTheme(theme) => {
-                println!("theme: {}", theme.name());
-                Ok(false)
-            }
-            MenuAction::SetAvatar(avatar) => {
-                println!("avatar: {}", avatar.name());
-                Ok(false)
-            }
             MenuAction::RunMeta(cmd) => Box::pin(self.handle_meta(&cmd, Some(rl))).await,
             MenuAction::InsertLine(s) => {
                 // Starters end with space or contain empty quotes → prefill buffer.

@@ -17,11 +17,12 @@ How-to: [import-sine-image.md](../import-sine-image.md).
 
 ## Decision
 
-1. **Color ≠ avatar.** `Theme` (harbor / coffee / laptop / classic palette) and
-   `Avatar` (navi / coffee / laptop / classic) are separate enums in
-   `src/chrome.rs`, persisted under `/engram/user/.sine/` as `.theme` and
-   `.avatar`. Menu Theme lists both; preview shows the highlighted avatar’s
-   **rest** art.
+1. **Color ≠ avatar.** `Theme` (harbor / coffee / laptop / classic /
+   frutiger-aero-green / frutiger-aero-orange / rainbow / cotton-candy /
+   purple / hacker-green / hacker-amber) and `Avatar` (navi / coffee / laptop /
+   mana / leaf / classic) are separate enums in `src/chrome.rs`, persisted under
+   `/engram/user/.theme` and `/engram/user/.avatar`. Menu Theme lists both;
+   preview shows the highlighted avatar’s **rest** art.
 
 2. **Build-time img2ascii.** Source images live under `assets/brand/`
    (`*.png` / `*.jpg`). A standalone tool (`tools/img2ascii`, outside the
@@ -33,7 +34,7 @@ How-to: [import-sine-image.md](../import-sine-image.md).
 3. **Pose model.** Image avatars use packaged rest / busy pictures (and a
    danger retint on error). Classic keeps `docs/sine_image.txt` with bouncing /
    error eyes. Navi may start as a single pose; rest+busy pairs are the
-   preferred shape (coffee / laptop).
+   preferred shape (coffee / laptop / mana / leaf).
 
 4. **Conversion knobs per job.** Neon / line art on dark → BrightInk + optional
    dilate. Cream subjects on cream studio floors → FloodEllipse subject mask +

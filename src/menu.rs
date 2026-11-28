@@ -18,8 +18,6 @@ use crate::ui;
 pub enum MenuAction {
     Dismiss,
     SetMode(Mode),
-    SetTheme(Theme),
-    SetAvatar(Avatar),
     RunMeta(String),
     InsertLine(String),
     ExitShell,
@@ -299,6 +297,13 @@ impl MenuState {
         if let Some(ShomagentSub::PickMember { kind }) = self.shomagent_sub {
             return member_pick_items(&self.shomagent_members, kind);
         }
+        if self.category() == Category::Theme {
+            // ● marks the last committed pick; highlight only previews chrome.
+            return theme_items(
+                self.theme_backup.unwrap_or_else(chrome::active),
+                self.avatar_backup.unwrap_or_else(chrome::active_avatar),
+            );
+        }
         items_for(
             self.category(),
             self.mode,
@@ -530,6 +535,8 @@ impl MenuState {
         self.preview_theme_selection();
     }
 
+    /// Live-preview chrome / avatar for the highlighted row. Does not persist;
+    /// Esc restores [`Self::theme_backup`] / [`Self::avatar_backup`].
     fn preview_theme_selection(&mut self) {
         if self.category() != Category::Theme {
             return;
@@ -637,15 +644,18 @@ impl MenuState {
                 None
             }
             ItemKind::SetTheme(t) => {
+                // Commit color; stay in the menu so avatar can be picked too.
                 let _ = chrome::save_theme(*t);
-                self.theme_backup = None;
-                self.theme_preview = None;
-                Some(MenuAction::SetTheme(*t))
+                chrome::set_active(*t);
+                self.theme_backup = Some(*t);
+                self.theme_preview = Some(*t);
+                None
             }
             ItemKind::SetAvatar(a) => {
                 let _ = chrome::save_avatar(*a);
-                self.avatar_backup = None;
-                Some(MenuAction::SetAvatar(*a))
+                chrome::set_active_avatar(*a);
+                self.avatar_backup = Some(*a);
+                None
             }
             ItemKind::InfoOnly => None,
         }
@@ -828,7 +838,7 @@ fn items_for(
                 kind: ItemKind::InfoOnly,
             },
         ],
-        Category::Theme => theme_items(),
+        Category::Theme => theme_items(chrome::active(), chrome::active_avatar()),
         Category::System => vec![
             Item {
                 label: ":sys".into(),
@@ -1036,16 +1046,14 @@ fn web_items(history: &[crate::web_history::Visit]) -> Vec<Item> {
     v
 }
 
-fn theme_items() -> Vec<Item> {
-    let active = chrome::active();
-    let avatar = chrome::active_avatar();
+fn theme_items(committed_theme: Theme, committed_avatar: Avatar) -> Vec<Item> {
     let mut v = vec![Item {
         label: "── color ──".into(),
-        detail: "Chrome palette (borders, selection, accents)".into(),
+        detail: "Highlight previews · Space/Enter commits · Esc restores".into(),
         kind: ItemKind::InfoOnly,
     }];
     for t in Theme::ALL {
-        let mark = if t == active { " ●" } else { "" };
+        let mark = if t == committed_theme { " ●" } else { "" };
         v.push(Item {
             label: format!("  {}{mark}", t.name()),
             detail: t.detail().into(),
@@ -1054,11 +1062,11 @@ fn theme_items() -> Vec<Item> {
     }
     v.push(Item {
         label: "── avatar ──".into(),
-        detail: ":sine left-top brand art (independent of color)".into(),
+        detail: "Highlight previews · Space/Enter commits · Esc restores".into(),
         kind: ItemKind::InfoOnly,
     });
     for a in Avatar::ALL {
-        let mark = if a == avatar { " ●" } else { "" };
+        let mark = if a == committed_avatar { " ●" } else { "" };
         v.push(Item {
             label: format!("  {}{mark}", a.label()),
             detail: a.detail().into(),
@@ -1376,6 +1384,13 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                     return a;
                 }
             }
+            Key::Char(' ') if !typing_filename => {
+                // Space commits Theme color/avatar (and activates other items).
+                esc_armed = false;
+                if let Some(a) = state.activate() {
+                    return a;
+                }
+            }
             Key::Backspace if typing_filename => {
                 esc_armed = false;
                 state.filename_backspace();
@@ -1394,7 +1409,7 @@ fn event_loop(state: &mut MenuState) -> MenuAction {
                 }
             }
             Key::Char('q') | Key::Char('Q') if !typing_filename => {
-                return MenuAction::Dismiss;
+                return state.force_dismiss();
             }
             Key::Char('y') | Key::Char('Y') if state.exit_confirm => {
                 return MenuAction::ExitShell;
@@ -1484,13 +1499,12 @@ fn draw(state: &MenuState) {
 
     let mut canvas = Canvas::new(cols, rows);
     let outer = Rect::new(0, 0, cols, rows);
-    canvas.frame(
-        outer,
-        "shomsky menu",
-        "↑↓ · Tab · Enter · Esc back · Esc Esc quit",
-        border,
-        title_st,
-    );
+    let footer = if state.category() == Category::Theme {
+        "↑↓ preview · Space/Enter select · Esc restore · Esc Esc quit"
+    } else {
+        "↑↓ · Tab · Enter · Esc back · Esc Esc quit"
+    };
+    canvas.frame(outer, "shomsky menu", footer, border, title_st);
 
     let cat_w = 14usize.min(cols.saturating_sub(20)).max(10);
     // Inner area: row 1..rows-2, col 1..cols-2
@@ -1827,18 +1841,54 @@ mod tests {
         assert!(labels.iter().any(|l| l.contains("color")));
         assert!(labels.iter().any(|l| l.contains("avatar")));
         assert!(labels.iter().any(|l| l.contains("harbor")));
+        assert!(labels.iter().any(|l| l.contains("frutiger-aero-green")));
+        assert!(labels.iter().any(|l| l.contains("hacker-amber")));
         assert!(labels.iter().any(|l| l.contains("navi")));
         assert!(labels.iter().any(|l| l.contains("coffee mug")));
-        // color coffee is index 2 (0=── color ──, 1=harbor, 2=coffee)
-        s.item_idx = 2;
+        assert!(labels.iter().any(|l| l.contains("mana flame")));
+        s.enter_theme_category();
         s.focus = Focus::Items;
-        assert_eq!(s.activate(), Some(MenuAction::SetTheme(Theme::Coffee)));
+        let items = s.items();
+        s.item_idx = items
+            .iter()
+            .position(|i| matches!(i.kind, ItemKind::SetTheme(Theme::Coffee)))
+            .unwrap();
+        // Highlight previews without committing (● stays on harbor).
+        s.preview_theme_selection();
         assert_eq!(chrome::active(), Theme::Coffee);
-        // avatar laptop: 0 color hdr, 1-4 colors, 5 avatar hdr, 6 navi, 7 coffee, 8 laptop
-        s.item_idx = 8;
-        assert_eq!(s.activate(), Some(MenuAction::SetAvatar(Avatar::Laptop)));
+        assert!(s
+            .items()
+            .iter()
+            .any(|i| i.label.contains("harbor") && i.label.contains('●')));
+        assert!(!s
+            .items()
+            .iter()
+            .any(|i| i.label.contains("coffee") && i.label.contains('●')));
+        // Space/Enter commits and stays in the menu.
+        assert_eq!(s.activate(), None);
+        assert_eq!(chrome::active(), Theme::Coffee);
+        assert!(s
+            .items()
+            .iter()
+            .any(|i| i.label.contains("coffee") && i.label.contains('●')));
+        let items = s.items();
+        s.item_idx = items
+            .iter()
+            .position(|i| matches!(i.kind, ItemKind::SetAvatar(Avatar::Laptop)))
+            .unwrap();
+        assert_eq!(s.activate(), None);
         assert_eq!(chrome::active_avatar(), Avatar::Laptop);
         // Color stayed coffee — avatar is independent.
+        assert_eq!(chrome::active(), Theme::Coffee);
+        // Preview another color then Esc restores the committed coffee.
+        s.item_idx = s
+            .items()
+            .iter()
+            .position(|i| matches!(i.kind, ItemKind::SetTheme(Theme::Purple)))
+            .unwrap();
+        s.preview_theme_selection();
+        assert_eq!(chrome::active(), Theme::Purple);
+        assert_eq!(s.escape(), None); // back to categories, restores coffee
         assert_eq!(chrome::active(), Theme::Coffee);
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ENGRAM_USER_DIR");

@@ -99,10 +99,12 @@ On a color TTY, `:menu` / `:m` opens a slip-in navigation hub:
 | shomloop | planned runs; new loop; logs; Enter → edit / disable / enable / delete |
 | System | `:emerge`, `:sys`, `:splash`, `:quickyn`, `:chat`, `:model`, `:skills`, `:top`, `:packages`, `:clear`, exit |
 | Web | Open the text browser, revisit sites, clear history |
-| Theme | **color** harbor/coffee/laptop/classic (`.theme`); **avatar** navi/coffee mug/laptop/bunny (`.avatar`) — independent |
+| Theme | **color** harbor/coffee/laptop/classic/frutiger-aero-green/frutiger-aero-orange/rainbow/cotton-candy/purple/hacker-green/hacker-amber (`.theme`); **avatar** navi/coffee mug/laptop/mana flame/leaf/bunny (`.avatar`) — independent |
 
 Arrow keys / `hjkl` / Tab navigate; Enter selects; Esc backs up a level; Esc Esc
-(or `q`) leaves the menu. Under pipes, `--once`, and `--script` the overlay is
+(or `q`) leaves the menu. Under **Theme**, highlight only previews color/avatar;
+Space or Enter commits the highlighted row (menu stays open); Esc restores the
+last committed pick. Under pipes, `--once`, and `--script` the overlay is
 skipped (`:menu` prints a one-line hint).
 
 Or at start:
